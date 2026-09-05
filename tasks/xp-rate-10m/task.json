@@ -1,0 +1,34 @@
+{
+  "id": "xp-rate-10m-warrior-v0",
+  "version": 0,
+  "title": "Maximize sustained XP rate",
+  "durationSeconds": 600,
+  "seed": "maplebench-xp-rate-v0",
+  "character": {
+    "level": 15,
+    "jobId": 100,
+    "mapId": 100000000,
+    "mesos": 5000,
+    "inventoryPreset": "warrior-l15-basic",
+    "equipmentPreset": "warrior-l15-basic"
+  },
+  "world": {
+    "server": "cosmic-v83",
+    "timeScale": 1,
+    "resetPolicy": "fresh-db-snapshot"
+  },
+  "allowedActions": [
+    "move_to",
+    "basic_attack",
+    "use_skill",
+    "loot",
+    "use_item",
+    "enter_portal",
+    "allocate_ap",
+    "allocate_sp"
+  ],
+  "scoring": {
+    "type": "peak_xp_rate",
+    "windowSeconds": 60
+  }
+}

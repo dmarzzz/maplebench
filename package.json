@@ -1,0 +1,16 @@
+{
+  "name": "maplebench",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Agent benchmark scaffolding for MapleStory-like progression and multi-agent coordination tasks.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "score:demo": "npm run build --silent && node dist/src/cli-score.js examples/demo-episode.jsonl",
+    "check": "npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

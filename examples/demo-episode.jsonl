@@ -1,0 +1,6 @@
+{"seq":0,"tMs":0,"kind":"episode_start","taskId":"maximize-xp-10m-warrior-v0","seed":"demo","characterId":1}
+{"seq":1,"tMs":10000,"kind":"xp_gain","amount":42,"source":"monster","sourceId":100100}
+{"seq":2,"tMs":20000,"kind":"xp_gain","amount":42,"source":"monster","sourceId":100100}
+{"seq":3,"tMs":35000,"kind":"xp_gain","amount":80,"source":"monster","sourceId":100101}
+{"seq":4,"tMs":70000,"kind":"xp_gain","amount":120,"source":"monster","sourceId":100102}
+{"seq":5,"tMs":80000,"kind":"episode_end","reason":"agent_exit"}

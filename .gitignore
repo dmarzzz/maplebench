@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.log
+recordings/
+artifacts/
+upstream/
+wz/
+*.wz
+.DS_Store
