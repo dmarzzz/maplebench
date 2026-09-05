@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, unlink, rename } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
@@ -6,6 +6,10 @@ import { execFile } from 'node:child_process';
 const run = promisify(execFile);
 const work = resolve(process.env.MAPLEBENCH_WORK || '..');
 const charDir = resolve(process.env.MAPLEBENCH_CHARACTER_DIR || join(work, 'baked/warrior'));
+const mapDir = resolve(process.env.MAPLEBENCH_MAP_DIR || join(work, 'baked/henesys'));
+const mapId = Number(process.env.MAPLEBENCH_MAP_ID || 100000000);
+const mapName = process.env.MAPLEBENCH_MAP_NAME || 'Henesys';
+const fixtureLabel = process.env.MAPLEBENCH_FIXTURE_LABEL || 'Town combat fixture';
 const input = resolve(process.argv[2] || 'artifacts/henesys-demo');
 const out = join(input, 'video');
 const fps = 15;
@@ -16,12 +20,12 @@ const controller = JSON.parse(await readFile(join(input, 'controller.json'), 'ut
   name: 'Nearest-monster scripted baseline', model: 'None (scripted policy)',
 })));
 const hudText = value => String(value).replace(/[{}\\\r\n]/g, ' ');
-if (observations.some(o => o.character.mapId !== 100000000)) throw new Error('This renderer expects Henesys observations');
+if (observations.length < 2 || observations.some(o => o.character.mapId !== mapId)) throw new Error('Replay map does not match the selected bake');
 const start = observations[0].nowMs;
 const end = observations.at(-1).nowMs;
 const actions = events.filter(e => e.kind === 'action' && e.accepted && e.tMs >= start);
 const frames = Math.ceil((end - start) * fps / 1000);
-const [offx, offy, mapWidth, mapHeight] = (await readFile(join(work, 'baked/henesys/map.fh'), 'utf8')).split('\n')[0].split(/\s+/).map(Number);
+const [offx, offy, mapWidth, mapHeight] = (await readFile(join(mapDir, 'map.fh'), 'utf8')).split('\n')[0].split(/\s+/).map(Number);
 const cameraY = observations[0].character.position.y;
 let cameraX = observations[0].character.position.x;
 const damage = [];
@@ -41,7 +45,9 @@ for (const line of (await readFile(join(charDir, 'char.txt'), 'utf8')).trim().sp
 }
 const standPose = animations.stand1 ? 'stand1' : 'stand2';
 const walkPose = animations.walk1 ? 'walk1' : 'walk2';
-const attackPose = standPose === 'stand2' ? 'swingT1' : 'swingO1';
+// wzchar normalizes stand2/walk2 to stand1/walk1; choose weapon stance explicitly.
+const attackPose = process.env.MAPLEBENCH_ATTACK_POSE || (/crusader|hero/i.test(charDir) ? 'swingT1' : 'swingO1');
+if (!animations[attackPose]?.length) throw new Error('Selected weapon attack pose is missing');
 function frameAt(stance, time) {
   const fs = animations[stance];
   let remaining = time % fs.reduce((s, f) => s + f.delay, 0);
@@ -76,7 +82,8 @@ for (let i = 0; i < frames; i++) {
     const target = a.monsters.find(m => m.objectId === action.action.targetId);
     if (target && target.position.x !== x) facing = Math.sign(target.position.x - x);
   }
-  const stance = attacking ? attackPose : y < cameraY - 3 ? 'jump' : moving ? walkPose : standPose;
+  const selectedAttackPose = action?.action.skillId === 1121008 && animations.brandish1 ? 'brandish1' : attackPose;
+  const stance = attacking ? selectedAttackPose : y < cameraY - 3 ? 'jump' : moving ? walkPose : standPose;
   const pose = frameAt(stance, attacking ? t - action.tMs : t - start);
   const lines = [`player ${x.toFixed(2)} ${y.toFixed(2)} ${stance} ${pose} ${facing}`, `camera ${cameraX.toFixed(2)} ${cameraY}`];
   for (const m of a.monsters.filter(m => m.alive)) {
@@ -85,11 +92,11 @@ for (let i = 0; i < frames; i++) {
   await writeFile(join(out, `frame-${String(i).padStart(4, '0')}.tsv`), lines.join('\n') + '\n');
   const xp = events.filter(e => e.kind === 'xp_gain' && e.tMs >= start && e.tMs <= t).reduce((s, e) => s + e.amount, 0);
   const attackName = action?.action.type === 'use_skill'
-    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST', 1111008: 'SHOUT' }[action.action.skillId] || `SKILL ${action.action.skillId}`)
+    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST', 1111008: 'SHOUT', 1121008: 'BRANDISH' }[action.action.skillId] || `SKILL ${action.action.skillId}`)
     : 'BASIC ATTACK';
   const label = attacking ? attackName : moving ? (facing > 0 ? 'MOVE RIGHT' : 'MOVE LEFT') : 'OBSERVE';
   const job = ({ 100: 'Warrior', 110: 'Fighter', 111: 'Crusader', 112: 'Hero' })[a.character.jobId] || `Job ${a.character.jobId}`;
-  const hud = `MAPLEBENCH  /  HENESYS\\NModel: ${hudText(controller.model)}\\NController: ${hudText(controller.name)}\\NLv ${a.character.level} ${job}   HP ${a.character.hp}/${a.character.maxHp}   XP +${xp}\\N${label}   |   ${((t - start) / 1000).toFixed(1)}s`;
+  const hud = `MAPLEBENCH  /  ${hudText(mapName).toUpperCase()}\\NModel: ${hudText(controller.model)}\\NController: ${hudText(controller.name)}\\NLv ${a.character.level} ${job}   HP ${a.character.hp}/${a.character.maxHp}   XP +${xp}\\N${label}   |   ${((t - start) / 1000).toFixed(1)}s`;
   ass.push(`Dialogue: 0,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},HUD,,0,0,0,,${hud}`);
   for (const hit of damage.filter(d => t >= d.tMs && t - d.tMs < 850)) {
     const age = t - hit.tMs;
@@ -99,7 +106,7 @@ for (let i = 0; i < frames; i++) {
     ass.push(`Dialogue: 1,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},Damage,,0,0,0,,{\\pos(${dx},${dy})\\alpha&H${alpha}&}-${hit.amount} HP`);
   }
 }
-ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\NHenesys combat fixture / interpolated movement and attack poses`);
+ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\N${hudText(fixtureLabel)} / interpolated movement and attack poses`);
 await writeFile(join(out, 'overlay.ass'), ass.join('\n') + '\n');
 if (process.env.MAPLEBENCH_OVERLAY_ONLY !== 'true') {
 // Warm each monster's asset cache serially: the upstream asset service does not
@@ -115,12 +122,20 @@ let next = 0, done = 0;
 await Promise.all(Array.from({ length: 4 }, async () => {
   while (next < frames) {
     const i = next++, name = `frame-${String(i).padStart(4, '0')}`;
-    await run(join(work, 'maplewright/target/release/client'), [join(work, 'baked/henesys/fg.png'), join(work, 'baked/henesys/map.fh'), join(work, 'baked/henesys'), charDir, '--benchshot', join(out, name + '.tsv'), join(out, name + '.png')], { maxBuffer: 1024 * 1024 });
+    await run(process.env.MAPLEBENCH_RENDER_CLIENT || join(work, 'maplewright/target/release/client'), [join(mapDir, 'fg.png'), join(mapDir, 'map.fh'), mapDir, charDir, '--benchshot', join(out, name + '.tsv'), join(out, name + '.png')], { maxBuffer: 1024 * 1024 });
     if (++done % 30 === 0) console.log(`Rendered ${done}/${frames}`);
   }
 }));
-await run('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', join(out, 'frame-%04d.png'), '-c:v', 'libx264', '-threads', '2', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', join(out, 'henesys-first.mp4')]);
+await run('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', join(out, 'frame-%04d.png'), '-c:v', 'libx264', '-threads', '2', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', join(out, 'henesys-first.tmp.mp4')]);
+await rename(join(out,'henesys-first.tmp.mp4'),join(out,'henesys-first.mp4'));
 console.log('First clip ready:', join(out, 'henesys-first.mp4'));
 }
-await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', join(out, 'henesys-first.mp4'), '-vf', 'ass=overlay.ass', '-c:v', 'libx264', '-threads', '2', '-preset', 'fast', '-crf', '22', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', join(out, 'henesys-overlay.mp4')], { cwd: out });
+await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', join(out, 'henesys-first.mp4'), '-vf', 'ass=overlay.ass', '-c:v', 'libx264', '-threads', '2', '-preset', 'fast', '-crf', '22', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', join(out, 'henesys-overlay.tmp.mp4')], { cwd: out });
+await rename(join(out,'henesys-overlay.tmp.mp4'),join(out,'henesys-overlay.mp4'));
 console.log('Overlay clip ready:', join(out, 'henesys-overlay.mp4'));
+
+if (process.env.MAPLEBENCH_KEEP_FRAMES === 'false') {
+  for (const file of await readdir(out)) {
+    if (/^frame-\d+\.(png|tsv)$/.test(file)) await unlink(join(out, file));
+  }
+}

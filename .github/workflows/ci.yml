@@ -19,6 +19,10 @@ jobs:
       - run: node scripts/check-tracked-files.mjs
       - run: npm test
       - run: python3 -m unittest discover -s test -p 'test_*.py'
+      - name: Verify isolated program execution
+        run: |
+          docker pull node:22.19.0-bookworm-slim
+          MAPLEBENCH_TEST_DOCKER=1 python3 -m unittest discover -s test -p 'test_maple_agent.py'
   secrets:
     runs-on: ubuntu-latest
     steps:

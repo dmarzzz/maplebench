@@ -1,0 +1,20 @@
+{
+  "id": "henesys-crusader",
+  "name": "Henesys Crusader skill smoke test",
+  "description": "Clear three explicitly spawned Jr. Yetis with a level 100 Crusader wielding Stonetooth Sword. Compare high-damage Power Strike with six-target Slash Blast; normal HP and MP costs apply.",
+  "preset": "crusader",
+  "character_name": "Agent90",
+  "map_id": 100000000,
+  "spawn": {"x": 1473, "y": 260},
+  "duration_seconds": 90,
+  "max_action_duration_ms": 1500,
+  "allowed_skills": [1001004, 1001005],
+  "allowed_items": [],
+  "inventory": [],
+  "demo_mobs": true,
+  "seed_sql": "scripts/seed-presets.sql",
+  "reset": {"level": 100, "job": 111, "str": 350, "dex": 120, "int": 4, "luk": 4, "hp": 4000, "mp": 1000, "maxhp": 4000, "maxmp": 1000, "exp": 0, "meso": 1000},
+  "objective": {"type": "xp", "target_xp": 405},
+  "render_map": "henesys",
+  "render_character": "crusader"
+}

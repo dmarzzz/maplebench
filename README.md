@@ -104,3 +104,11 @@ npm run demo:live
 Then open http://127.0.0.1:8787. A tiny mock control backend on port 8790 accepts the same `MapleSDK` HTTP contract intended for Cosmic, a demo agent issues movement/attack/skill actions, the backend appends authoritative JSONL events, and the viewer updates from that file over SSE.
 
 This mock exists only to validate benchmark plumbing. It is **not** a game simulator and is never used for benchmark scores.
+
+## Unattended experiments
+
+Submit `configs/smoke-20.json` to the persistent queue to run four OpenAI API models
+five times, with automatic scoring, replay rendering and a local results gallery.
+The worker resumes interrupted batches and keeps each attempt. See
+[automated batches](docs/AUTOMATED_BATCHES.md), [programmable control](docs/PROGRAMMABLE_AGENT.md),
+and [scenario presets](docs/SCENARIOS.md).

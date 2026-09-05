@@ -95,3 +95,9 @@ if (!chr.includes('"swingT1", "swingT2"')) {
   writeFileSync(charPath, chr);
 }
 console.log('Maplewright authoritative-snapshot renderer installed.');
+if (!chr.includes('"brandish1", "brandish2"')) {
+  const old = '"swingT1", "swingT2", "swingT3", "stabT1", "stabT2"';
+  if (!chr.includes(old)) throw new Error('Unexpected character exporter source for Brandish');
+  chr = chr.replace(old, old + ', "brandish1", "brandish2"');
+  writeFileSync(charPath, chr);
+}

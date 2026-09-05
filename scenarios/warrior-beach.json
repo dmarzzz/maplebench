@@ -1,0 +1,53 @@
+{
+  "id": "warrior-beach",
+  "name": "Beach hunting with a Warrior",
+  "description": "Earn as much XP as possible in ten minutes in Beach Hunting Ground. Hunt naturally respawning Pigs and Ribbon Pigs, navigate shallow changes in the ground, and manage a finite potion supply. An empty moment is not the end of the trial: wait for normal respawns. Basic attacks save MP; Power Strike costs MP. No loot collection or automatic potion use is available.",
+  "preset": "warrior",
+  "character_name": "Agent01",
+  "map_id": 104010002,
+  "spawn": {
+    "x": -1200,
+    "y": 215
+  },
+  "duration_seconds": 600,
+  "max_action_duration_ms": 1500,
+  "allowed_skills": [
+    1001004
+  ],
+  "allowed_items": [
+    2000002,
+    2000003
+  ],
+  "inventory": [
+    {
+      "item_id": 2000002,
+      "quantity": 100
+    },
+    {
+      "item_id": 2000003,
+      "quantity": 100
+    }
+  ],
+  "demo_mobs": false,
+  "seed_sql": "scripts/seed-presets.sql",
+  "reset": {
+    "level": 15,
+    "job": 100,
+    "str": 70,
+    "dex": 15,
+    "int": 4,
+    "luk": 4,
+    "hp": 500,
+    "mp": 100,
+    "maxhp": 500,
+    "maxmp": 100,
+    "exp": 0,
+    "meso": 1000
+  },
+  "objective": {
+    "type": "xp"
+  },
+  "render_map": "warrior-beach",
+  "render_character": "warrior",
+  "status": "experimental"
+}

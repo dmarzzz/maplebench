@@ -1,0 +1,20 @@
+{
+  "id": "henesys-warrior",
+  "name": "Henesys Warrior smoke test",
+  "description": "Clear three explicitly spawned town Slimes using a level 15 Warrior. This is a short integration fixture, not a natural hunting map.",
+  "preset": "warrior",
+  "character_name": "Agent01",
+  "map_id": 100000000,
+  "spawn": {"x": 1473, "y": 260},
+  "duration_seconds": 90,
+  "max_action_duration_ms": 1500,
+  "allowed_skills": [1001004],
+  "allowed_items": [],
+  "inventory": [],
+  "demo_mobs": true,
+  "seed_sql": "scripts/seed-presets.sql",
+  "reset": {"level": 15, "job": 100, "str": 70, "dex": 15, "int": 4, "luk": 4, "hp": 500, "mp": 100, "maxhp": 500, "maxmp": 100, "exp": 0, "meso": 1000},
+  "objective": {"type": "xp", "target_xp": 30},
+  "render_map": "henesys",
+  "render_character": "warrior"
+}

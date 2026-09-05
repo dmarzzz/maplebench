@@ -1,6 +1,11 @@
 package server.bots;
 
 import client.Character;
+import client.inventory.InventoryType;
+import client.inventory.Item;
+import constants.id.ItemId;
+import net.server.channel.handlers.UseItemHandler;
+import server.ItemInformationProvider;
 import server.life.Monster;
 
 import java.awt.Point;
@@ -22,7 +27,7 @@ final class MapleBenchController {
         return botManager.findActiveBotEntry(botName);
     }
 
-    String observeJson() {
+    synchronized String observeJson() {
         BotEntry entry = requireEntry();
         Character bot = entry.bot;
         MapleBenchEventSink.ensureStarted(bot);
@@ -63,10 +68,24 @@ final class MapleBenchController {
                     .append(",\"alive\":").append(mob.isAlive())
                     .append('}');
         }
+        out.append("],\"inventory\":[");
+        first = true;
+        for (Item item : bot.getInventory(InventoryType.USE).list()) {
+            if (item.getQuantity() <= 0 || !isBenchmarkPotion(item.getItemId())) continue;
+            if (!first) out.append(',');
+            first = false;
+            var effect = ItemInformationProvider.getInstance().getItemEffect(item.getItemId());
+            out.append("{\"itemId\":").append(item.getItemId())
+                    .append(",\"name\":").append(MapleBenchJson.quote(ItemInformationProvider.getInstance().getName(item.getItemId())))
+                    .append(",\"quantity\":").append(item.getQuantity())
+                    .append(",\"hpRestore\":").append(effect.getHp())
+                    .append(",\"mpRestore\":").append(effect.getMp())
+                    .append('}');
+        }
         return out.append("],\"drops\":[]}").toString();
     }
 
-    Result act(String body) {
+    synchronized Result act(String body) {
         BotEntry entry = requireEntry();
         Character bot = entry.bot;
         MapleBenchEventSink.ensureStarted(bot);
@@ -77,6 +96,7 @@ final class MapleBenchController {
         return switch (type) {
             case "move_to" -> moveTo(entry, body);
             case "basic_attack" -> attack(entry, body, 0);
+            case "use_item" -> useItem(bot, body);
             case "use_skill" -> {
                 Long skillId = MapleBenchJson.longField(body, "skillId");
                 if (skillId == null || skillId <= 0 || skillId > Integer.MAX_VALUE) {
@@ -86,6 +106,24 @@ final class MapleBenchController {
             }
             default -> new Result(false, "action not implemented by Cosmic v0 bridge: " + type);
         };
+    }
+
+    private static boolean isBenchmarkPotion(int itemId) {
+        return itemId == ItemId.WHITE_POTION || itemId == ItemId.BLUE_POTION;
+    }
+
+    private Result useItem(Character bot, String body) {
+        Long itemId = MapleBenchJson.longField(body, "itemId");
+        if (itemId == null || itemId <= 0 || itemId > Integer.MAX_VALUE || !isBenchmarkPotion(itemId.intValue())) {
+            return new Result(false, "itemId must be a supported HP or MP potion");
+        }
+        if (!bot.isAlive()) return new Result(false, "cannot consume an item while dead");
+        Item item = bot.getInventory(InventoryType.USE).findById(itemId.intValue());
+        if (item == null || item.getQuantity() <= 0) return new Result(false, "item is not in inventory");
+        // The ordinary player handler removes one inventory item and applies the WZ effect.
+        // No auto-heal, refill, or separate benchmark stat modification is involved.
+        boolean accepted = UseItemHandler.consumeUseItem(bot, item.getPosition(), itemId.intValue());
+        return accepted ? new Result(true, null) : new Result(false, "item use not currently legal");
     }
 
     private Result moveTo(BotEntry entry, String body) {

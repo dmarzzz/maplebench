@@ -1,0 +1,20 @@
+{
+  "id": "hero-c1",
+  "name": "Magatia C-1 Hero hunt",
+  "description": "Earn as much XP as possible in ten minutes in Magatia Lab - Area C-1. All twenty natural Roid spawn points are on the connected floor at y=167. Hunt along the ground and wait for normal respawns. The level 130 Hero has Stonetooth Sword, Brandish30, Power Strike20, Slash Blast20 and passive Sword Mastery20. Brandish costs 25MP, delivers two 260% hits and can hit up to three nearby targets. Power Strike costs 12MP for one 260% hit. Slash Blast costs 16HP and 14MP for one 130% hit on up to six nearby targets. Basic attacks conserve MP. Manage finite White Potions (300HP) and Blue Potions (100MP); there is no automatic healing, potion replenishment or loot collection.",
+  "preset": "hero",
+  "character_name": "AgentHero",
+  "map_id": 261020300,
+  "spawn": {"x": 0, "y": 167},
+  "duration_seconds": 600,
+  "max_action_duration_ms": 1500,
+  "allowed_skills": [1001004, 1001005, 1121008],
+  "allowed_items": [2000002, 2000003],
+  "inventory": [{"item_id": 2000002, "quantity": 100}, {"item_id": 2000003, "quantity": 100}],
+  "demo_mobs": false,
+  "seed_sql": "scripts/seed-presets.sql",
+  "reset": {"level": 130, "job": 112, "str": 500, "dex": 120, "int": 4, "luk": 4, "hp": 8000, "mp": 2000, "maxhp": 8000, "maxmp": 2000, "exp": 0, "meso": 1000},
+  "objective": {"type": "xp"},
+  "render_map": "lab-c1",
+  "render_character": "crusader"
+}

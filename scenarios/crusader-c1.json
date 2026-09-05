@@ -1,0 +1,20 @@
+{
+  "id": "crusader-c1",
+  "name": "Magatia C-1 Crusader hunt",
+  "description": "Earn as much XP as possible in ten minutes in Magatia Lab - Area C-1. All twenty natural Roid spawn points are on the connected ground at y=167, so hunt across the floor and wait for normal respawns instead of climbing decorative platforms. Roids have 4400 HP and award 168 base XP. The level 100 Crusader has Stonetooth Sword, Power Strike20, Slash Blast20 and passive Sword Mastery20. Power Strike costs 12MP for a strong single-target hit. Slash Blast costs 16HP and 14MP and can hit up to six nearby targets. Use finite White Potions (300HP) and Blue Potions (100MP); no automatic potion use, free healing or loot collection is available.",
+  "preset": "crusader",
+  "character_name": "Agent90",
+  "map_id": 261020300,
+  "spawn": {"x": 0, "y": 167},
+  "duration_seconds": 600,
+  "max_action_duration_ms": 1500,
+  "allowed_skills": [1001004, 1001005],
+  "allowed_items": [2000002, 2000003],
+  "inventory": [{"item_id": 2000002, "quantity": 100}, {"item_id": 2000003, "quantity": 100}],
+  "demo_mobs": false,
+  "seed_sql": "scripts/seed-presets.sql",
+  "reset": {"level": 100, "job": 111, "str": 350, "dex": 120, "int": 4, "luk": 4, "hp": 4000, "mp": 1000, "maxhp": 4000, "maxmp": 1000, "exp": 0, "meso": 1000},
+  "objective": {"type": "xp"},
+  "render_map": "lab-c1",
+  "render_character": "crusader"
+}
