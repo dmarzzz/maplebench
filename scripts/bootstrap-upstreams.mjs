@@ -91,6 +91,8 @@ function installCosmicOverlay(cosmicDir) {
             MapleBenchCombatTrace.endAttack();
         }`, 'attack trace scope');
   const mobHit = '        applyDamage(entry, bot, dmg, -1, mob.getId(), kb.direction(), kb.airVelX());';
+  replaceOnce(combatPath, '        int dmg = rollPhysicalMobDamage(bot, mob);',
+    '        int dmg = MapleBenchDefense.contactDamage(bot, rollPhysicalMobDamage(bot, mob));', 'learned Achilles contact mitigation');
   replaceOnce(combatPath, mobHit, `        int hpBefore = bot.getHp();
         Point hitPosition = new Point(bot.getPosition());
         boolean knockedBack = applyDamage(entry, bot, dmg, -1, mob.getId(), kb.direction(), kb.airVelX());

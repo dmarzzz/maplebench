@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(dirname(fileURLToPath(import.meta.url))), 'upstream/maplewright/crates/client/src');
+const exporterPath = join(root, '../../wz/src/bin/wzskillfx.rs');
+writeFileSync(exporterPath, readFileSync(new URL('./wzskillfx.rs', import.meta.url), 'utf8'));
 function insert(file, anchor, code, marker) {
   const path = join(root, file);
   const text = readFileSync(path, 'utf8');
@@ -64,6 +66,41 @@ insert('lib.rs', '    pub fn framebuffer(&self) -> &[u32] {', `    /// Present a
 
 `, 'pub fn set_replay_mob_pose');
 
+insert('lib.rs', '    pub fn framebuffer(&self) -> &[u32] {', `    /// Composite one original WZ effect frame over a completed authoritative replay.
+    /// Origin and alpha are read from Skill.wz; this method never simulates combat.
+    pub fn draw_replay_effect(&mut self, rgba: &[u8], w: i32, h: i32,
+        x: f64, y: f64, ox: i32, oy: i32, flip: bool, alpha: u32, additive: bool) {
+        let sx = (x + self.offx as f64).round() as i32 - self.camfx.round() as i32;
+        let sy = (y + self.offy as f64).round() as i32 - self.camfy.round() as i32;
+        let tlx = sx - if flip { w - ox } else { ox };
+        let tly = sy - oy;
+        for row in 0..h {
+            let py = tly + row;
+            if py < 0 || py >= VH as i32 { continue; }
+            for col in 0..w {
+                let px = tlx + col;
+                if px < 0 || px >= VW as i32 { continue; }
+                let src_x = if flip { w - 1 - col } else { col };
+                let si = ((row * w + src_x) * 4) as usize;
+                let a = (rgba[si + 3] as u32 * alpha.min(255) + 127) / 255;
+                if a == 0 { continue; }
+                let idx = py as usize * VW + px as usize;
+                if additive {
+                    let dst = self.fb[idx];
+                    let channel = |shift: u32, value: u8| {
+                        (((dst >> shift) & 255) + (value as u32 * a + 127) / 255).min(255)
+                    };
+                    self.fb[idx] = (channel(16, rgba[si]) << 16)
+                        | (channel(8, rgba[si + 1]) << 8) | channel(0, rgba[si + 2]);
+                } else {
+                    blend(&mut self.fb, idx, rgba[si], rgba[si + 1], rgba[si + 2], a);
+                }
+            }
+        }
+    }
+
+`, 'pub fn draw_replay_effect');
+
 insert('main.rs', '    // ---- headless screenshot ----', `    // MapleBench replay: TSV snapshots contain only server-observed positions and HP.
     if let Some(i) = args.iter().position(|a| a == "--benchshot") {
         let snapshot = fs::read_to_string(&args[i + 1]).expect("read snapshot");
@@ -113,6 +150,26 @@ if (!main.includes('game.set_replay_mob_pose(c[1]')) {
             if c.first() == Some(&"mob") && c.len() >= 9 {
                 game.set_replay_mob_pose(c[1].parse().unwrap(), c[6], c[7].parse().unwrap(), c[8].parse().unwrap());
             }
+        }
+` + anchor);
+  writeFileSync(mainPath, main);
+}
+if (!main.includes('game.draw_replay_effect(')) {
+  const anchor = '        save_shot(&game.fb, &args[i + 2]);';
+  if (main.split(anchor).length !== 2) throw new Error('Unexpected skill-effect replay source');
+  main = main.replace(anchor, `        // Effects are exported offline. Only frame basenames from the verified manifest
+        // enter the TSV; there is no access to Skill.wz or the control API here.
+        for line in snapshot.lines() {
+            let c: Vec<&str> = line.split_whitespace().collect();
+            if c.first() != Some(&"effect") { continue; }
+            assert_eq!(c.len(), 9, "malformed skill-effect snapshot");
+            assert!(c[1].ends_with(".png") && c[1].chars().all(|v| v.is_ascii_alphanumeric() || v == '_' || v == '.'), "invalid effect basename");
+            assert!(!c[1].contains(".."), "invalid effect basename");
+            let dir = std::env::var("MAPLEBENCH_SKILL_EFFECT_DIR").expect("effect bake missing");
+            let bytes = fs::read(format!("{}/{}", dir, c[1])).expect("read effect frame");
+            let (w, h, rgba) = decode_png(&bytes);
+            game.draw_replay_effect(&rgba, w, h, c[2].parse().unwrap(), c[3].parse().unwrap(),
+                c[4].parse().unwrap(), c[5].parse().unwrap(), c[6] == "1", c[7].parse().unwrap(), c[8] == "1");
         }
 ` + anchor);
   writeFileSync(mainPath, main);
@@ -168,4 +225,57 @@ if (!chr.includes('"alert2", "alert4"')) {
   if (!chr.includes(old)) throw new Error('Unexpected character exporter source for buff actions');
   chr = chr.replace(old, old + ', "alert2", "alert4", "swingOF", "stabOF", "swingTF", "stabTF"');
   writeFileSync(charPath, chr);
+}
+if (!chr.includes('"alert3"')) {
+  const old = '"alert2", "alert4"';
+  if (!chr.includes(old)) throw new Error('Unexpected character exporter source for Maple Warrior');
+  chr = chr.replace(old, old + ', "alert3"');
+  writeFileSync(charPath, chr);
+}
+
+// A rear-facing swing must use the matching head layer. Otherwise the front head
+// and face cover the WZ backCap/backHair layers and make the character look bald.
+if (!doll.includes('fn maplebench_head_view')) {
+  const headAnchor = '        let head_c = canvas_at(&head_img, &["front", "head"]).cloned();';
+  const faceAnchor = '        if let Some(fimg) = &face_img {';
+  const helperAnchor = 'fn alt_stance(s: &str) -> &\'static str {';
+  if ([headAnchor, faceAnchor, helperAnchor].some(anchor => doll.split(anchor).length !== 2)) {
+    throw new Error('Unexpected paper-doll front/back head source');
+  }
+  doll = doll.replace(headAnchor, `        let head_view = maplebench_head_view(resolve(&body_img, &[stance, &fkey]));
+        let head_c = canvas_at(&head_img, &[head_view, "head"]).cloned();`);
+  doll = doll.replace(faceAnchor, '        if let Some(fimg) = face_img.as_ref().filter(|_| head_view == "front") {');
+  doll = doll.replace(helperAnchor, `// MapleBench: WZ face=0 denotes a view of the character's back, not a missing face.
+// Brandish2 frame 3 delegates to swingTF/0, which explicitly carries this flag.
+fn maplebench_head_view(body_frame: Option<&WzValue>) -> &'static str {
+    if body_frame.and_then(|node| child(node, "face")).and_then(int_of) == Some(0) {
+        "back"
+    } else {
+        "front"
+    }
+}
+
+#[cfg(test)]
+mod maplebench_head_tests {
+    use super::*;
+
+    #[test]
+    fn rear_swing_uses_back_head_and_omits_front_face() {
+        let frame = WzValue::Sub(vec![("face".into(), WzValue::Short(0))]);
+        assert_eq!(maplebench_head_view(Some(&frame)), "back");
+        let integer_flag = WzValue::Sub(vec![("face".into(), WzValue::Int(0))]);
+        assert_eq!(maplebench_head_view(Some(&integer_flag)), "back");
+    }
+
+    #[test]
+    fn front_and_unspecified_frames_keep_front_head() {
+        let frame = WzValue::Sub(vec![("face".into(), WzValue::Short(1))]);
+        assert_eq!(maplebench_head_view(Some(&frame)), "front");
+        assert_eq!(maplebench_head_view(Some(&WzValue::Sub(vec![]))), "front");
+        assert_eq!(maplebench_head_view(None), "front");
+    }
+}
+
+` + helperAnchor);
+  writeFileSync(dollPath, doll);
 }

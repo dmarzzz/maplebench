@@ -196,11 +196,13 @@ class Queue:
 
 
 def freeze_source(destination):
-    # Only implementation files from known source directories; never runtime outputs.
+    # Only tracked implementation files; unrelated local scripts must not enter a batch.
+    tracked = set(subprocess.check_output(['git', 'ls-files', '-z'], cwd=REPO, text=True).split('\0'))
     files = []
     for folder in ['scripts', 'scenarios', 'configs']:
         for p in sorted((REPO / folder).glob('*')):
-            if p.is_file() and not p.is_symlink() and p.suffix in {'.py','.mjs','.html','.json','.sql'}:
+            if (p.is_file() and not p.is_symlink() and str(p.relative_to(REPO)) in tracked
+                    and p.suffix in {'.py','.mjs','.html','.json','.sql','.rs'}):
                 relative = p.relative_to(REPO)
                 target = destination / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -240,7 +242,10 @@ def submit(queue, manifest, batch, work):
         for name,source in [('scripts',runtime/'scripts'),('wz',work/'server-data/wz')]:
             subprocess.run(['cp','-a','--reflink=auto',str(source.resolve()),str(frozen/name)],check=True)
         (frozen/'baked').mkdir()
-        for name in sorted({sc.get('render_map','henesys') for sc in scenarios} | {sc.get('render_character','warrior') for sc in scenarios}):
+        bake_names = ({sc.get('render_map','henesys') for sc in scenarios}
+                      | {sc.get('render_character','warrior') for sc in scenarios}
+                      | {sc['render_skill_effects'] for sc in scenarios if sc.get('render_skill_effects')})
+        for name in sorted(bake_names):
             if not SLUG.fullmatch(name): raise ValueError('Invalid baked asset identifier')
             shutil.copytree(work/'baked'/name,frozen/'baked'/name)
         shutil.copy2(work/'maplewright/target/release/client',frozen/'render-client')
@@ -248,6 +253,7 @@ def submit(queue, manifest, batch, work):
         config['renderer_sha256']=digest(frozen/'render-client')
         config['shared_monster_art']='Shared localhost assetd; keep game assets and assetd fixed while batches run'
         config['frozen_inputs']=['controller source','server JAR','WZ XML','server scripts','server configuration','map and character bakes','renderer binary','database snapshot']
+        if any(sc.get('render_skill_effects') for sc in scenarios): config['frozen_inputs'].append('WZ skill effect bakes')
         # Pin the actual local Docker image, so a tag update cannot change queued code execution.
         docker = os.environ.get('MAPLEBENCH_DOCKER_IMAGE','node:22.19.0-bookworm-slim')
         import shlex
@@ -333,7 +339,9 @@ def reset_world(work, batch_dir, scenario, out, trial_id):
     while time.monotonic()<deadline:
         try:
             obs=request('http://127.0.0.1:8790','/v1/observe'); c=obs['character']
-            if c['id']==character_id and c['name']==name and c['mapId']==map_id and c['level']==scenario['reset']['level'] and c['exp']==0 and c['alive'] and len(obs['monsters'])>0:
+            equipment_matches = ('equipment' not in scenario or sorted(scenario['equipment']) ==
+                                 sorted(item['itemId'] for item in c.get('equipment', [])))
+            if c['id']==character_id and c['name']==name and c['mapId']==map_id and c['level']==scenario['reset']['level'] and c['exp']==0 and c['alive'] and len(obs['monsters'])>0 and equipment_matches:
                 return obs
         except Exception: pass
         time.sleep(1)
@@ -414,6 +422,10 @@ def render_trial(batch_dir,t,work):
              MAPLEBENCH_MAP_DIR=str(batch_dir/'_runtime/baked'/scenario.get('render_map','henesys')),MAPLEBENCH_MAP_ID=str(scenario['map_id']),
              MAPLEBENCH_MAP_NAME=scenario.get('map_name',scenario['name']),MAPLEBENCH_FIXTURE_LABEL='Town combat fixture' if scenario.get('demo_mobs') else 'Natural monster spawns',
              MAPLEBENCH_ATTACK_POSE='swingO1' if scenario['preset']=='warrior' else 'swingT1',MAPLEBENCH_KEEP_FRAMES='false',MAPLEBENCH_RENDER_CLIENT=str(batch_dir/'_runtime/render-client'))
+    if scenario.get('render_skill_effects'):
+        env['MAPLEBENCH_SKILL_EFFECT_DIR'] = str(batch_dir/'_runtime/baked'/scenario['render_skill_effects'])
+    else:
+        env.pop('MAPLEBENCH_SKILL_EFFECT_DIR', None)
     with (out/'render.log').open('w') as log:
         child=subprocess.Popen(['node',str(batch_dir/'_source/scripts/render-cosmic-clip.mjs'),str(out)],env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         try:

@@ -2,8 +2,12 @@
 
 **Status: active prototype.** The patched Cosmic server boots with a controllable
 character. The repository also includes a server-observation replay renderer.
-Four OpenAI API models have completed the initial Henesys combat fixture through
-the narrow control API. This is an integration smoke test, not a model ranking.
+Four OpenAI API models have completed staged cavern hunts with continuous control
+through the narrow API. The equipped Timeless Hero scenario adds a complete armor
+set, Maple Warrior, learned Achilles mitigation and original WZ Brandish/cast art.
+These are integration and calibration runs; monster recoil, active attacks and
+full client movement remain fidelity gaps. See [scenarios](docs/SCENARIOS.md) and
+[replay provenance](docs/REPLAY.md).
 
 MapleBench is an experimental benchmark for evaluating coding agents in a persistent MapleStory-like game environment, beginning with simple XP optimization and progressing toward multi-agent party-quest coordination.
 

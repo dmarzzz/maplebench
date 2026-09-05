@@ -3,6 +3,7 @@ package server.bots;
 import client.BuffStat;
 import client.Character;
 import client.SkillFactory;
+import client.inventory.InventoryType;
 import constants.skills.Crusader;
 import constants.skills.Fighter;
 import constants.skills.Hero;
@@ -23,7 +24,8 @@ final class MapleBenchSkills {
             new Definition(Crusader.COMBO, "Combo Attack", true, false),
             new Definition(Fighter.SWORD_BOOSTER, "Sword Booster", true, false),
             new Definition(Fighter.RAGE, "Rage", true, false),
-            new Definition(Hero.STANCE, "Power Stance", true, false));
+            new Definition(Hero.STANCE, "Power Stance", true, false),
+            new Definition(Hero.MAPLE_WARRIOR, "Maple Warrior", true, false));
 
     private MapleBenchSkills() {}
 
@@ -63,7 +65,15 @@ final class MapleBenchSkills {
                 : comboLevel > 0 ? SkillFactory.getSkill(Crusader.COMBO).getEffect(comboLevel).getX() : 0;
         return "\"combo\":{\"active\":" + (combo != null) + ",\"orbs\":" + comboOrbs(bot)
                 + ",\"maxOrbs\":" + maxOrbs + "},\"combatStats\":{\"weaponAttack\":" + bot.getTotalWatk()
-                + ",\"physicalMastery\":" + CombatFormulaProvider.getInstance().resolvePhysicalMastery(bot) + "}";
+                + ",\"physicalMastery\":" + CombatFormulaProvider.getInstance().resolvePhysicalMastery(bot)
+                + ",\"weaponDefense\":" + bot.getTotalWdef()
+                + ",\"str\":" + bot.getTotalStr() + ",\"dex\":" + bot.getTotalDex()
+                + ",\"achillesLevel\":" + bot.getSkillLevel(Hero.ACHILLES)
+                + ",\"contactDamagePermille\":" + MapleBenchDefense.achillesDamagePermille(bot) + "},\"equipment\":"
+                + bot.getInventory(InventoryType.EQUIPPED).list().stream()
+                .sorted(java.util.Comparator.comparingInt(item -> item.getPosition()))
+                .map(item -> "{\"itemId\":" + item.getItemId() + ",\"slot\":" + item.getPosition() + "}")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
     }
 
     static String observeJson(BotEntry entry) {

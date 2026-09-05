@@ -67,9 +67,11 @@ class MapleBenchSkillsTest {
 
     @Test void selfBuffCatalogCannotExposePassiveOrUnvalidatedSkills() {
         assertTrue(MapleBenchSkills.definition(Hero.STANCE).selfBuff());
+        assertTrue(MapleBenchSkills.definition(Hero.MAPLE_WARRIOR).selfBuff());
         assertTrue(MapleBenchSkills.definition(Crusader.COMBO).selfBuff());
         assertFalse(MapleBenchSkills.definition(Hero.BRANDISH).selfBuff());
         assertNull(MapleBenchSkills.definition(Hero.ADVANCED_COMBO));
+        assertNull(MapleBenchSkills.definition(Hero.ACHILLES));
         assertNull(MapleBenchSkills.definition(Hero.RUSH));
         assertNull(MapleBenchSkills.definition(9001000));
     }

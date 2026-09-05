@@ -1,0 +1,88 @@
+{
+  "id": "hero-timeless-cave",
+  "name": "Timeless Hero: equipped cavern hunt",
+  "status": "validated",
+  "description": "Earn XP while surviving a three-minute hunt in the Cave of Light. This is the same controlled quest-map hunting fixture: fifteen ordinary respawning Skelegons (level 110, 80000 HP, 1500 base XP), with six unsupported one-shot Skelosaurus quest actors explicitly excluded. Floor y=260, x=-430..1900. You are a level 180 Hero equipped with the ordinary level-120 Timeless Fennel helmet, Taragon overall, Grabbe boots, Bergamot gloves, Moonlight cape and Nibleheim two-handed sword. The gear supplies actual WZ stats; observe combatStats and equipment. Your advanced kit is Brandish30, Combo Attack30, Advanced Combo30, Sword Mastery20, Sword Booster20, Rage20, Power Stance30, Panic30, Coma30, plus Maple Warrior20 (10% base STR/DEX/INT/LUK for 600 seconds; costs40MP) and passive Achilles30 (15% incoming contact damage reduction). All active buffs start inactive and require explicit casts. Brandish hits up to three targets twice; Combo builds to ten orbs. Recasting Combo resets charge. Panic is a charged single-target finisher; Coma is a charged area finisher with a stun chance; both consume all orbs. Do not spam finishers without considering lost combo damage. Stance reduces knockback, not HP loss. Booster accelerates attacks and costs10HP/10MP. You have exactly100 Ice Cream Pops (2000HP each) and60 Mana Elixirs (300MP each); use them explicitly, without automatic refills. Read current costs, readiness and buff durations. Initial planning is staged until your first supported action attempt, then the world stays live during API replanning. Keep a continuously running adaptive program within the controller limits; use fresh observations and action receipt observations. Ground-patrol-v1 approximates walking/chasing and contact damage; active monster skills and accurate hit knockback are not simulated. This equipped scenario changes the character and resource budget and is not directly comparable to the earlier under-equipped stress trial.",
+  "preset": "hero_timeless",
+  "character_name": "AgentHero",
+  "map_id": 240050300,
+  "spawn": {
+    "x": 0,
+    "y": 260
+  },
+  "coordinate_bounds": {
+    "min_x": -430,
+    "max_x": 1900,
+    "min_y": 260,
+    "max_y": 260
+  },
+  "duration_seconds": 180,
+  "max_action_duration_ms": 1500,
+  "allowed_skills": [
+    1001004,
+    1001005,
+    1121008,
+    1111003,
+    1111005,
+    1111002,
+    1101004,
+    1101006,
+    1121002,
+    1121000
+  ],
+  "self_buff_skills": [
+    1111002,
+    1101004,
+    1101006,
+    1121002,
+    1121000
+  ],
+  "allowed_items": [
+    2001001,
+    2000006
+  ],
+  "inventory": [
+    {
+      "item_id": 2001001,
+      "quantity": 100
+    },
+    {
+      "item_id": 2000006,
+      "quantity": 60
+    }
+  ],
+  "demo_mobs": false,
+  "seed_sql": "scripts/seed-presets.sql",
+  "reset": {
+    "level": 180,
+    "job": 112,
+    "str": 760,
+    "dex": 120,
+    "int": 4,
+    "luk": 4,
+    "hp": 12000,
+    "mp": 3000,
+    "maxhp": 12000,
+    "maxmp": 3000,
+    "exp": 0,
+    "meso": 1000
+  },
+  "objective": {
+    "type": "xp"
+  },
+  "render_map": "cave-light",
+  "render_character": "hero-timeless-v2",
+  "excluded_oneshot_monsters": [
+    9300077
+  ],
+  "start_mode": "first_action",
+  "render_skill_effects": "hero-skill-fx-v1",
+  "equipment": [
+    1002776,
+    1052155,
+    1072355,
+    1082234,
+    1102172,
+    1402046
+  ]
+}

@@ -101,6 +101,7 @@ class ReplayMonsterTest(unittest.TestCase):
             script = root / "scripts/patch-maplewright.mjs"
             script.parent.mkdir()
             shutil.copyfile(ROOT / "scripts/patch-maplewright.mjs", script)
+            shutil.copyfile(ROOT / "scripts/wzskillfx.rs", script.parent / "wzskillfx.rs")
             src = root / "upstream/maplewright/crates/client/src"
             src.mkdir(parents=True)
             lib = src / "lib.rs"
@@ -111,13 +112,18 @@ class ReplayMonsterTest(unittest.TestCase):
             character.parent.mkdir(parents=True)
             character.write_text('let stances = [look.stand(), look.walk(), "jump", "prone", "alert"];\n')
             doll = root / "upstream/maplewright/crates/wz/src/paperdoll.rs"
-            doll.write_text('        let body_img = self.image(&[&body_file])?.clone();\n')
+            doll.write_text('        let body_img = self.image(&[&body_file])?.clone();\n'
+                            '        let head_c = canvas_at(&head_img, &["front", "head"]).cloned();\n'
+                            '        if let Some(fimg) = &face_img {\n'
+                            "fn alt_stance(s: &str) -> &'static str {\n")
             cmd = [shutil.which("node"), str(script)]
             subprocess.run(cmd, check=True, capture_output=True, timeout=10)
             expected = {p: p.read_text() for p in (lib, main, character, doll)}
             self.assertLess(expected[main].index("game.add_mob_sprites"),
                             expected[main].index("game.set_replay_mob_pose"))
             self.assertEqual(expected[main].count("game.set_replay_mob_pose"), 1)
+            self.assertIn('canvas_at(&head_img, &[head_view, "head"])', expected[doll])
+            self.assertIn('face_img.as_ref().filter(|_| head_view == "front")', expected[doll])
             subprocess.run(cmd, check=True, capture_output=True, timeout=10)
             self.assertEqual(expected, {p: p.read_text() for p in expected})
 

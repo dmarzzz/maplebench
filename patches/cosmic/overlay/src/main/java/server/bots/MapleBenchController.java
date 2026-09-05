@@ -52,7 +52,7 @@ final class MapleBenchController {
                 .append(",\"motion\":").append(MapleBenchCombatTrace.motionJson(entry))
                 .append(',').append(MapleBenchSkills.characterJson(bot))
                 .append(",\"worldState\":").append(MapleBenchJson.quote(MapleBenchRuntime.isStaged() ? "staged" : "running"))
-                .append("},\"combatTrace\":\"combat-v1\",\"mechanicsVersion\":\"hero-control-v2\",\"monsterSimulation\":").append(MapleBenchJson.quote(MapleBenchMobMotion.VERSION))
+                .append("},\"combatTrace\":\"combat-v1\",\"mechanicsVersion\":\"hero-control-v3\",\"monsterSimulation\":").append(MapleBenchJson.quote(MapleBenchMobMotion.VERSION))
                 .append(",\"monsters\":[");
 
         List<Monster> monsters = bot.getMap().getAllMonsters().stream()

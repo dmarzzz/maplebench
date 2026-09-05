@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import subprocess
+from unittest.mock import patch
 
 spec=importlib.util.spec_from_file_location('maplebench',Path(__file__).resolve().parents[1]/'scripts/maplebench.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
@@ -52,6 +54,20 @@ class DurableQueueTest(unittest.TestCase):
     def test_manifest_rejects_path_traversal_and_unbounded_batches(self):
         for value in [{'scenarios':['../private']},{'scenarios':['s'],'repetitions':0},{'scenarios':['s'],'models':['local-model']},{'scenarios':['s'],'max_api_calls':True}]:
             with self.assertRaises(ValueError):m.validate_manifest(value)
+
+    def test_source_freeze_excludes_untracked_scripts_and_symlinks(self):
+        root = Path(self.temp.name) / 'repo'; root.mkdir()
+        scripts = root / 'scripts'; scripts.mkdir()
+        (scripts / 'runner.py').write_text('tracked implementation')
+        (scripts / 'exporter.rs').write_text('tracked exporter')
+        (scripts / 'unrelated.py').write_text('untracked local script')
+        (scripts / 'link.py').symlink_to(scripts / 'unrelated.py')
+        subprocess.run(['git', 'init', '-q', str(root)], check=True)
+        subprocess.run(['git', 'add', 'scripts/runner.py', 'scripts/exporter.rs', 'scripts/link.py'], cwd=root, check=True)
+        output = Path(self.temp.name) / 'frozen'
+        with patch.object(m, 'REPO', root): checksum = m.freeze_source(output)
+        self.assertEqual(len(checksum), 64)
+        self.assertEqual(sorted(p.name for p in (output/'scripts').iterdir()), ['exporter.rs', 'runner.py'])
 
     def test_score_uses_only_authoritative_events_within_cutoff(self):
         obs=[{'nowMs':100,'character':{'hp':10,'alive':True}}, {'nowMs':1100,'character':{'hp':8,'alive':True}}]

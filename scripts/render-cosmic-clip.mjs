@@ -2,6 +2,8 @@ import { readFile, writeFile, mkdir, readdir, unlink, rename } from 'node:fs/pro
 import { resolve, join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { parseSkillEffects, skillEffectFrame } from './replay-skill-effects.mjs';
 
 const run = promisify(execFile);
 const work = resolve(process.env.MAPLEBENCH_WORK || '..');
@@ -33,6 +35,18 @@ const monsterSimulation = observations.some(o => o.monsterSimulation === 'ground
 let cameraX = observations[0].character.position.x;
 const combatTrace = observations.some(o => o.combatTrace === 'combat-v1');
 const combatAttacks = events.filter(e => e.kind === 'combat_attack' || e.kind === 'skill_cast');
+const effectDir = process.env.MAPLEBENCH_SKILL_EFFECT_DIR;
+if (effectDir && process.env.MAPLEBENCH_OVERLAY_ONLY === 'true') {
+  throw new Error('Skill effects require a full native render; an overlay-only pass cannot add or verify WZ art');
+}
+const effectManifest = effectDir ? await readFile(join(resolve(effectDir), 'effects.txt'), 'utf8') : '';
+const skillEffects = effectManifest ? parseSkillEffects(effectManifest) : new Map();
+if (effectManifest) await writeFile(join(input, 'skill-effects.json'), JSON.stringify({
+  version: 'skill-fx-v1', archive: 'Skill.wz', manifestSha256: createHash('sha256').update(effectManifest).digest('hex'),
+  effects: [...skillEffects.keys()], trigger: 'accepted server combat_attack / skill_cast',
+  timing: 'WZ frame delays; combat_attack speed uses Cosmic BotAttackTiming; casts use raw WZ timing',
+  limitations: 'Front cast overlays only. No Panic/Coma finish art, target hit flashes, or persistent skill particles.',
+}, null, 2) + '\n');
 const monsterHits = events.filter(e => e.kind === 'monster_hit' && e.mapId === mapId);
 const playerHits = events.filter(e => e.kind === 'player_hit' && e.mapId === mapId);
 const monsterIds = [...new Set(observations.flatMap(o => o.monsters.map(m => m.monsterId)))];
@@ -144,6 +158,15 @@ for (let i = 0; i < frames; i++) {
     : (motion ? motion.moving : moving) ? walkPose : standPose;
   const pose = frameAt(stance, attacking ? t - (attack?.tMs ?? action.tMs) : t - start, attacking ? attack?.cooldownMs : undefined);
   const lines = [`player ${x.toFixed(2)} ${y.toFixed(2)} ${stance} ${pose} ${facing}`, `camera ${cameraX.toFixed(2)} ${cameraY}`];
+  for (const cast of combatAttacks.filter(e => e.characterId === a.character.id && e.mapId === mapId && e.tMs <= t && t - e.tMs < 5000)) {
+    const effect = skillEffectFrame(skillEffects, cast, t - cast.tMs);
+    if (!effect) continue;
+    // Knockback cancels the attacking actor's use effect along with its pose.
+    // A later action does not cancel unrelated, still-fading buff art.
+    if (cast.kind === 'combat_attack' && playerHits.some(h => h.characterId === a.character.id && h.knockback
+        && (h.tMs > cast.tMs || (h.tMs === cast.tMs && h.seq > cast.seq)) && h.tMs <= t)) continue;
+    lines.push(`effect ${effect.file} ${x.toFixed(2)} ${y.toFixed(2)} ${effect.ox} ${effect.oy} ${cast.facingLeft ? 0 : 1} ${effect.alpha} ${effect.blend}`);
+  }
   for (const m of a.monsters.filter(m => m.alive && !monsterHits.some(h => h.objectId === m.objectId && h.monsterId === m.monsterId && h.killed && h.tMs <= t))) {
     // Interpolate only an existing monster's two observed positions. A spawn/death
     // boundary has no second position and must never create an invented path.
@@ -175,7 +198,7 @@ for (let i = 0; i < frames; i++) {
   const xp = events.filter(e => e.kind === 'xp_gain' && e.tMs >= start && e.tMs <= t).reduce((s, e) => s + e.amount, 0);
   const selectedSkill = attack?.skillId ?? action?.action.skillId;
   const attackName = selectedSkill
-    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST', 1111008: 'SHOUT', 1121008: 'BRANDISH', 1111003: 'PANIC', 1111005: 'COMA', 1111002: 'COMBO ATTACK', 1101004: 'SWORD BOOSTER', 1101006: 'RAGE', 1121002: 'POWER STANCE' }[selectedSkill] || `SKILL ${selectedSkill}`)
+    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST', 1111008: 'SHOUT', 1121008: 'BRANDISH', 1111003: 'PANIC', 1111005: 'COMA', 1111002: 'COMBO ATTACK', 1101004: 'SWORD BOOSTER', 1101006: 'RAGE', 1121002: 'POWER STANCE', 1121000: 'MAPLE WARRIOR' }[selectedSkill] || `SKILL ${selectedSkill}`)
     : 'BASIC ATTACK';
   const lastGroundedAt = observations.findLast(o => o.character.id === a.character.id && o.nowMs <= t && o.character.motion?.inAir === false)?.nowMs ?? -Infinity;
   const recoil = airborne && playerHits.some(h => h.characterId === a.character.id && h.knockback
@@ -188,7 +211,7 @@ for (let i = 0; i < frames; i++) {
   if (a.character.combo) {
     const combo = a.character.combo;
     const buffs = (a.skills || []).filter(skill => skill.selfBuff && skill.active);
-    const names = {1111002: 'Combo', 1101004: 'Booster', 1101006: 'Rage', 1121002: 'Stance'};
+    const names = {1111002: 'Combo', 1101004: 'Booster', 1101006: 'Rage', 1121002: 'Stance', 1121000: 'Maple Warrior'};
     const status = buffs.map(skill => `${names[skill.skillId] || skill.name}  ${Math.ceil(skill.remainingMs / 1000)}s`).join('\\N');
     const comboText = `COMBO ${combo.orbs}/${combo.maxOrbs}\\N${'●'.repeat(combo.orbs)}${'○'.repeat(Math.max(0, combo.maxOrbs - combo.orbs))}`;
     ass.push(`Dialogue: 2,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},HUD,,0,0,0,,{\\an9\\pos(780,18)\\fs15}${comboText}${status ? '\\N' + status : ''}`);

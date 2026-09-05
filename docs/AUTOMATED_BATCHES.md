@@ -75,8 +75,8 @@ provenance record includes the observed monster-simulation version.
 
 ## Frozen inputs and budgets
 
-Submission copies the runner/controller source, server JAR, server scripts,
-configuration, WZ XML, database snapshot, character/map bakes and native renderer
+Submission copies tracked runner/controller source, server JAR, server scripts,
+configuration, WZ XML, database snapshot, character/map/skill bakes and native renderer
 into an ignored batch directory. It pins the local Docker image ID. Development
 can continue while those frozen inputs run. Monster sprite export still uses the
 shared localhost asset service; leave that service and its art files unchanged
@@ -103,8 +103,9 @@ The installed gallery listens on localhost:8830. Access it through an SSH tunnel
 the root page lists available batches. Every successful recording has a score,
 model/program trace, provenance metadata, an MP4 with the model overlay, and a
 thumbnail. [Gallery details](RESULTS_GALLERY.md) describe filtering and evidence.
-Replays interpolate server observations and attack poses. Brandish damage is real
-server damage; its full skill visual effect is not currently reproduced.
+Replays interpolate server observations and attack poses. The Timeless scenario
+freezes original WZ Brandish and buff-cast art alongside its equipment bake;
+other skill-effect layers and full client physics remain outside this renderer.
 
 The queue is durable across SSH loss. Its systemd worker restarts after failure;
 reboot recovery also requires the host's dedicated Cosmic/MySQL services to be

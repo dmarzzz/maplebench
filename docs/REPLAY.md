@@ -163,3 +163,48 @@ to the requested model identity. Combo circles are a HUD representation; origina
 skill particle effects and trails are not reconstructed. Camera interpolation
 and Maplewright rendering remain a replay of server observations, not footage of
 a retail client.
+
+
+### Timeless equipment and original WZ skill effects
+
+`hero-timeless-v2` uses the actual equipped six-piece Timeless build and adds
+Maple Warrior's `alert3` pose. `scripts/wzskillfx.rs` is installed into Maplewright
+by `patch-maplewright.mjs`; it uses the existing WZ decoder to export Brandish's
+`effect/0` and `effect/1`, plus Combo, Booster, Rage, Stance and Maple Warrior cast
+art. No generated particle art or game assets are committed.
+
+Build `wzskillfx`, `wzchar` and `client` on the runtime host with the documented
+single-job resource caps. From that work directory:
+
+```sh
+maplewright/target/release/wzskillfx assets/Skill.wz baked/hero-skill-fx-v1
+maplewright/target/release/wzchar assets/Character.wz assets/Base.wz \
+  baked/hero-timeless-v2 0 20000 30030 1002776,1052155,1072355,1082234,1102172,1402046
+```
+
+The scenario's `render_skill_effects` selects the bake; the queue freezes it with
+the renderer and supplies `MAPLEBENCH_SKILL_EFFECT_DIR`. An accepted server
+`combat_attack` or `skill_cast` event triggers the corresponding one-shot art.
+Origins, frame delays and alpha come from WZ; Brandish uses the recorded effective
+speed and Cosmic `BotAttackTiming`. The replay writes a manifest hash and precise
+limitations to `skill-effects.json`. The effects are front overlays anchored to
+recorded character positions. Panic/Coma finish art, target hit flashes and
+persistent buff particles remain unsupported. This improves presentation without
+changing attack damage or claiming an original-client recording.
+
+The research behind this implementation found substantial existing presentation
+code in Journey's [Skill.cpp](https://github.com/nmnsnv/maplestory-wasm/blob/bc0234fe7c7f53322453e7bdd79564d9aca4cd8b/src/client/Gameplay/Combat/Skill.cpp)
+and [Afterimage.cpp](https://github.com/nmnsnv/maplestory-wasm/blob/bc0234fe7c7f53322453e7bdd79564d9aca4cd8b/src/client/Character/Look/Afterimage.cpp).
+The source is a presentation reference, not measured v83 physics. For future
+monster actions, Cosmic Agents' [ServerMobActionCatalog](https://github.com/Kiwiism/cosmic_agents/blob/745fbd31a7ffaece376736bc3570388ad8401c3e/src/main/java/server/life/autonomy/ServerMobActionCatalog.java)
+already reads WZ attack geometry, costs, timing and effects through Cosmic's data
+provider; its WASM-derived physics must be assessed separately. An existing
+[WZ outfit browser](https://github.com/Leonana69/wz-python) also avoids the need to
+build a separate fashion editor. None of these broader clients or AI systems is
+installed or silently substituted by this release.
+
+The character compositor respects authored back-facing frames: it draws the back
+head, hair and helmet and omits the front face when WZ sets `face=0`. This fixes
+the apparent bald head during Brandish's referenced `swingTF/0` frame. Two compiled
+Rust regressions verify front/back selection and defaults. Older bakes and clips
+remain unchanged.

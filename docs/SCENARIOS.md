@@ -46,8 +46,8 @@ name and resets the scenario's stats before each new server process starts.
 | `crusader` | `Agent90`, job 111, level 100 | STR 350, DEX 120, INT/LUK 4; HP 4,000, MP 1,000 | Stonetooth Sword `1402037` | Power Strike `1001004` level 20, Slash Blast `1001005` level 20, passive Sword Mastery `1100000` level 20 |
 | `hero` | `AgentHero`, job 112, level 130 | STR 500, DEX 120, INT/LUK 4; HP 8,000, MP 2,000 | Stonetooth Sword `1402037` | Brandish `1121008` level/master level 30, plus the Crusader preset's verified attack and mastery skills |
 
-All start with equipment `1040036`, `1060026`, `1072001`, face `20000`, and hair
-`30030`. Stonetooth's WZ requirements are level 100 and DEX 120; its default weapon
+The original three presets start with equipment `1040036`, `1060026`, `1072001`,
+face `20000`, and hair `30030`. Stonetooth's WZ requirements are level 100 and DEX 120; its default weapon
 attack is 101. These are explicit benchmark builds, not claims that the character
 has completed normal job-advancement quests or a complete player skill build.
 
@@ -55,10 +55,10 @@ Power Strike level 1 costs 4 MP and has 165% damage in this WZ dataset. At level
 20 it costs 12 MP and has 260% damage. Slash Blast level 20 costs 16 HP and 14 MP,
 has 130% damage, and can hit up to six nearby targets. Normal weapon damage,
 accuracy, defense, attack locks and range checks still apply. Sword Mastery is a
-learned passive rather than an action. The pinned upstream mastery lookup currently
-omits two-handed sword type 140, so its improvement is not yet applied to
-Stonetooth in this build. No automatic Final Attack or autonomous buff casting is
-enabled.
+learned passive rather than an action. MapleBench fixes the pinned upstream
+mastery lookup for two-handed sword type 140; older results before mechanics
+`hero-control-v2` lacked this correction. No automatic Final Attack or autonomous
+buff casting is enabled.
 
 Hero Brandish level 30 costs 25 MP, delivers two hits with 260% damage each, and
 can hit up to three targets. Its WZ actions are `brandish1` and `brandish2`.
@@ -74,7 +74,7 @@ Jr. Yetis; that result does not validate every Crusader skill.
 
 ## Finite consumables and control API
 
-Each natural scenario starts with 100 White Potions `2000002` (300 HP each) and
+The original Beach/C-1 scenarios start with 100 White Potions `2000002` (300 HP each) and
 100 Blue Potions `2000003` (100 MP each). Henesys smoke fixtures start with none.
 The character receives exactly that inventory once at startup. Nothing replenishes
 it during an episode, and the model must explicitly choose to use a potion.
@@ -91,15 +91,15 @@ it during an episode, and the model must explicitly choose to use a potion.
 {"type":"use_item","itemId":2000002}
 ```
 
-The bridge permits only the two supported potion IDs, requires a live character
-and a positive inventory quantity, then calls Cosmic's ordinary
+The bridge permits only scenario-approved supported potion IDs, requires a live
+character and a positive inventory quantity, then calls Cosmic's ordinary
 `UseItemHandler.consumeUseItem`. That handler removes one item and applies its WZ
 effect. It may waste a potion used at full HP/MP, just like ordinary use. There is
 no separate potion cooldown in that upstream handler; benchmark action limits
 remain separate input constraints. Observation and action calls serialize at the
 controller so simultaneous requests cannot double-consume one remaining potion.
 
-Loot collection, shops, travel between maps, combo finishers, and character revival
+Loot collection, shops, travel between maps, and character revival
 are not implemented in this scenario version. Death should end a trial as gameplay
 failure; infrastructure restart is a new attempt, not free revival.
 
@@ -118,8 +118,9 @@ Each file in `scenarios/` is a complete task definition:
   limits. API budgets and repetitions are configured at the batch level.
 - `allowed_skills`: active attack skill IDs; basic attacks are separate. Passive
   skills are not included. `allowed_items` lists permitted consumables.
-- `inventory`: finite starting items as `{item_id, quantity}`. The current runtime
-  accepts only White and Blue Potions with quantities from zero to 100.
+- `inventory`: finite starting items as `{item_id, quantity}`. The runtime accepts
+  White Potion/Ice Cream Pop for HP and Blue Potion/Mana Elixir for MP, with
+  quantities from zero to 100.
 - `objective`: `{"type":"xp"}` for continuous hunting, or an additional `target_xp`
   for a short clear fixture. Score server XP-gain events, not just the final EXP bar,
   because a level-up can reset that bar.
@@ -333,3 +334,65 @@ Continuous scheduling is tested with a deliberately delayed API response while
 an actual isolated Docker program continues issuing actions, followed by a clean
 replacement. Step ownership, no overlapping executors, global action limits,
 API failure cancellation and credential isolation are covered separately.
+
+
+## Equipped Timeless Hero (`hero-timeless-cave`)
+
+This is a separate 180-second scenario and a stronger level-180 character. It
+retains the cavern and staged opening, with spawn `(0,260)` so opening skill casts
+remain visible after early knockback. It uses ordinary WZ level-120 equipment:
+
+| Slot | Item | ID | Base WDEF |
+| --- | --- | --- | ---: |
+| Helmet | Timeless Fennel | 1002776 | 120 |
+| Overall | Timeless Taragon | 1052155 | 196 |
+| Boots | Timeless Grabbe | 1072355 | 84 |
+| Gloves | Timeless Bergamot | 1082234 | 51 |
+| Cape | Timeless Moonlight | 1102172 | 55 |
+| Two-handed sword | Timeless Nibleheim | 1402046 | 0 |
+
+These items are unscrolled, ordinary `getEquipById` items. Their actual gear is
+both equipped server-side and baked for the replay; startup verifies the observed
+IDs. The weapon has 112 WATK and speed 6 before buffs. Armor supplies 506 WDEF,
+29 STR, 14 DEX and 25 MP before active buffs. Base stats are STR760/DEX120,
+12,000 HP and 3,000 MP. This is an explicit benchmark build, not a character that
+completed progression quests.
+
+The kit adds **Maple Warrior20** (40 MP, 600 seconds, 10% base main stats) and
+passive **Achilles30** (85% incoming contact damage), retaining Brandish30,
+Advanced Combo30, Stance30 and the previous Hero kit. The learned fourth-job
+skills use 140 SP, within the level-180 fourth-job budget. Maple Warrior is an
+explicit self-buff. Achilles cannot be cast. Mechanics `hero-control-v3` applies
+its learned WZ multiplier at the controlled-bot contact boundary, matching
+`TakeDamageHandler` integer truncation before HP deduction and hit recording.
+Fall damage and ordinary bots are unaffected. Observations expose equipped IDs,
+WDEF, effective STR/DEX, Achilles level and contact damage permille.
+
+There are exactly **100 Ice Cream Pops and 60 Mana Elixirs**. There is still no
+automatic healing or refill. The earlier continuous cavern batch remains intact:
+all four models consumed all 60 HP potions and died on their 56th damaging contact.
+Astra/Sol/Terra/Luna earned 66,000/64,500/58,500/40,500 XP respectively. Their
+starter clothing supplied only 4 WDEF. These results primarily expose a finite
+health budget under repeated contact, and are not a stable model ranking.
+
+The equipped scenario changes gear, level, stats, passive mitigation and supply;
+it is a new calibration fixture, not a one-variable improvement experiment.
+Monster hit recoil and active attacks remain fidelity gaps. Do not infer a
+locomotion freeze from a `hit1` sprite delay: `info/pushed` is a damage threshold,
+and open-source client art timing is not original-client physics measurement.
+
+
+Live validation ran for 180 seconds of scripted hunting after setup (190.684
+seconds recorded overall). It killed 85 Skelegons for 127,500 XP, took 52 damaging
+contacts and 15 misses, consumed 42 HP potions and nine MP potions, and finished
+alive with 58 HP potions left. Minimum observed HP was 45.67%. Starting gear
+WDEF506/WATK112 and the learned Achilles multiplier850 were checked; Maple Warrior
+raised observed STR789→865 and DEX134→146. All five self-buffs, both charged
+finishers, full ten-orb charge and exact potion effects passed. This is scripted
+mechanics validation, not an OpenAI model result. The focused Java suite passed
+136 tests, including contact mitigation/HP trace and unchanged fall damage.
+
+The renderer/WZ exporter compiled successfully. All 69 Python tests (including
+five real Docker controller checks), four TypeScript tests and the TypeScript
+build passed. Source freezing excludes untracked scripts and symlinks; new skill
+art is copied into each frozen batch rather than taken from a changing bake.

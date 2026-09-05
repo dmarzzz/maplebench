@@ -24,7 +24,8 @@ public final class MapleBenchRuntime {
     private MapleBenchRuntime() {}
 
     private enum Preset {
-        WARRIOR(100, 1302000), CRUSADER(111, 1402037), HERO(112, 1402037), HERO_ADVANCED(112, 1402037);
+        WARRIOR(100, 1302000), CRUSADER(111, 1402037), HERO(112, 1402037), HERO_ADVANCED(112, 1402037),
+        HERO_TIMELESS(112, 1402046);
 
         final int jobId;
         final int weaponId;
@@ -106,8 +107,13 @@ public final class MapleBenchRuntime {
             }
 
             // Seed equipment before the episode begins. Runtime actions use normal game handlers.
-            int[] equipment = {1040036, 1060026, 1072001, preset.weaponId};
-            short[] slots = {-5, -6, -7, -11};
+            boolean timeless = preset == Preset.HERO_TIMELESS;
+            // Ordinary level-120 WZ equipment, with its actual stats and visible appearance.
+            // The overall occupies the coat slot and replaces both starter coat and pants.
+            int[] equipment = timeless
+                    ? new int[]{1002776, 1052155, 1072355, 1082234, 1102172, preset.weaponId}
+                    : new int[]{1040036, 1060026, 1072001, preset.weaponId};
+            short[] slots = timeless ? new short[]{-1, -5, -7, -8, -9, -11} : new short[]{-5, -6, -7, -11};
             // No equipment from an earlier trial survives the preset reset.
             var equipped = bot.getInventory(InventoryType.EQUIPPED);
             for (Item item : new ArrayList<>(equipped.list())) equipped.removeSlot(item.getPosition());
@@ -120,8 +126,8 @@ public final class MapleBenchRuntime {
             setSkill(bot, Warrior.POWER_STRIKE, advanced ? 20 : 1);
             setSkill(bot, Warrior.SLASH_BLAST, advanced ? 20 : 0);
             setSkill(bot, Fighter.SWORD_MASTERY, advanced ? 20 : 0);
-            setSkill(bot, Hero.BRANDISH, (preset == Preset.HERO || preset == Preset.HERO_ADVANCED) ? 30 : 0);
-            boolean fullHero = preset == Preset.HERO_ADVANCED;
+            setSkill(bot, Hero.BRANDISH, preset.jobId == 112 ? 30 : 0);
+            boolean fullHero = preset == Preset.HERO_ADVANCED || timeless;
             setSkill(bot, Crusader.COMBO, fullHero ? 30 : 0);
             setSkill(bot, Fighter.SWORD_BOOSTER, fullHero ? 20 : 0);
             setSkill(bot, Fighter.RAGE, fullHero ? 20 : 0);
@@ -129,6 +135,8 @@ public final class MapleBenchRuntime {
             setSkill(bot, Hero.STANCE, fullHero ? 30 : 0);
             setSkill(bot, Crusader.SWORD_PANIC, fullHero ? 30 : 0);
             setSkill(bot, Crusader.SWORD_COMA, fullHero ? 30 : 0);
+            setSkill(bot, Hero.MAPLE_WARRIOR, timeless ? 20 : 0);
+            setSkill(bot, Hero.ACHILLES, timeless ? 30 : 0);
             // Shout has not passed a separate live skill validation; keep it out of scored trials.
             setSkill(bot, Crusader.SHOUT, 0);
             seedConsumables(bot, hpPotions, mpPotions);

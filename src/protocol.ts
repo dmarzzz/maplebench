@@ -35,7 +35,12 @@ export interface CharacterState {
   worldState?: "staged" | "running";
   motion?: CharacterMotion;
   combo?: { active: boolean; orbs: number; maxOrbs: number };
-  combatStats?: { weaponAttack: number; physicalMastery: number };
+  combatStats?: {
+    weaponAttack: number; physicalMastery: number;
+    weaponDefense?: number; str?: number; dex?: number;
+    achillesLevel?: number; contactDamagePermille?: number;
+  };
+  equipment?: Array<{ itemId: ItemId; slot: number }>;
 }
 
 /** Readiness covers costs and animation locks; attack range is checked at execution. */
@@ -105,7 +110,7 @@ export interface Observation {
   /** Version of the server-side replacement for an absent client mob controller. */
   monsterSimulation?: string;
   combatTrace?: "combat-v1";
-  mechanicsVersion?: "hero-control-v2";
+  mechanicsVersion?: "hero-control-v2" | "hero-control-v3";
   skills?: LearnedSkill[];
   drops: DropState[];
   inventory?: InventoryItem[];
