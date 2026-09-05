@@ -55,7 +55,7 @@ if (combatTrace && process.env.MAPLEBENCH_SNAPSHOTS_ONLY !== 'true') {
 }
 const damage = combatTrace ? monsterHits.flatMap(hit => {
   const lines = hit.damageLines?.length ? hit.damageLines : [hit.hpLoss];
-  return lines.map((amount, row) => ({tMs: hit.tMs, ...hit.position, amount, row,
+  return lines.map((amount, row) => ({tMs: hit.tMs, ...hit.position, amount, row, group: `${hit.objectId}:${hit.tMs}`,
     rolled: Boolean(hit.damageLines?.length)}));
 }) : [];
 const playerHpChanges = [];
@@ -194,9 +194,34 @@ for (let i = 0; i < frames; i++) {
     ? `${recentHpChange.delta < 0 ? 'HP LOSS' : 'HP RESTORED'} ${recentHpChange.delta > 0 ? '+' : ''}${recentHpChange.delta}`
     : 'Recorded server HP';
   healthRow(`{\\pos(562,567)\\fs14\\c&H${recentHpChange ? hpColor : 'FFFFFF'}&}${hpStatus}`);
-  for (const hit of damage.filter(d => t >= d.tMs && t - d.tMs < 850)) {
+  const visibleDamage = damage.filter(d => t >= d.tMs && t - d.tMs < 850);
+  // Keep each target's damage lines together, separating columns when mobs cluster.
+  // This changes only label placement; monster positions and hit values are untouched.
+  const damageColumns = new Map();
+  if (combatTrace) {
+    for (const hit of visibleDamage) {
+      const desiredX = (hit.x + offx - camx) * 800 / 1024;
+      const width = Math.max(52, String(hit.amount).length * 19 + 12);
+      const previous = damageColumns.get(hit.group);
+      damageColumns.set(hit.group, {desiredX, x: desiredX, width: Math.max(width, previous?.width || 0)});
+    }
+    const columns = [...damageColumns.values()].sort((a, b) => a.desiredX - b.desiredX);
+    let right = 12;
+    for (const column of columns) {
+      column.x = Math.max(column.desiredX, right + column.width / 2);
+      right = column.x + column.width / 2 + 10;
+    }
+    if (columns.length) {
+      const idealShift = columns.reduce((sum, c) => sum + c.desiredX - c.x, 0) / columns.length;
+      const leftEdge = columns[0].x - columns[0].width / 2;
+      const rightEdge = right - 10;
+      const shift = Math.max(12 - leftEdge, Math.min(788 - rightEdge, idealShift));
+      for (const column of columns) column.x += shift;
+    }
+  }
+  for (const hit of visibleDamage) {
     const age = t - hit.tMs;
-    const dx = Math.round((hit.x + offx - camx) * 800 / 1024);
+    const dx = Math.round(damageColumns.get(hit.group)?.x ?? (hit.x + offx - camx) * 800 / 1024);
     const dy = Math.round((hit.y + offy - camy - 68 - (hit.row || 0) * 29 - age * 0.035) * 600 / 768);
     const alpha = Math.round(Math.max(0, (age - 500) / 350) * 255).toString(16).padStart(2, '0');
     ass.push(`Dialogue: 1,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},Damage,,0,0,0,,{\\pos(${dx},${dy})\\alpha&H${alpha}&}${hit.rolled ? (hit.amount === 0 ? "MISS" : hit.amount) : `-${hit.amount} HP`}`);

@@ -40,6 +40,8 @@ class CombatReplayTest(unittest.TestCase):
                 dict(kind='xp_gain',tMs=1900,amount=168),
                 dict(kind='monster_hit',tMs=1900,mapId=261020300,characterId=4,objectId=1,monsterId=5110301,
                      position=dict(x=220,y=167),damageLines=[1200,1300],hpLoss=2500,killed=False),
+                dict(kind='monster_hit',tMs=1900,mapId=261020300,characterId=4,objectId=3,monsterId=5110301,
+                     position=dict(x=221,y=167),damageLines=[2000,2100],hpLoss=4100,killed=False),
                 dict(kind='monster_hit',tMs=2400,mapId=261020300,characterId=4,objectId=1,monsterId=5110301,
                      position=dict(x=220,y=167),damageLines=[3000,3500],hpLoss=1900,killed=True)]
         (run/'observations.json').write_text(json.dumps(observations))
@@ -81,3 +83,15 @@ class CombatReplayTest(unittest.TestCase):
         self.assertIn(r'\c&HFF80D4&',self.ass)
         self.assertIn('}250\n',self.ass)
         self.assertIn('}+250 HP',self.ass)
+
+    def test_clustered_targets_keep_their_damage_columns_separate(self):
+        import re
+        rows=[r.split(',',9) for r in self.ass.splitlines() if r.startswith('Dialogue:')]
+        labels={}
+        for r in rows:
+            if r[1]=='0:00:01.93' and r[3]=='Damage':
+                value=int(r[9].split('}')[-1])
+                labels[value]=int(re.search(r'pos\((\d+),',r[9]).group(1))
+        self.assertEqual(labels[1200],labels[1300])
+        self.assertEqual(labels[2000],labels[2100])
+        self.assertGreaterEqual(labels[2000]-labels[1200],88)

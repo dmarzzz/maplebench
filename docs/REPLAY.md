@@ -85,7 +85,8 @@ Stance probability, hitboxes, or attack timing.
 Replay uses the recorded attack duration, stops an attack pose on knockback, and
 keeps the recorded facing during recoil. Airborne state replaces the old
 height-relative-to-camera guess. Individual outgoing rolls stack above each
-monster; incoming damage/misses appear in purple. Green numbers remain observed
+monster, with separate columns when nearby targets would overlap; incoming
+damage/misses appear in purple. Green numbers remain observed
 net HP recovery. The health bar continues to show discrete observed HP.
 
 A surviving monster plays WZ `hit1` after a damaging hit; only an explicit killed
