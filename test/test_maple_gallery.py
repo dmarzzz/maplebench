@@ -102,6 +102,19 @@ class GalleryTest(unittest.TestCase):
             'completed': 1, 'time_limit': 1, 'death': 1, 'decision_limit': 1,
             'budget_limit': 1, 'action_limit': 1, 'infrastructure_error': 1, 'interrupted': 1})
 
+    def test_combat_metrics_preserve_unknowns_and_only_publish_numeric_buff_uptime(self):
+        self.artifact('score.json', {'monstersKilled': 5, 'incomingDamage': 2345,
+                                    'maximumComboOrbs': 10, 'minimumHpPercent': 71.2,
+                                    'buffUptimePercent': {'1111002': 82, '1121002': float('nan'),
+                                                          'private-field': 'omit', '1101004': 101}})
+        _, summary = self.build()
+        metrics = summary['trials'][0]['metrics']
+        self.assertEqual(metrics['kills'], 5)
+        self.assertEqual(metrics['incoming_damage'], 2345)
+        self.assertEqual(metrics['maximum_combo'], 10)
+        self.assertIsNone(metrics['targets_per_attack'])
+        self.assertEqual(metrics['buff_uptime'], {'1111002': 82})
+
     def test_mock_and_unknown_runs_cannot_inherit_server_label(self):
         self.artifact('controller.json', {'name': 'Local mock controller'})
         _, summary = self.build()

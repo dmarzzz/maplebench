@@ -50,7 +50,8 @@ final class MapleBenchController {
                 .append(",\"position\":{\"x\":").append(p.x).append(",\"y\":").append(p.y).append('}')
                 .append(",\"alive\":").append(bot.isAlive())
                 .append(",\"motion\":").append(MapleBenchCombatTrace.motionJson(entry))
-                .append("},\"combatTrace\":\"combat-v1\",\"monsterSimulation\":").append(MapleBenchJson.quote(MapleBenchMobMotion.VERSION))
+                .append(',').append(MapleBenchSkills.characterJson(bot))
+                .append("},\"combatTrace\":\"combat-v1\",\"mechanicsVersion\":\"hero-control-v2\",\"monsterSimulation\":").append(MapleBenchJson.quote(MapleBenchMobMotion.VERSION))
                 .append(",\"monsters\":[");
 
         List<Monster> monsters = bot.getMap().getAllMonsters().stream()
@@ -88,7 +89,7 @@ final class MapleBenchController {
                     .append(",\"mpRestore\":").append(effect.getMp())
                     .append('}');
         }
-        return out.append("],\"drops\":[]}").toString();
+        return out.append("],\"skills\":").append(MapleBenchSkills.observeJson(entry)).append(",\"drops\":[]}").toString();
     }
 
     synchronized Result act(String body) {
@@ -108,14 +109,22 @@ final class MapleBenchController {
                 if (skillId == null || skillId <= 0 || skillId > Integer.MAX_VALUE) {
                     yield new Result(false, "invalid skillId");
                 }
-                yield attack(entry, body, skillId.intValue());
+                int requested = skillId.intValue();
+                String blocked = MapleBenchSkills.blocked(entry, requested);
+                if (blocked != null) yield new Result(false, blocked);
+                var definition = MapleBenchSkills.definition(requested);
+                if (definition.selfBuff()) {
+                    boolean cast = BotCombatManager.tryRequestedBuff(entry, bot, requested);
+                    yield new Result(cast, cast ? null : "buff was not applied");
+                }
+                yield attack(entry, body, requested);
             }
             default -> new Result(false, "action not implemented by Cosmic v0 bridge: " + type);
         };
     }
 
     private static boolean isBenchmarkPotion(int itemId) {
-        return itemId == ItemId.WHITE_POTION || itemId == ItemId.BLUE_POTION;
+        return MapleBenchItems.supported(itemId);
     }
 
     private Result useItem(Character bot, String body) {
@@ -144,6 +153,8 @@ final class MapleBenchController {
     }
 
     private Result attack(BotEntry entry, String body, int skillId) {
+        String blocked = MapleBenchSkills.blocked(entry, skillId);
+        if (blocked != null) return new Result(false, blocked);
         Long targetId = MapleBenchJson.longField(body, "targetId");
         if (targetId == null || targetId <= 0 || targetId > Integer.MAX_VALUE) {
             return new Result(false, "targetId is required for benchmark attacks");
@@ -151,7 +162,7 @@ final class MapleBenchController {
         Monster target = findMonster(entry.bot, targetId.intValue());
         if (target == null || !target.isAlive()) return new Result(false, "target not alive/visible");
         boolean accepted = BotCombatManager.tryRequestedAttack(entry, entry.bot, target, skillId);
-        return accepted ? new Result(true, null) : new Result(false, "attack not currently legal");
+        return accepted ? new Result(true, null) : new Result(false, "target is out of range or attack is unavailable");
     }
 
     private Monster findMonster(Character bot, int objectId) {

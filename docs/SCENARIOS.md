@@ -236,3 +236,59 @@ Before adding C-1 to a scored batch:
 5. Restart for a new trial and verify stats and potion counts reset exactly. Check
    that the frozen scenario and model identity appear in the replay and results.
 6. Run a bounded natural-hunt smoke attempt before enabling full ten-minute trials.
+
+
+## Advanced Hero cavern (`hero-cave`)
+
+This level 150 Hero has Brandish 30, Combo Attack 30, Advanced Combo 30,
+Sword Booster 20, Rage 20, Power Stance 30, Panic 30 and Coma 30, plus the
+previous Warrior skills and Sword Mastery 20. Buffs start inactive. The model
+casts them through `sdk.useSkill(skillId)`; attacks still require an observed
+target. Passive skills cannot be cast. Readiness describes learned levels,
+resources and animation locks; it does not promise that a target is in range.
+
+The Cave of Light (`240050300`) is a **controlled quest-map hunting fixture**.
+Its fifteen ordinary Skelegon spawn points remain intact: level 110, 80,000 HP,
+1,500 base XP, ground y=260. Six one-shot Skelosaurus quest actors (`9300077`)
+are explicitly omitted at map load via `excluded_oneshot_monsters`; their active
+attack behavior is unsupported. Exclusions only affect the configured map's
+one-shot actors (`mobTime=-1`), never ordinary respawn points. Quest progression
+and enemy active skill AI are outside this scenario. The existing declared
+`ground-patrol-v1` simulation supplies walking, chasing and status immobilization.
+
+Combo Attack builds up to ten charged orbs with Advanced Combo. Recasting Combo
+resets its charge; Panic and Coma consume it and reject with zero charge.
+Coma can stun several targets. Normal Cosmic handlers apply resource costs,
+attack damage, buff effects and stun; the controller does not grant damage or XP.
+Stance reduces knockback probability, without preventing incoming HP loss.
+The inventory contains exactly 60 Ice Cream Pops (2,000 HP each) and 60 Mana
+Elixirs (300 MP each), with no automatic healing, renewal or refills.
+
+Mechanics version `hero-control-v2` also fixes two-handed sword classification in
+Cosmic's mastery resolver. A Stonetooth Hero with Sword Mastery 20 now receives
+0.60 physical mastery instead of the erroneous untrained 0.10. Earlier C-1
+results use older mechanics and are historical baselines, not directly comparable
+measures of model improvement.
+
+The score adds actual monster kills, applied HP loss, rolled damage, overkill,
+incoming hits/misses, knockbacks, minimum HP, targets per attack, skill/potion use,
+maximum combo and buff uptime. Uptime is weighted by observed milliseconds;
+gaps over two seconds are unknown and excluded. Observation coverage is reported.
+Legacy recordings without the required state retain unknown values, not invented
+zeros. Damage and spawn timing still contain randomness; one short trial per
+model is a smoke comparison, not a stable ranking.
+
+
+The final live scripted check started at x=-400 with full 10,000 HP. In 105.247
+seconds it killed 40 monsters for 60,000 XP, recorded 45 damaging contacts and
+seven knockbacks, and reached ten combo orbs. Both Panic and Coma consumed their
+orbs. The minimum observed HP was 53.1%; 52 HP potions and seven MP potions were
+consumed, with exact healing and inventory decrements verified. This is scripted
+integration validation, not an API model score.
+
+Release checks: 130 focused Java tests, 57 Python tests including all four Docker
+isolation tests, and four TypeScript scoring tests passed. A separate baseline
+run of upstream `CombatFormulaProviderTest` had three pre-existing formula
+assertion failures (Lucky Seven, Dragon Roar, physical skill scaling); those broad
+upstream tests are not part of the green focused suite. The new mastery regression
+is tested directly in `MapleBenchSkillsTest`.

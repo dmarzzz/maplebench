@@ -117,6 +117,31 @@ function installCosmicOverlay(cosmicDir) {
         boolean killed = monster.damage(chr, damage, false);
         server.bots.MapleBenchCombatTrace.monsterHit(chr, monster, damage, mapleBenchHpBefore, killed);`, 'applied monster damage trace');
 
+  replaceOnce(join(cosmicDir, 'src/main/java/server/maps/MapFactory.java'),
+    '        AbstractLoadedLife myLife = loadLife(id, type, cy, f, fh, rx0, rx1, x, y, hide);',
+    `        if ("m".equals(type) && server.bots.MapleBenchRuntime.excludeInitialSpawn(map.getId(), id, mobTime)) return;
+        AbstractLoadedLife myLife = loadLife(id, type, cy, f, fh, rx0, rx1, x, y, hide);`, 'declared one-shot fixture exclusions');
+
+  const formulaPath = join(cosmicDir, 'src/main/java/server/combat/CombatFormulaProvider.java');
+  replaceOnce(formulaPath, '            case 130 -> WeaponType.SWORD1H;',
+    '            case 130 -> WeaponType.SWORD1H;\n            case 140 -> WeaponType.SWORD2H;', 'two-handed sword mastery');
+  insertBeforeOnce(combatPath, '    private static List<Integer> cachedAttackSkillIds(BotEntry entry) {',
+    `    /** Execute one explicitly requested learned self buff through SPECIAL_MOVE. */
+    static boolean tryRequestedBuff(BotEntry entry, Character bot, int skillId) {
+        var definition = MapleBenchSkills.definition(skillId);
+        if (definition == null || !definition.selfBuff() || MapleBenchSkills.blocked(entry, skillId) != null) return false;
+        Skill skill = SkillFactory.getSkill(skillId);
+        int hpBefore = bot.getHp(), mpBefore = bot.getMp();
+        if (!castSupportSkill(entry, bot, skill, skill.getEffect(bot.getSkillLevel(skill)), System.currentTimeMillis())) return false;
+        if (!MapleBenchSkills.active(bot, skillId)) return false;
+        String action = BotAttackExecutionProvider.resolveSkillAttackAction(bot, skill, bot.getSkillLevel(skill),
+                BotAttackExecutionProvider.getEquippedWeaponType(bot));
+        MapleBenchCombatTrace.buffCast(entry, skillId, action, hpBefore, mpBefore);
+        return true;
+    }
+
+`, 'static boolean tryRequestedBuff(', 'explicit buff control');
+
   const managerPath = join(target, 'BotManager.java');
   const managerAnchor = '    public Character getBot(int ownerCharId) {';
   const managerMethod = `    /** MapleBench helper: find an already-active bot without exposing owner policy. */\n    BotEntry findActiveBotEntry(String botName) {\n        if (botName == null || botName.isBlank()) return null;\n        for (List<BotEntry> entries : bots.values()) {\n            for (BotEntry entry : entries) {\n                if (entry != null && entry.bot != null && entry.bot.getName().equalsIgnoreCase(botName)) {\n                    return entry;\n                }\n            }\n        }\n        return null;\n    }\n\n`;

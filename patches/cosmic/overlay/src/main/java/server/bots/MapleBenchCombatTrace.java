@@ -27,6 +27,18 @@ public final class MapleBenchCombatTrace {
         CURRENT.set(new AttackContext(id, entry.bot.getId(), attack));
     }
 
+    static void buffCast(BotEntry entry, int skillId, String action, int hpBefore, int mpBefore) {
+        if (!MapleBenchEventSink.records(entry.bot)) return;
+        entry.mapleBenchAction = action;
+        entry.mapleBenchAttackAtMs = MapleBenchEventSink.elapsedMs();
+        MapleBenchEventSink.appendPayload("\"kind\":\"skill_cast\",\"characterId\":" + entry.bot.getId()
+                + ",\"mapId\":" + entry.bot.getMapId() + ",\"skillId\":" + skillId
+                + ",\"actionName\":" + MapleBenchJson.quote(action) + ",\"cooldownMs\":" + entry.attackCooldownMs
+                + ",\"facingLeft\":" + (entry.facingDir < 0)
+                + ",\"hpBefore\":" + hpBefore + ",\"hpAfter\":" + entry.bot.getHp()
+                + ",\"mpBefore\":" + mpBefore + ",\"mpAfter\":" + entry.bot.getMp());
+    }
+
     static void endAttack() { CURRENT.remove(); }
 
     /** Called immediately after MapleMap applies damage, before object disposal or XP. */

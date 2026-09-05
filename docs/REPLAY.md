@@ -152,3 +152,14 @@ The visual review did not measure gravity, collision widths, invulnerability
 duration or attack delays. Measure those with matched client/server state and WZ
 data before changing constants. Keep scenario and gameplay changes in new frozen
 batches so existing model comparisons remain interpretable.
+
+
+### Advanced Hero presentation
+
+`hero-advanced-v2` adds the real WZ `alert2`/`alert4` buff poses and finisher body
+stances. Accepted `skill_cast` events carry actual resource costs and action locks.
+The overlay shows MP, charged combo orbs and remaining active buff durations next
+to the requested model identity. Combo circles are a HUD representation; original
+skill particle effects and trails are not reconstructed. Camera interpolation
+and Maplewright rendering remain a replay of server observations, not footage of
+a retail client.

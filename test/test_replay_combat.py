@@ -18,7 +18,7 @@ class CombatReplayTest(unittest.TestCase):
         root = Path(cls.temp.name)
         run, char, map_dir = root/'run', root/'char', root/'map'
         for p in (run, char, map_dir): p.mkdir()
-        (char/'char.txt').write_text('stand1 0 100\nwalk1 0 100\njump 0 100\nswingO1 0 100\nbrandish2 0 100\nbrandish2 1 100\n')
+        (char/'char.txt').write_text('stand1 0 100\nwalk1 0 100\njump 0 100\nswingO1 0 100\nbrandish2 0 100\nbrandish2 1 100\nalert4 0 100\n')
         (map_dir/'map.fh').write_text('0 0 2048 1024\n')
         (run/'mob-animations.json').write_text(json.dumps({'5110301': {'hit1':600,'die1':1000}}))
         def mob(oid):
@@ -28,9 +28,11 @@ class CombatReplayTest(unittest.TestCase):
         for i in range(5):
             motion=dict(inAir=i==1, facingLeft=False, moving=False, attackCooldownMs=300 if i==2 else 0)
             character=dict(id=4,mapId=261020300,jobId=112,level=130,hp=7750 if i in (1,2) else 8000,maxHp=8000,
-                           position=dict(x=200-i*10,y=150 if i in (1,3) else 167),motion=motion)
+                           position=dict(x=200-i*10,y=150 if i in (1,3) else 167),motion=motion,
+                           mp=900,maxMp=1000,combo=dict(active=True,orbs=5,maxOrbs=10))
             observations.append(dict(nowMs=i*1000, character=character,combatTrace='combat-v1',
-                                     monsters=[mob(1),mob(2)] if i<2 else [mob(1)] if i==2 else []))
+                                     monsters=[mob(1),mob(2)] if i<2 else [mob(1)] if i==2 else [],
+                                     skills=[dict(skillId=1111002,name='Combo Attack',selfBuff=True,active=True,remainingMs=150000)]))
         events=[dict(kind='combat_attack', seq=1, tMs=800, characterId=4,mapId=261020300,skillId=1121008,
                      actionName='brandish2',cooldownMs=900,hitDelayMs=250,facingLeft=False),
                 dict(kind='player_hit',tMs=1000,characterId=4,mapId=261020300,source='touch',objectId=1,
@@ -46,6 +48,8 @@ class CombatReplayTest(unittest.TestCase):
                      position=dict(x=221,y=167),damageLines=[2000,2100],hpLoss=4100,killed=False),
                 dict(kind='monster_hit',tMs=2400,mapId=261020300,characterId=4,objectId=1,monsterId=5110301,
                      position=dict(x=220,y=167),damageLines=[3000,3500],hpLoss=1900,killed=True)]
+        events.append(dict(kind='skill_cast',seq=9,tMs=3650,characterId=4,mapId=261020300,
+                           skillId=1111002,actionName='alert4',cooldownMs=700,facingLeft=False))
         (run/'observations.json').write_text(json.dumps(observations))
         (run/'episode.jsonl').write_text(''.join(json.dumps(e)+'\n' for e in events))
         subprocess.run([shutil.which('node'),str(ROOT/'scripts/render-cosmic-clip.mjs'),str(run)],
@@ -64,6 +68,11 @@ class CombatReplayTest(unittest.TestCase):
         self.assertIn('KNOCKBACK', self.ass)
         # Grounded at a different height from the initial camera must not become a jump.
         self.assertEqual(self.frame(45)[0][3], 'stand1')
+
+    def test_explicit_buff_uses_its_recorded_pose_and_exposes_resources(self):
+        self.assertEqual(self.frame(58)[0][3], 'alert4')
+        self.assertTrue('COMBO 5/10' in self.ass, 'Combo count missing from HUD')
+        self.assertTrue('MP   900 / 1000' in self.ass, 'MP missing from HUD')
 
     def test_uses_recorded_cooldown_instead_of_fixed_800ms(self):
         self.assertEqual(self.frame(33)[0][3], 'brandish2')

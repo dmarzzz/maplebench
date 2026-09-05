@@ -23,7 +23,7 @@ const sdk = Object.freeze({
   observe: () => rpc('observe', []),
   moveTo: (x, y) => rpc('moveTo', [x, y]),
   attack: targetId => rpc('attack', [targetId]),
-  useSkill: (skillId, targetId) => rpc('useSkill', [skillId, targetId]),
+  useSkill: (skillId, targetId) => rpc('useSkill', targetId === undefined ? [skillId] : [skillId, targetId]),
   useItem: itemId => rpc('useItem', [itemId]),
   wait: milliseconds => rpc('wait', [milliseconds]),
 });

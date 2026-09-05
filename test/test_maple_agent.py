@@ -32,6 +32,15 @@ class ProtocolBoundaryTest(unittest.TestCase):
         self.assertEqual(agent.validate_rpc(rpc('useItem', [2000000]), SCENARIO),
                          ('useItem', {'type': 'use_item', 'itemId': 2000000}))
 
+    def test_self_buff_requires_both_scenario_allowlists_and_no_target(self):
+        scenario = SCENARIO | {'allowed_skills':[1001004,1111002], 'self_buff_skills':[1111002]}
+        self.assertEqual(agent.validate_rpc(rpc('useSkill',[1111002]),scenario),
+                         ('useSkill',{'type':'use_skill','skillId':1111002}))
+        for request, config in [(rpc('useSkill',[1001004]),scenario),
+                                (rpc('useSkill',[1111002,42]),scenario),
+                                (rpc('useSkill',[1111002]),SCENARIO | {'self_buff_skills':[1111002]})]:
+            with self.assertRaises(ValueError): agent.validate_rpc(request,config)
+
     def test_privileged_actions_and_invalid_arguments_never_reach_server(self):
         invalid = [rpc('reset', []), rpc('add_exp', [100]), rpc('fetch', ['http://example.com']),
                    rpc('useSkill', [9999999, 42]), rpc('useItem', [2000001]),
@@ -208,6 +217,12 @@ class DockerIsolationTest(unittest.TestCase):
         self.assertEqual(result['reason'], 'program_complete', result)
         self.assertEqual(result['actions'], 1)
         self.assertEqual(calls[-1][1], {'type': 'basic_attack', 'targetId': 42})
+
+    def test_targetless_buff_round_trip(self):
+        with patch.dict(SCENARIO, {'allowed_skills':[1111002], 'self_buff_skills':[1111002]}):
+            result, calls = self.execute('await sdk.useSkill(1111002);')
+        self.assertEqual(result['reason'], 'program_complete', result)
+        self.assertEqual(calls[-1][1], {'type':'use_skill','skillId':1111002})
 
     def test_unapproved_skill_and_forged_privileged_request_are_rejected(self):
         result, calls = self.execute('await sdk.useSkill(9999999, 42);')

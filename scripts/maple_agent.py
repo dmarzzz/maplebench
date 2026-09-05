@@ -33,12 +33,16 @@ SDK methods (all return promises):
   sdk.observe() -> current character, monsters, drops, and inventory
   sdk.moveTo(x, y) -> movement action receipt; movement continues over time
   sdk.attack(targetId) -> basic attack receipt
-  sdk.useSkill(skillId, targetId) -> learned skill action receipt
+  sdk.useSkill(skillId, targetId) -> learned attack skill action receipt
+  sdk.useSkill(skillId) -> learned self buff listed in self_buff_skills
   sdk.useItem(itemId) -> consume an inventory item allowed by the scenario
   sdk.wait(milliseconds) -> wait 1..3000 milliseconds
 Action receipts have accepted, error, and usually observation. Only supplied
 scenario skill IDs may be used. Select targets from observed monster objectId.
-Coordinates increase rightward/downward. Follow actual footholds and allow
+Observations include skills (costs, active buffs, remainingMs, readiness),
+character.combo (charged orbs) and character.motion (action/hurt cooldowns).
+Recasting Combo resets its orbs; finishers consume them. Buffs require explicit
+casts and are not automatically renewed. Coordinates increase rightward/downward. Follow actual footholds and allow
 movement/attack cooldown time; accepted movement does not mean arrival.
 Aim to achieve the scenario objective while remaining alive. Your program is
 replaced by your next response; local variables do not survive. Re-observe
@@ -145,11 +149,17 @@ def validate_rpc(message, scenario):
         action = {'type': 'move_to', 'position': {'x': x, 'y': y}}
     elif method == 'attack' and len(args) == 1:
         action = {'type': 'basic_attack', 'targetId': _integer(args[0], 1, 2147483647, 'target ID')}
-    elif method == 'useSkill' and len(args) == 2:
+    elif method == 'useSkill' and len(args) in (1, 2):
         skill = _integer(args[0], 1, 99999999, 'skill ID')
         if skill not in allowed_skills(scenario):
             raise ValueError('Skill is not allowed in this scenario')
-        action = {'type': 'use_skill', 'skillId': skill, 'targetId': _integer(args[1], 1, 2147483647, 'target ID')}
+        buffs = {_integer(value, 1, 99999999, 'self buff skill ID') for value in scenario.get('self_buff_skills', [])}
+        if len(args) == 1:
+            if skill not in buffs: raise ValueError('Attack skill requires a target ID')
+            action = {'type': 'use_skill', 'skillId': skill}
+        else:
+            if skill in buffs: raise ValueError('Self buff does not take a target ID')
+            action = {'type': 'use_skill', 'skillId': skill, 'targetId': _integer(args[1], 1, 2147483647, 'target ID')}
     elif method == 'useItem' and len(args) == 1:
         item = _integer(args[0], 1, 99999999, 'item ID')
         items = scenario.get('allowed_items', [])
@@ -395,7 +405,7 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
     out.mkdir(parents=True, exist_ok=True)
     # Send only public scenario fields; runner configuration may contain paths.
     public_scenario = {key: scenario[key] for key in ('id', 'name', 'description', 'objective',
-                       'allowed_skills', 'allowedSkillIds', 'allowed_skill_ids', 'allowed_items', 'skills', 'character',
+                       'allowed_skills', 'allowedSkillIds', 'allowed_skill_ids', 'allowed_items', 'self_buff_skills', 'skills', 'character',
                        'coordinate_bounds', 'allowed_actions', 'allowedActions') if key in scenario}
     instructions = PROMPT + '\nScenario: ' + json.dumps(public_scenario) + '\nProgram limit: ' + str(program_seconds) + ' seconds.'
     controller = {'name': 'OpenAI Responses API (programmable SDK)', 'model': model,

@@ -20,6 +20,8 @@ import urllib.request
 import uuid
 
 REPO = Path(__file__).resolve().parent.parent
+# Resolve sibling modules from this copy, including immutable batch snapshots.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
 TERMINAL = {'completed', 'infrastructure_error', 'budget_exhausted', 'cancelled'}
 SLUG = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}$')
@@ -301,9 +303,16 @@ def reset_world(work, batch_dir, scenario, out, trial_id):
          'MAPLEBENCH_DEMO_MOBS':str(scenario.get('demo_mobs',False)).lower(),
          'MAPLEBENCH_EPISODE':str(out/'server-episode.jsonl'),'MAPLEBENCH_TASK_ID':scenario['id'],
          'MAPLEBENCH_SEED':trial_id}
+    env['MAPLEBENCH_EXCLUDED_ONESHOT_MOBS'] = ','.join(str(bounded_int(mid,'excluded one-shot monster',1,99999999))
+                                                     for mid in scenario.get('excluded_oneshot_monsters', []))
     for item in scenario.get('inventory', []):
-        if item['item_id'] in (2000002,2000003):
-            env['MAPLEBENCH_HP_POTIONS' if item['item_id']==2000002 else 'MAPLEBENCH_MP_POTIONS']=str(bounded_int(item['quantity'],'potion quantity',0,100))
+        item_id = item['item_id']
+        role = 'HP' if item_id in (2000002, 2001001) else 'MP' if item_id in (2000003, 2000006) else None
+        if role is None: raise ValueError('Unsupported scenario potion')
+        id_key = 'MAPLEBENCH_' + role + '_POTION_ID'
+        if id_key in env: raise ValueError('Scenario must select one potion per resource')
+        env[id_key] = str(item_id)
+        env['MAPLEBENCH_' + role + '_POTIONS'] = str(bounded_int(item['quantity'],'potion quantity',0,100))
     if scenario.get('spawn'):
         env['MAPLEBENCH_SPAWN_X']=str(bounded_int(scenario['spawn']['x'],'spawn x',-10000,10000))
         env['MAPLEBENCH_SPAWN_Y']=str(bounded_int(scenario['spawn']['y'],'spawn y',-5000,5000))
@@ -326,6 +335,7 @@ def reset_world(work, batch_dir, scenario, out, trial_id):
 
 
 def score_run(observations, events, agent):
+    from combat_metrics import summarize_combat
     if not observations: raise ValueError('No server observations recorded')
     start,end=observations[0]['nowMs'],observations[-1]['nowMs']
     events=[e for e in events if start<=e['tMs']<=end]
@@ -333,7 +343,7 @@ def score_run(observations, events, agent):
     total=sum(e['amount'] for e in xp)
     peak=max((sum(f['amount'] for f in xp if e['tMs']-60000 < f['tMs'] <= e['tMs']) for e in xp),default=0)
     final=observations[-1]['character']
-    return dict(agent,backend='cosmic-v83',durationMs=max(0,end-start),xpGainedThisRun=total,totalXp=total,
+    return dict(agent,**summarize_combat(observations, events),backend='cosmic-v83',durationMs=max(0,end-start),xpGainedThisRun=total,totalXp=total,
                 monsterSimulation=observations[0].get('monsterSimulation','stationary-v0'),
                 averageXpPerMinute=total*60000/max(1,end-start),peak60sXpPerMinute=peak,
                 peakWindowComplete=end-start>=60000,finalHp=final['hp'],alive=final['alive'],
@@ -356,6 +366,7 @@ def execute_trial(batch_dir, t, work):
     atomic_json(out/'scenario.json',scenario)
     atomic_json(out/'provenance.json',{'source_sha256':config['source_sha256'],'git_commit':config['git_commit'],
         'monster_simulation':initial.get('monsterSimulation','stationary-v0'),
+        'mechanics_version':initial.get('mechanicsVersion','combat-trace-v1'),
         'server_sha256':config['Server_jar_sha256'],'snapshot_sha256':config['baseline_sql_sha256'],
         'docker_image':config['docker_image'],'randomness':config['randomness'],'backend':'cosmic-v83'})
     observations=[initial]; done=threading.Event(); errors=[]

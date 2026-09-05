@@ -31,7 +31,7 @@ const monsterSimulation = observations.some(o => o.monsterSimulation === 'ground
   ? ' / Ground-mob simulation' : '';
 let cameraX = observations[0].character.position.x;
 const combatTrace = observations.some(o => o.combatTrace === 'combat-v1');
-const combatAttacks = events.filter(e => e.kind === 'combat_attack');
+const combatAttacks = events.filter(e => e.kind === 'combat_attack' || e.kind === 'skill_cast');
 const monsterHits = events.filter(e => e.kind === 'monster_hit' && e.mapId === mapId);
 const playerHits = events.filter(e => e.kind === 'player_hit' && e.mapId === mapId);
 const monsterIds = [...new Set(observations.flatMap(o => o.monsters.map(m => m.monsterId)))];
@@ -173,7 +173,7 @@ for (let i = 0; i < frames; i++) {
   const xp = events.filter(e => e.kind === 'xp_gain' && e.tMs >= start && e.tMs <= t).reduce((s, e) => s + e.amount, 0);
   const selectedSkill = attack?.skillId ?? action?.action.skillId;
   const attackName = selectedSkill
-    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST', 1111008: 'SHOUT', 1121008: 'BRANDISH' }[selectedSkill] || `SKILL ${selectedSkill}`)
+    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST', 1111008: 'SHOUT', 1121008: 'BRANDISH', 1111003: 'PANIC', 1111005: 'COMA', 1111002: 'COMBO ATTACK', 1101004: 'SWORD BOOSTER', 1101006: 'RAGE', 1121002: 'POWER STANCE' }[selectedSkill] || `SKILL ${selectedSkill}`)
     : 'BASIC ATTACK';
   const lastGroundedAt = observations.findLast(o => o.character.id === a.character.id && o.nowMs <= t && o.character.motion?.inAir === false)?.nowMs ?? -Infinity;
   const recoil = airborne && playerHits.some(h => h.characterId === a.character.id && h.knockback
@@ -182,18 +182,32 @@ for (let i = 0; i < frames; i++) {
   const job = ({ 100: 'Warrior', 110: 'Fighter', 111: 'Crusader', 112: 'Hero' })[a.character.jobId] || `Job ${a.character.jobId}`;
   const hud = `MAPLEBENCH  /  ${hudText(mapName).toUpperCase()}\\NModel: ${hudText(controller.model)}\\NController: ${hudText(controller.name)}\\NLv ${a.character.level} ${job}   HP ${a.character.hp}/${a.character.maxHp}   XP +${xp}\\N${label}   |   ${((t - start) / 1000).toFixed(1)}s`;
   ass.push(`Dialogue: 0,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},HUD,,0,0,0,,${hud}`);
+  if (a.character.combo) {
+    const combo = a.character.combo;
+    const buffs = (a.skills || []).filter(skill => skill.selfBuff && skill.active);
+    const names = {1111002: 'Combo', 1101004: 'Booster', 1101006: 'Rage', 1121002: 'Stance'};
+    const status = buffs.map(skill => `${names[skill.skillId] || skill.name}  ${Math.ceil(skill.remainingMs / 1000)}s`).join('\\N');
+    const comboText = `COMBO ${combo.orbs}/${combo.maxOrbs}\\N${'●'.repeat(combo.orbs)}${'○'.repeat(Math.max(0, combo.maxOrbs - combo.orbs))}`;
+    ass.push(`Dialogue: 2,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},HUD,,0,0,0,,{\\an9\\pos(780,18)\\fs15}${comboText}${status ? '\\N' + status : ''}`);
+  }
   const recentHpChange = playerHpChanges.findLast(h => h.characterId === a.character.id && h.tMs <= t && t - h.tMs < 1400);
   const hpColor = recentHpChange?.delta < 0 ? '7070FF' : '8DEA91';
   const hpFraction = Math.max(0, Math.min(1, a.character.hp / Math.max(1, a.character.maxHp)));
   const healthRow = text => ass.push(`Dialogue: 2,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},HealthHUD,,0,0,0,,${text}`);
-  healthRow('{\\pos(552,518)\\p1\\bord0\\c&H201912&\\alpha&H30&}m 0 0 l 228 0 228 72 0 72');
-  healthRow(`{\\pos(562,526)}PLAYER HP   ${a.character.hp} / ${a.character.maxHp}`);
-  healthRow('{\\pos(562,549)\\p1\\bord0\\c&H5B5050&}m 0 0 l 208 0 208 9 0 9');
-  if (hpFraction > 0) healthRow(`{\\pos(562,549)\\p1\\bord0\\c&H${hpColor}&}m 0 0 l ${(208 * hpFraction).toFixed(1)} 0 ${(208 * hpFraction).toFixed(1)} 9 0 9`);
+  healthRow('{\\pos(552,480)\\p1\\bord0\\c&H201912&\\alpha&H30&}m 0 0 l 228 0 228 110 0 110');
+  healthRow(`{\\pos(562,488)}PLAYER HP   ${a.character.hp} / ${a.character.maxHp}`);
+  healthRow('{\\pos(562,511)\\p1\\bord0\\c&H5B5050&}m 0 0 l 208 0 208 9 0 9');
+  if (hpFraction > 0) healthRow(`{\\pos(562,511)\\p1\\bord0\\c&H${hpColor}&}m 0 0 l ${(208 * hpFraction).toFixed(1)} 0 ${(208 * hpFraction).toFixed(1)} 9 0 9`);
   const hpStatus = recentHpChange
     ? `${recentHpChange.delta < 0 ? 'HP LOSS' : 'HP RESTORED'} ${recentHpChange.delta > 0 ? '+' : ''}${recentHpChange.delta}`
     : 'Recorded server HP';
-  healthRow(`{\\pos(562,567)\\fs14\\c&H${recentHpChange ? hpColor : 'FFFFFF'}&}${hpStatus}`);
+  healthRow(`{\\pos(562,529)\\fs14\\c&H${recentHpChange ? hpColor : 'FFFFFF'}&}${hpStatus}`);
+  if (Number.isFinite(a.character.mp) && Number.isFinite(a.character.maxMp)) {
+    const mpFraction = Math.max(0, Math.min(1, a.character.mp / Math.max(1, a.character.maxMp)));
+    healthRow(`{\\pos(562,549)\\fs15}MP   ${a.character.mp} / ${a.character.maxMp}`);
+    healthRow('{\\pos(562,574)\\p1\\bord0\\c&H5B5050&}m 0 0 l 208 0 208 8 0 8');
+    if (mpFraction > 0) healthRow(`{\\pos(562,574)\\p1\\bord0\\c&HFFCC66&}m 0 0 l ${(208 * mpFraction).toFixed(1)} 0 ${(208 * mpFraction).toFixed(1)} 8 0 8`);
+  }
   const visibleDamage = damage.filter(d => t >= d.tMs && t - d.tMs < 850);
   // Keep each target's damage lines together, separating columns when mobs cluster.
   // This changes only label placement; monster positions and hit values are untouched.

@@ -33,6 +33,25 @@ export interface CharacterState {
   position: Position;
   alive: boolean;
   motion?: CharacterMotion;
+  combo?: { active: boolean; orbs: number; maxOrbs: number };
+  combatStats?: { weaponAttack: number; physicalMastery: number };
+}
+
+/** Readiness covers costs and animation locks; attack range is checked at execution. */
+export interface LearnedSkill {
+  skillId: SkillId;
+  name: string;
+  level: number;
+  selfBuff: boolean;
+  finisher: boolean;
+  hpCost: number;
+  mpCost: number;
+  maxTargets: number;
+  damagePercent: number;
+  active: boolean;
+  remainingMs: number;
+  ready: boolean;
+  blockedReason: string | null;
 }
 
 /** Sampled mechanics, including the real attack lock and facing during recoil. */
@@ -85,6 +104,8 @@ export interface Observation {
   /** Version of the server-side replacement for an absent client mob controller. */
   monsterSimulation?: string;
   combatTrace?: "combat-v1";
+  mechanicsVersion?: "hero-control-v2";
+  skills?: LearnedSkill[];
   drops: DropState[];
   inventory?: InventoryItem[];
   portals?: Array<{ id: number; name?: string; position: Position; targetMapId?: MapId }>;
@@ -118,6 +139,7 @@ export interface MapleTransport {
 export type EpisodeEvent =
   | EpisodeStartEvent
   | CombatAttackEvent
+  | SkillCastEvent
   | MonsterHitEvent
   | PlayerHitEvent
   | XpGainEvent
@@ -131,6 +153,20 @@ export type EpisodeEvent =
 export interface BaseEvent {
   seq: number;
   tMs: number;
+}
+
+export interface SkillCastEvent extends BaseEvent {
+  kind: "skill_cast";
+  characterId: EntityId;
+  mapId: MapId;
+  skillId: SkillId;
+  actionName: string;
+  cooldownMs: number;
+  facingLeft: boolean;
+  hpBefore: number;
+  hpAfter: number;
+  mpBefore: number;
+  mpAfter: number;
 }
 
 export interface EpisodeStartEvent extends BaseEvent {

@@ -162,3 +162,10 @@ if (!doll.includes('// MapleBench: resolve a WZ action-frame reference')) {
 `);
   writeFileSync(dollPath, doll);
 }
+
+if (!chr.includes('"alert2", "alert4"')) {
+  const old = '"brandish1", "brandish2"';
+  if (!chr.includes(old)) throw new Error('Unexpected character exporter source for buff actions');
+  chr = chr.replace(old, old + ', "alert2", "alert4", "swingOF", "stabOF", "swingTF", "stabTF"');
+  writeFileSync(charPath, chr);
+}

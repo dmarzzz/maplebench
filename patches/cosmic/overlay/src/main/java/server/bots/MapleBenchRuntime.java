@@ -20,7 +20,7 @@ public final class MapleBenchRuntime {
     private MapleBenchRuntime() {}
 
     private enum Preset {
-        WARRIOR(100, 1302000), CRUSADER(111, 1402037), HERO(112, 1402037);
+        WARRIOR(100, 1302000), CRUSADER(111, 1402037), HERO(112, 1402037), HERO_ADVANCED(112, 1402037);
 
         final int jobId;
         final int weaponId;
@@ -50,20 +50,30 @@ public final class MapleBenchRuntime {
     private static void setSkill(Character bot, int id, int level) {
         var skill = SkillFactory.getSkill(id);
         if (skill == null) throw new IllegalArgumentException("Missing preset skill: " + id);
-        bot.changeSkillLevel(skill, (byte) level, id == Hero.BRANDISH ? level : 0, -1);
+        bot.changeSkillLevel(skill, (byte) level, id / 10000 == 112 ? level : 0, -1);
     }
 
     private static void seedConsumables(Character bot, int hpPotions, int mpPotions) {
         var inventory = bot.getInventory(InventoryType.USE);
         // Each fresh trial starts with exactly this finite supply, including after a persisted save.
         for (Item item : new ArrayList<>(inventory.list())) inventory.removeSlot(item.getPosition());
-        if (hpPotions > 0) inventory.addItemFromDB(new Item(ItemId.WHITE_POTION, (short) 1, (short) hpPotions));
-        if (mpPotions > 0) inventory.addItemFromDB(new Item(ItemId.BLUE_POTION, (short) 2, (short) mpPotions));
+        if (hpPotions > 0) inventory.addItemFromDB(new Item(MapleBenchItems.configured("MAPLEBENCH_HP_POTION_ID", ItemId.WHITE_POTION, true), (short) 1, (short) hpPotions));
+        if (mpPotions > 0) inventory.addItemFromDB(new Item(MapleBenchItems.configured("MAPLEBENCH_MP_POTION_ID", ItemId.BLUE_POTION, false), (short) 2, (short) mpPotions));
     }
 
     static boolean isControlled(Character bot) {
         return "true".equalsIgnoreCase(System.getenv("MAPLEBENCH_ENABLED"))
                 && MapleBenchEventSink.matchesConfiguredBot(bot);
+    }
+
+    /** Scenario construction only: omit declared one-shot quest actors, never normal respawns. */
+    public static boolean excludeInitialSpawn(int mapId, int mobId, int mobTime) {
+        if (mobTime != -1 || !"true".equalsIgnoreCase(System.getenv("MAPLEBENCH_ENABLED"))
+                || !Integer.toString(mapId).equals(System.getenv("MAPLEBENCH_MAP_ID"))) return false;
+        for (String id : System.getenv().getOrDefault("MAPLEBENCH_EXCLUDED_ONESHOT_MOBS", "").split(",")) {
+            if (Integer.toString(mobId).equals(id.trim())) return true;
+        }
+        return false;
     }
 
     static void spawnFromEnvironment() {
@@ -106,7 +116,15 @@ public final class MapleBenchRuntime {
             setSkill(bot, Warrior.POWER_STRIKE, advanced ? 20 : 1);
             setSkill(bot, Warrior.SLASH_BLAST, advanced ? 20 : 0);
             setSkill(bot, Fighter.SWORD_MASTERY, advanced ? 20 : 0);
-            setSkill(bot, Hero.BRANDISH, preset == Preset.HERO ? 30 : 0);
+            setSkill(bot, Hero.BRANDISH, (preset == Preset.HERO || preset == Preset.HERO_ADVANCED) ? 30 : 0);
+            boolean fullHero = preset == Preset.HERO_ADVANCED;
+            setSkill(bot, Crusader.COMBO, fullHero ? 30 : 0);
+            setSkill(bot, Fighter.SWORD_BOOSTER, fullHero ? 20 : 0);
+            setSkill(bot, Fighter.RAGE, fullHero ? 20 : 0);
+            setSkill(bot, Hero.ADVANCED_COMBO, fullHero ? 30 : 0);
+            setSkill(bot, Hero.STANCE, fullHero ? 30 : 0);
+            setSkill(bot, Crusader.SWORD_PANIC, fullHero ? 30 : 0);
+            setSkill(bot, Crusader.SWORD_COMA, fullHero ? 30 : 0);
             // Shout has not passed a separate live skill validation; keep it out of scored trials.
             setSkill(bot, Crusader.SHOUT, 0);
             seedConsumables(bot, hpPotions, mpPotions);
