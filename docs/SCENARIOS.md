@@ -292,3 +292,44 @@ run of upstream `CombatFormulaProviderTest` had three pre-existing formula
 assertion failures (Lucky Seven, Dragon Roar, physical skill scaling); those broad
 upstream tests are not part of the green focused suite. The new mastery regression
 is tested directly in `MapleBenchSkillsTest`.
+
+### Staged-opening variant
+
+`hero-cave-staged` keeps initial character mechanics and monster walking staged
+until the first supported action attempt. Observations are available during the
+first API request; the Hero cannot be damaged before any policy can act. The gate
+opens once and never pauses later combat or API waits. The initial planning delay
+still consumes the trial's wall-clock budget. `character.worldState` and the replay
+HUD explicitly distinguish staging from a running world.
+
+This is a separate scenario, preserving the original live-start evidence. The
+first live-start four-model batch exposed a confound: Astra earned 12,000 XP before
+dying at 62 seconds, while the other three died with zero XP. Terra's first API
+response alone took 26.5 seconds. The staged environment is selectable independently of controller scheduling.
+It is an operational comparison, not a single-variable causal ablation.
+
+
+### Continuous controller scheduling
+
+The `continuous` manifest mode requests the next API plan while the current
+model-authored program keeps running. It starts planning after ten seconds,
+allows a sixty-second program lease, and stops and reaps the old executor before
+starting a replacement. There is no built-in healing, attack policy or automatic
+replay of an expired program. State and targets must be re-observed by the model's
+program. The per-program SDK request cap is explicitly 600 in this mode; the
+trial-wide action, token, API and wall-clock caps still apply. Only one executor
+can issue actions. Fatal API/runtime errors stop the trial with recorded evidence.
+
+The original serial mode and its 100-request cap remain available. Controller
+metadata identifies the mode, each SDK step retains its original decision index,
+and the replay distinguishes API planning from the initial staged opening.
+
+
+Live staged-start validation held HP at 10,000 and all monster positions unchanged
+for 35 seconds, with no hit or XP events. The first action attempt opened the gate;
+ordinary combat then produced 24 kills, 36 damaging contacts, full combo charge,
+both finishers and verified potion consumption. The 132 focused Java checks passed.
+Continuous scheduling is tested with a deliberately delayed API response while
+an actual isolated Docker program continues issuing actions, followed by a clean
+replacement. Step ownership, no overlapping executors, global action limits,
+API failure cancellation and credential isolation are covered separately.

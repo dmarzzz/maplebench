@@ -167,6 +167,8 @@ function installCosmicOverlay(cosmicDir) {
 `;
   insertBeforeOnce(managerPath, '    private void tickCore(BotEntry entry, int ownerCharId, int botCharId) {', controlledTick,
     'private void tickMapleBench(BotEntry entry)', 'policy-neutral mechanics tick');
+  replaceOnce(managerPath, '    private void tickMapleBench(BotEntry entry) {',
+    '    private void tickMapleBench(BotEntry entry) {\n        if (MapleBenchRuntime.isStaged()) return;', 'staged episode opening');
   const tickAnchor = '        if (entry == null) return;\n        if (entry.airshowActive) return;';
   replaceOnce(managerPath, tickAnchor,
     '        if (entry == null) return;\n        if (MapleBenchRuntime.isControlled(entry.bot)) { tickMapleBench(entry); return; }\n        if (entry.airshowActive) return;', 'controlled-character tick dispatch');

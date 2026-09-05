@@ -218,6 +218,30 @@ class DockerIsolationTest(unittest.TestCase):
         self.assertEqual(result['actions'], 1)
         self.assertEqual(calls[-1][1], {'type': 'basic_attack', 'targetId': 42})
 
+    def test_continuous_replanning_keeps_real_docker_program_acting(self):
+        calls, actions = [], []
+        def endpoint(url, payload=None, key=None, timeout=None):
+            if url.endswith('/v1/observe'): return OBS
+            if url.endswith('/v1/action'):
+                actions.append(payload)
+                return {'accepted': True, 'observation': OBS}
+            calls.append(payload)
+            if len(calls) == 2:
+                before = len(actions); time.sleep(.25)
+                self.assertGreater(len(actions), before, 'Real sandbox stopped during API planning')
+            code = 'while(true){await sdk.attack(42);await sdk.wait(80);}' if len(calls)==1 else 'await sdk.attack(42);'
+            return {'status':'completed','model':agent.MODELS[0],'usage':{'total_tokens':100},
+                    'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps({'note':'control','code':code})}]}]}
+        with tempfile.TemporaryDirectory() as out:
+            r=agent.run_agent(agent.MODELS[0],SCENARIO,'http://127.0.0.1:8790','synthetic-test-key',out,
+                              control_mode='continuous',replan_seconds=1,max_calls=2,max_actions=50,
+                              wall_seconds=10,max_total_tokens=50000,request_fn=endpoint)
+            self.assertEqual(r['reason'],'decision_limit',r)
+            self.assertEqual(r['actions'],len(actions))
+            ds=json.loads((Path(out)/'decisions.json').read_text())
+            self.assertEqual(ds[0]['execution']['reason'],'replaced')
+            self.assertEqual(ds[1]['execution']['reason'],'program_complete')
+
     def test_targetless_buff_round_trip(self):
         with patch.dict(SCENARIO, {'allowed_skills':[1111002], 'self_buff_skills':[1111002]}):
             result, calls = self.execute('await sdk.useSkill(1111002);')

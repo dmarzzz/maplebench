@@ -32,6 +32,7 @@ export interface CharacterState {
   mapId: MapId;
   position: Position;
   alive: boolean;
+  worldState?: "staged" | "running";
   motion?: CharacterMotion;
   combo?: { active: boolean; orbs: number; maxOrbs: number };
   combatStats?: { weaponAttack: number; physicalMastery: number };

@@ -17,6 +17,10 @@ import java.util.Locale;
 
 /** Opt-in startup for a character already seeded in the dedicated experiment database. */
 public final class MapleBenchRuntime {
+    private static final MapleBenchStartGate START_GATE = new MapleBenchStartGate(
+            "first_action".equals(System.getenv("MAPLEBENCH_START_MODE")));
+    static boolean isStaged() { return START_GATE.isStaged(); }
+    static void startAction() { START_GATE.startAction(); }
     private MapleBenchRuntime() {}
 
     private enum Preset {

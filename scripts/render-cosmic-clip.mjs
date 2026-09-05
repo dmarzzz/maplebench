@@ -20,6 +20,7 @@ const controller = JSON.parse(await readFile(join(input, 'controller.json'), 'ut
   name: 'Nearest-monster scripted baseline', model: 'None (scripted policy)',
 })));
 const hudText = value => String(value).replace(/[{}\\\r\n]/g, ' ');
+const decisions = JSON.parse(await readFile(join(input, 'decisions.json'), 'utf8').catch(() => '[]'));
 if (observations.length < 2 || observations.some(o => o.character.mapId !== mapId)) throw new Error('Replay map does not match the selected bake');
 const start = observations[0].nowMs;
 const end = observations.at(-1).nowMs;
@@ -59,6 +60,7 @@ const damage = combatTrace ? monsterHits.flatMap(hit => {
     rolled: Boolean(hit.damageLines?.length)}));
 }) : [];
 const playerHpChanges = [];
+const healingLanes = new Map();
 for (let i = 1; i < observations.length; i++) {
   const before = observations[i - 1], after = observations[i];
   // These are observed HP deltas, not damage rolls or source attribution. Skill
@@ -178,7 +180,8 @@ for (let i = 0; i < frames; i++) {
   const lastGroundedAt = observations.findLast(o => o.character.id === a.character.id && o.nowMs <= t && o.character.motion?.inAir === false)?.nowMs ?? -Infinity;
   const recoil = airborne && playerHits.some(h => h.characterId === a.character.id && h.knockback
     && h.tMs >= lastGroundedAt && h.tMs <= t && t - h.tMs < h.hurtCooldownMs);
-  const label = attacking ? attackName : recoil ? 'KNOCKBACK' : airborne ? 'AIRBORNE' : moving ? (facing > 0 ? 'MOVE RIGHT' : 'MOVE LEFT') : 'OBSERVE';
+  const apiWait = decisions.find(d => Number.isFinite(d.tMs) && Number.isFinite(d.latencyMs) && t >= d.tMs && t < d.tMs + d.latencyMs);
+  const label = a.character.worldState === "staged" ? "STAGED / AWAITING FIRST ACTION" : apiWait ? `API ${controller.controlMode === "continuous" ? "PLANNING" : "WAIT"}  ${((t-apiWait.tMs)/1000).toFixed(1)}s` : attacking ? attackName : recoil ? 'KNOCKBACK' : airborne ? 'AIRBORNE' : moving ? (facing > 0 ? 'MOVE RIGHT' : 'MOVE LEFT') : 'OBSERVE';
   const job = ({ 100: 'Warrior', 110: 'Fighter', 111: 'Crusader', 112: 'Hero' })[a.character.jobId] || `Job ${a.character.jobId}`;
   const hud = `MAPLEBENCH  /  ${hudText(mapName).toUpperCase()}\\NModel: ${hudText(controller.model)}\\NController: ${hudText(controller.name)}\\NLv ${a.character.level} ${job}   HP ${a.character.hp}/${a.character.maxHp}   XP +${xp}\\N${label}   |   ${((t - start) / 1000).toFixed(1)}s`;
   ass.push(`Dialogue: 0,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},HUD,,0,0,0,,${hud}`);
@@ -233,11 +236,13 @@ for (let i = 0; i < frames; i++) {
       for (const column of columns) column.x += shift;
     }
   }
+  const occupiedLabels = [];
   for (const hit of visibleDamage) {
     const age = t - hit.tMs;
     const dx = Math.round(damageColumns.get(hit.group)?.x ?? (hit.x + offx - camx) * 800 / 1024);
     const dy = Math.round((hit.y + offy - camy - 68 - (hit.row || 0) * 29 - age * 0.035) * 600 / 768);
     const alpha = Math.round(Math.max(0, (age - 500) / 350) * 255).toString(16).padStart(2, '0');
+    occupiedLabels.push({x:dx,y:dy,w:damageColumns.get(hit.group)?.width || 100,h:32});
     ass.push(`Dialogue: 1,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},Damage,,0,0,0,,{\\pos(${dx},${dy})\\alpha&H${alpha}&}${hit.rolled ? (hit.amount === 0 ? "MISS" : hit.amount) : `-${hit.amount} HP`}`);
   }
   for (const hit of playerHits.filter(h => h.characterId === a.character.id && t >= h.tMs && t - h.tMs < 1100)) {
@@ -253,15 +258,39 @@ for (let i = 0; i < frames; i++) {
       py = Math.min(py, Math.round(outgoingY - 36));
     }
     const opacity = Math.round(Math.max(0, (age - 750) / 350) * 255).toString(16).padStart(2, '0');
+    occupiedLabels.push({x:px,y:py,w:Math.max(72,String(hit.damage).length*20),h:34});
     ass.push(`Dialogue: 3,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},PlayerHP,,0,0,0,,{\\pos(${px},${py})\\c&HFF80D4&\\alpha&H${opacity}&}${hit.miss ? 'MISS' : hit.damage}`);
   }
   for (const change of playerHpChanges.filter(h => (!combatTrace || h.delta > 0) && h.characterId === a.character.id && t >= h.tMs && t - h.tMs < 1100)) {
     const age = t - change.tMs;
-    const px = Math.round((change.x + offx - camx) * 800 / 1024);
-    const py = Math.round((change.y + offy - camy - 88 - age * 0.04) * 600 / 768);
+    const text = `${change.delta > 0 ? '+' : ''}${change.delta} HP`;
+    const width = text.length * 20 + 12;
+    const desiredX = (change.x + offx - camx) * 800 / 1024;
+    // Prefer below the character's feet; reserve space against all visible hit
+    // labels and earlier healing labels, including at the edge of the viewport.
+    const desiredY = (change.y + offy - camy + 28 - age * 0.025) * 600 / 768;
+    let px = Math.round(Math.max(12 + width/2, Math.min(788 - width/2, desiredX)));
+    let py = Math.round(Math.max(175, Math.min(455, desiredY)));
+    const laneKey = `${change.characterId}:${change.tMs}`;
+    const lane = healingLanes.get(laneKey);
+    if (lane) {
+      px = Math.round(Math.max(12 + width/2, Math.min(788 - width/2, desiredX + lane.x)));
+      py = Math.round(Math.max(175, Math.min(455, desiredY + lane.y)));
+    }
+    if (!lane) placement: for (const shiftX of [0, width + 12, -width - 12]) {
+      const x = Math.round(Math.max(12 + width/2, Math.min(788 - width/2, px + shiftX)));
+      for (const shiftY of [0,-38,38,-76,76,-114,114,-152,152,-190,190,-228,228,-266,266]) {
+        const y = py + shiftY;
+        if (y < 175 || y > 455) continue;
+        if (occupiedLabels.some(r => Math.abs(x-r.x) < (width+r.w)/2+8 && Math.abs(y-r.y) < (34+r.h)/2+4)) continue;
+        px = x; py = y; break placement;
+      }
+    }
+    if (!lane) healingLanes.set(laneKey, {x:px-desiredX,y:py-desiredY});
+    occupiedLabels.push({x:px,y:py,w:width,h:34});
     const alpha = Math.round(Math.max(0, (age - 750) / 350) * 255).toString(16).padStart(2, '0');
     const color = change.delta < 0 ? '7070FF' : '8DEA91';
-    ass.push(`Dialogue: 3,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},PlayerHP,,0,0,0,,{\\pos(${px},${py})\\c&H${color}&\\alpha&H${alpha}&}${change.delta > 0 ? '+' : ''}${change.delta} HP`);
+    ass.push(`Dialogue: 3,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},PlayerHP,,0,0,0,,{\\pos(${px},${py})\\c&H${color}&\\alpha&H${alpha}&}${text}`);
   }
 }
 ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\N${hudText(fixtureLabel)}${monsterSimulation}\\N${combatTrace ? 'Server combat events / WZ reaction timing' : 'Interpolated movement and presentation poses'}\\N${combatTrace ? 'Damage: server hits / Healing: observed HP' : 'HP labels: observed changes'}`);

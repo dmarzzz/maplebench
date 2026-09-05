@@ -120,6 +120,7 @@ final class MapleBenchMobMotion {
     }
 
     private void tick(Character bot) {
+        if (MapleBenchRuntime.isStaged()) { previousNs = 0; return; }
         long now = System.nanoTime();
         double dt = previousNs == 0 ? 0 : Math.min(.2, (now - previousNs) / 1e9);
         previousNs = now;

@@ -14,6 +14,8 @@ import shlex
 import subprocess
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import urllib.parse
 import uuid
 
@@ -37,7 +39,8 @@ SDK methods (all return promises):
   sdk.useSkill(skillId) -> learned self buff listed in self_buff_skills
   sdk.useItem(itemId) -> consume an inventory item allowed by the scenario
   sdk.wait(milliseconds) -> wait 1..3000 milliseconds
-Action receipts have accepted, error, and usually observation. Only supplied
+Action receipts have accepted, error, and usually observation. Each program
+has a limit of 100 SDK requests, including observe and wait calls. Only supplied
 scenario skill IDs may be used. Select targets from observed monster objectId.
 Observations include skills (costs, active buffs, remainingMs, readiness),
 character.combo (charged orbs) and character.motion (action/hurt cooldowns).
@@ -213,8 +216,10 @@ def _write_packet(pipe, value, deadline):
 
 def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
                     program_seconds=15, docker_image='node:22.19.0-bookworm-slim',
-                    request_fn=bounded_request, step_callback=None, stop_when=None):
+                    request_fn=bounded_request, step_callback=None, stop_when=None,
+                    cancel_event=None, max_requests=100):
     """Run untrusted code in Docker and proxy its validated, bounded SDK calls."""
+    _integer(max_requests, 1, 10000, 'program SDK request limit')
     if not isinstance(code, str) or not code.strip() or len(code) > 12000:
         raise ValueError('Invalid program size')
     base_url = validate_base_url(base_url)
@@ -252,6 +257,9 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
         _write_packet(process.stdin, {'type': 'init', 'code': code, 'timeoutMs': max(1, int(remaining * 1000))}, end)
         finished = False
         while not finished:
+            if cancel_event is not None and cancel_event.is_set():
+                outcome = {'reason': 'replaced', 'error': None}
+                break
             if time.monotonic() >= end:
                 outcome = {'reason': 'time_limit' if end == deadline else 'program_timeout', 'error': None}
                 break
@@ -276,6 +284,9 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
                 if len(buffer.split(b'\n')[-1]) > MAX_LINE_BYTES:
                     raise AgentError('Sandbox protocol line exceeded size limit')
                 while b'\n' in buffer:
+                    if cancel_event is not None and cancel_event.is_set():
+                        outcome = {'reason': 'replaced', 'error': None}
+                        finished = True; break
                     raw, buffer = buffer.split(b'\n', 1)
                     if len(raw) > MAX_LINE_BYTES:
                         raise AgentError('Sandbox protocol line exceeded size limit')
@@ -295,7 +306,7 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
                                    'error': None if message.get('ok') is True else str(message.get('error', 'Program failed'))[:512]}
                         finished = True; break
                     rpc_count += 1
-                    if rpc_count > 100:
+                    if rpc_count > max_requests:
                         outcome = {'reason': 'rpc_limit', 'error': 'Program SDK request limit reached'}
                         finished = True; break
                     rpc_id = message.get('id')
@@ -319,7 +330,12 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
                         raise TimeoutError('Program deadline reached')
                     if method == 'wait':
                         delay = min(action / 1000, left)
-                        time.sleep(delay)
+                        if cancel_event is not None:
+                            if cancel_event.wait(delay):
+                                outcome = {'reason': 'replaced', 'error': None}
+                                finished = True; break
+                        else:
+                            time.sleep(delay)
                         result = {'waitedMs': round(delay * 1000)}
                     elif method == 'observe':
                         result = request_fn(base_url + '/v1/observe', timeout=min(3, left))
@@ -383,7 +399,7 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
               max_output_tokens=1800, max_total_tokens=30000, wall_seconds=90,
               program_seconds=15, max_actions=500, docker_image='node:22.19.0-bookworm-slim',
               on_decision=None, stop_when=None, request_fn=bounded_request,
-              execute_fn=execute_program):
+              execute_fn=execute_program, control_mode='serial', replan_seconds=10):
     """Run one already-reset trial. Callback returning False stops for budget.
 
     on_decision receives each persisted decision including response.usage before
@@ -400,6 +416,8 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
         _integer(value, low, high, label)
     if not 1 <= wall_seconds <= 3600 or not 1 <= program_seconds <= 60:
         raise ValueError('Invalid time budget')
+    if control_mode not in ('serial', 'continuous') or not 0.01 <= replan_seconds <= 30:
+        raise ValueError('Invalid controller scheduling mode')
     allowed_skills(scenario)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -408,12 +426,21 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
                        'allowed_skills', 'allowedSkillIds', 'allowed_skill_ids', 'allowed_items', 'self_buff_skills', 'skills', 'character',
                        'coordinate_bounds', 'allowed_actions', 'allowedActions') if key in scenario}
     instructions = PROMPT + '\nScenario: ' + json.dumps(public_scenario) + '\nProgram limit: ' + str(program_seconds) + ' seconds.'
+    if control_mode == 'continuous':
+        instructions = instructions.replace('100 SDK requests', '600 SDK requests')
+        instructions += ('\nContinuous control: your current program continues running while the next API '
+                         'plan is requested. Write a resilient control loop for the full program lease. '
+                         'A replacement starts only after the previous program is stopped; re-observe '
+                         'before acting because the world changes during planning. No fallback policy, '
+                         'automatic replay or healing is supplied. Replanning begins after about '
+                         + str(replan_seconds) + ' seconds. Use up to 600 SDK requests per program.')
     controller = {'name': 'OpenAI Responses API (programmable SDK)', 'model': model,
-                  'reasoning': 'low', 'scenario': scenario.get('id', 'unknown'),
+                  'controlMode': control_mode, 'reasoning': 'low', 'scenario': scenario.get('id', 'unknown'),
                   'inference': 'api.openai.com', 'sandbox': 'Docker; no network; no credentials',
                   'limits': {'calls': max_calls, 'outputTokensPerCall': max_output_tokens,
                              'totalTokens': max_total_tokens, 'wallSeconds': wall_seconds,
-                             'programSeconds': program_seconds, 'actions': max_actions}}
+                             'programSeconds': program_seconds, 'actions': max_actions,
+                             'sdkRequestsPerProgram': 600 if control_mode == 'continuous' else 100}}
     write_json(out / 'controller.json', controller)
     (out / 'prompt.txt').write_text(instructions + '\n')
     decisions, recent, usages = [], [], []
@@ -422,13 +449,54 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
     token_count = actions = api_requests_started = 0
     reason, failure = 'decision_limit', None
 
-    with (out / 'steps.jsonl').open('a', buffering=1) as step_file:
-        def persist_step(step):
-            step_file.write(json.dumps({'turn': len(decisions) - 1} | step) + '\n')
+    active = None
+    terminals = ('death', 'completed', 'time_limit', 'action_limit', 'infrastructure_error')
+    with (out / 'steps.jsonl').open('a', buffering=1) as step_file, ThreadPoolExecutor(max_workers=1) as pool:
+        def persist_step(step, turn=None):
+            step_file.write(json.dumps({'turn': len(decisions) - 1 if turn is None else turn} | step) + '\n')
             step_file.flush()
+
+        def record_execution(turn, result):
+            nonlocal actions
+            actions += result['actions']
+            decision = decisions[turn]
+            decision['execution'] = {key: result[key] for key in ('reason', 'error', 'actions', 'logs') if key in result}
+            write_json(out / 'decisions.json', decisions)
+            choice = decision['choice']
+            recent.append({'note': choice['note'][:240], 'code': choice['code'],
+                           'result': decision['execution'],
+                           'recent_receipts': [dict(method=x.get('method'), args=x.get('args'),
+                               accepted=x.get('result', {}).get('accepted'), error=x.get('result', {}).get('error'))
+                               for x in result.get('steps', [])[-5:] if isinstance(x.get('result'), dict)]})
+
+        def harvest(cancel=False):
+            nonlocal active
+            if active is None: return None
+            state = active
+            if cancel: state['cancel'].set()
+            active = None
+            try:
+                result = state['future'].result()
+            except Exception as error:
+                result = {'reason':'infrastructure_error', 'error':type(error).__name__,
+                          'actions':state['actions'], 'steps':[]}
+            record_execution(state['turn'], result)
+            active = None
+            return result
 
         try:
             for turn in range(max_calls):
+                if active is not None:
+                    # The executor continues issuing its own actions during this wait
+                    # and throughout the following API request.
+                    try:
+                        active['future'].result(timeout=max(0, min(replan_seconds, deadline-time.monotonic())))
+                    except FutureTimeout:
+                        pass
+                    if active['future'].done():
+                        result = harvest()
+                        if result['reason'] in terminals:
+                            reason, failure = result['reason'], result.get('error'); break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     reason = 'time_limit'; break
@@ -437,11 +505,15 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
                     reason = 'death'; break
                 if stop_when and stop_when(obs):
                     reason = 'completed'; break
-                if actions >= max_actions:
+                if actions + (active['actions'] if active else 0) >= max_actions:
                     reason = 'action_limit'; break
                 input_value = {'observation': obs, 'recent_programs': recent[-2:],
                                'remainingSeconds': round(deadline - time.monotonic(), 2),
-                               'remainingActions': max_actions - actions}
+                               'remainingActions': max_actions - actions - (active['actions'] if active else 0)}
+                if active is not None:
+                    input_value['active_program'] = {'turn': active['turn'],
+                        'code': decisions[active['turn']]['choice']['code'],
+                        'actions': active['actions'], 'status': 'running'}
                 # A conservative UTF-8 byte bound avoids another API call when
                 # remaining tokens cannot cover its input plus capped output.
                 reservation = len((instructions + json.dumps(input_value) + json.dumps(SCHEMA)).encode()) + max_output_tokens + 1024
@@ -474,20 +546,37 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
                 if choice is None:
                     recent.append({'error': 'Model response incomplete or invalid; return a shorter complete program.'})
                     continue
-                result = execute_fn(choice['code'], scenario, base_url, deadline=deadline,
-                                    max_actions=max_actions - actions, program_seconds=program_seconds,
-                                    docker_image=docker_image, request_fn=request_fn,
-                                    step_callback=persist_step, stop_when=stop_when)
-                actions += result['actions']
-                decision['execution'] = {key: result[key] for key in ('reason', 'error', 'actions', 'logs') if key in result}
-                write_json(out / 'decisions.json', decisions)
-                recent.append({'note': choice['note'][:240], 'code': choice['code'],
-                               'result': decision['execution'],
-                               'recent_receipts': [dict(method=s.get('method'), args=s.get('args'),
-                                   accepted=s.get('result', {}).get('accepted'), error=s.get('result', {}).get('error'))
-                                   for s in result.get('steps', [])[-5:] if isinstance(s.get('result'), dict)]})
-                if result['reason'] in ('death', 'completed', 'time_limit', 'action_limit', 'infrastructure_error'):
-                    reason, failure = result['reason'], result.get('error'); break
+                if control_mode == 'continuous':
+                    previous = harvest(cancel=True)
+                    if previous and previous['reason'] in terminals:
+                        reason, failure = previous['reason'], previous.get('error'); break
+                    if time.monotonic() >= deadline:
+                        reason = 'time_limit'; break
+                    if actions >= max_actions:
+                        reason = 'action_limit'; break
+                    state = {'turn': turn, 'cancel': threading.Event(), 'actions': 0}
+                    def worker_step(step, state=state):
+                        if step.get('kind') == 'sdk' and step.get('method') not in ('observe', 'wait'):
+                            state['actions'] += 1
+                        persist_step(step, state['turn'])
+                    state['future'] = pool.submit(execute_fn, choice['code'], scenario, base_url,
+                        deadline=deadline, max_actions=max_actions-actions, program_seconds=program_seconds,
+                        docker_image=docker_image, request_fn=request_fn, step_callback=worker_step,
+                        stop_when=stop_when, cancel_event=state['cancel'], max_requests=600)
+                    active = state
+                else:
+                    result = execute_fn(choice['code'], scenario, base_url, deadline=deadline,
+                                        max_actions=max_actions - actions, program_seconds=program_seconds,
+                                        docker_image=docker_image, request_fn=request_fn,
+                                        step_callback=persist_step, stop_when=stop_when)
+                    record_execution(turn, result)
+                    if result['reason'] in terminals:
+                        reason, failure = result['reason'], result.get('error'); break
+            else:
+                # Let the final model-authored lease finish within its existing caps.
+                last = harvest()
+                if last and last['reason'] in terminals:
+                    reason, failure = last['reason'], last.get('error')
         except BudgetLimit:
             reason = 'budget_limit'
         except TimeoutError:
@@ -496,9 +585,15 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
         except Exception as error:
             reason = 'infrastructure_error'
             failure = str(error) if isinstance(error, AgentError) else type(error).__name__
+        finally:
+            if active is not None:
+                last = harvest(cancel=True)
+                if reason not in ('infrastructure_error', 'budget_limit') and last['reason'] in terminals:
+                    reason, failure = last['reason'], last.get('error')
     result = {'reason': reason, 'error': failure, 'decisions': len(decisions),
               'apiUsage': usages, 'accountedTokens': token_count, 'actions': actions,
               'apiRequestsStarted': api_requests_started,
+              'controlMode': control_mode, 'apiLatencyMs': sum(d['latencyMs'] for d in decisions),
               'usage_complete': api_requests_started == len(usages) and all(
                   type(usage.get('total_tokens')) is int and usage['total_tokens'] > 0 for usage in usages),
               'durationMs': round((time.monotonic() - started) * 1000), 'controller': controller}

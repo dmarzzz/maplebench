@@ -1,0 +1,77 @@
+{
+  "id": "hero-cave-staged",
+  "name": "Advanced Hero cavern with staged opening",
+  "status": "validated",
+  "description": "Earn XP while surviving in the Cave of Light. This is a controlled hunting benchmark in the Cave of Life quest map, using its fifteen ordinary respawning Skelegons (level 110, 80000 HP, 1500 base XP). The six one-shot Skelosaurus quest actors (9300077) are explicitly excluded at map load because their active attack/controller behavior is unsupported; quest progression is outside this fixture. Fight along the connected floor y=260, x=-430..1900. The level 150 Hero has Stonetooth Sword, Sword Mastery20, Brandish30, Advanced Combo30, Combo Attack30, Sword Booster20, Rage20, Power Stance30, Panic30 and Coma30. Buffs start inactive and require explicit casts. Combo Attack accumulates up to ten orbs; recasting it resets the charge. Brandish hits up to three targets twice. Panic consumes all charged orbs for a single-target finisher; Coma consumes them for an area finisher with a chance to stun up to six monsters. Stance reduces knockback, not damage. Booster speeds attacks and costs 10 HP plus 10 MP. Manage finite Ice Cream Pops (2000 HP) and Mana Elixirs (300 MP), with no automatic healing or refills. Observe current skill costs, readiness, active buffs and remaining durations. Monsters use the declared ground-patrol-v1 controller and contact damage; active monster skills are not simulated. Start at the left edge before entering the monster pack; model latency still counts as live game time. In this variant, character mechanics and monster walking wait until the first move, attack, skill or item attempt. Initial API latency still counts toward the wall-clock budget. After that first attempt, the world remains live during all later API calls. Observe character.worldState. Follow the request limit reported by the controller; reuse action receipt observations when useful.",
+  "preset": "hero_advanced",
+  "character_name": "AgentHero",
+  "map_id": 240050300,
+  "spawn": {
+    "x": -400,
+    "y": 260
+  },
+  "coordinate_bounds": {
+    "min_x": -430,
+    "max_x": 1900,
+    "min_y": 260,
+    "max_y": 260
+  },
+  "duration_seconds": 600,
+  "max_action_duration_ms": 1500,
+  "allowed_skills": [
+    1001004,
+    1001005,
+    1121008,
+    1111003,
+    1111005,
+    1111002,
+    1101004,
+    1101006,
+    1121002
+  ],
+  "self_buff_skills": [
+    1111002,
+    1101004,
+    1101006,
+    1121002
+  ],
+  "allowed_items": [
+    2001001,
+    2000006
+  ],
+  "inventory": [
+    {
+      "item_id": 2001001,
+      "quantity": 60
+    },
+    {
+      "item_id": 2000006,
+      "quantity": 60
+    }
+  ],
+  "demo_mobs": false,
+  "seed_sql": "scripts/seed-presets.sql",
+  "reset": {
+    "level": 150,
+    "job": 112,
+    "str": 600,
+    "dex": 120,
+    "int": 4,
+    "luk": 4,
+    "hp": 10000,
+    "mp": 2500,
+    "maxhp": 10000,
+    "maxmp": 2500,
+    "exp": 0,
+    "meso": 1000
+  },
+  "objective": {
+    "type": "xp"
+  },
+  "render_map": "cave-light",
+  "render_character": "hero-advanced-v2",
+  "excluded_oneshot_monsters": [
+    9300077
+  ],
+  "start_mode": "first_action"
+}

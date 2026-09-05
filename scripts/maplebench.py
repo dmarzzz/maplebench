@@ -56,7 +56,7 @@ def bounded_int(value, name, minimum, maximum):
 
 def validate_manifest(config):
     if not isinstance(config,dict): raise ValueError('Manifest must be an object')
-    known={'name','models','scenarios','repetitions','duration_seconds','program_seconds','max_calls_per_trial','max_tokens_per_trial','max_api_calls','max_total_tokens','max_attempts','max_actions_per_trial'}
+    known={'control_mode','name','models','scenarios','repetitions','duration_seconds','program_seconds','max_calls_per_trial','max_tokens_per_trial','max_api_calls','max_total_tokens','max_attempts','max_actions_per_trial'}
     if set(config)-known: raise ValueError('Unknown manifest fields')
     config = dict(config)
     models = config.get('models', MODELS)
@@ -76,6 +76,9 @@ def validate_manifest(config):
         config[key] = bounded_int(config.get(key, default), key, low, high)
     if 'duration_seconds' in config:
         config['duration_seconds'] = bounded_int(config['duration_seconds'], 'duration_seconds', 5, 1800)
+    if config.get('control_mode', 'serial') not in ('serial', 'continuous'):
+        raise ValueError('Unknown controller mode')
+    config['control_mode'] = config.get('control_mode', 'serial')
     config['backend'] = 'cosmic-v83'
     config['randomness'] = 'unseeded combat; identical initial database snapshot'
     return config
@@ -305,6 +308,9 @@ def reset_world(work, batch_dir, scenario, out, trial_id):
          'MAPLEBENCH_SEED':trial_id}
     env['MAPLEBENCH_EXCLUDED_ONESHOT_MOBS'] = ','.join(str(bounded_int(mid,'excluded one-shot monster',1,99999999))
                                                      for mid in scenario.get('excluded_oneshot_monsters', []))
+    start_mode = scenario.get('start_mode', 'live')
+    if start_mode not in ('live', 'first_action'): raise ValueError('Invalid episode start mode')
+    env['MAPLEBENCH_START_MODE'] = start_mode
     for item in scenario.get('inventory', []):
         item_id = item['item_id']
         role = 'HP' if item_id in (2000002, 2001001) else 'MP' if item_id in (2000003, 2000006) else None
@@ -383,7 +389,7 @@ def execute_trial(batch_dir, t, work):
     try:
         result=run_agent(t['model'],scenario,base,key,out,max_calls=t['reserved_calls'],max_total_tokens=t['reserved_tokens'],
             max_output_tokens=2200,wall_seconds=scenario['duration_seconds'],program_seconds=config['program_seconds'],
-            docker_image=config['docker_image'],max_actions=config['max_actions_per_trial'],stop_when=(lambda obs: not any(m['alive'] for m in obs['monsters'])) if scenario.get('demo_mobs') else None)
+            docker_image=config['docker_image'],max_actions=config['max_actions_per_trial'],control_mode=config.get('control_mode','serial'),stop_when=(lambda obs: not any(m['alive'] for m in obs['monsters'])) if scenario.get('demo_mobs') else None)
     finally:
         done.set(); recorder.join(timeout=4)
     observations.append(request(base,'/v1/observe'))

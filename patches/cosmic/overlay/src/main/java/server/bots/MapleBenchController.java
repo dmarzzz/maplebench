@@ -51,6 +51,7 @@ final class MapleBenchController {
                 .append(",\"alive\":").append(bot.isAlive())
                 .append(",\"motion\":").append(MapleBenchCombatTrace.motionJson(entry))
                 .append(',').append(MapleBenchSkills.characterJson(bot))
+                .append(",\"worldState\":").append(MapleBenchJson.quote(MapleBenchRuntime.isStaged() ? "staged" : "running"))
                 .append("},\"combatTrace\":\"combat-v1\",\"mechanicsVersion\":\"hero-control-v2\",\"monsterSimulation\":").append(MapleBenchJson.quote(MapleBenchMobMotion.VERSION))
                 .append(",\"monsters\":[");
 
@@ -99,6 +100,9 @@ final class MapleBenchController {
 
         String type = MapleBenchJson.stringField(body, "type");
         if (type == null) return new Result(false, "missing action type");
+        if (java.util.Set.of("move_to", "basic_attack", "use_item", "use_skill").contains(type)) {
+            MapleBenchRuntime.startAction();
+        }
 
         return switch (type) {
             case "move_to" -> moveTo(entry, body);
