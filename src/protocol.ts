@@ -181,12 +181,81 @@ export interface EpisodeEndEvent extends BaseEvent {
   reason: "timeout" | "completed" | "agent_exit" | "error";
 }
 
+/**
+ * How much of the world an agent is allowed to see.
+ *
+ * `server-authoritative` is the original contract: object ids, absolute exp,
+ * exact positions, monster hp. `human-equivalent` exposes only what the game
+ * renders to a player, which is what a screen-reading adapter against a real
+ * client can actually supply (see docs/LIVE_CLIENT_ADAPTER.md). Without the
+ * distinction, "how much of the score comes from privileged state?" is not a
+ * question the benchmark can ask.
+ */
+export type ObservationProfile = "server-authoritative" | "human-equivalent";
+
+/**
+ * A reading that may not have been observable on a given tick.
+ *
+ * Absent is not zero. A client draws no status bar during a map transition,
+ * and counting gauge pixels there yields zero, which is indistinguishable
+ * from zero HP unless the contract can say "not observable".
+ */
+export type Observable<T> =
+  | { observable: true; value: T }
+  | { observable: false; reason: "absent" | "unreadable" | "not-in-profile" };
+
+/**
+ * What a human-equivalent adapter can supply: gauge fractions rather than
+ * absolute values, and no entity identity of any kind.
+ */
+export interface RenderedCharacterState {
+  hpFraction: Observable<number>;
+  mpFraction: Observable<number>;
+  expFraction: Observable<number>;
+  level: Observable<number>;
+  alive: Observable<boolean>;
+}
+
+/** Actions addressable without an EntityId, for the human-equivalent profile. */
+export type RenderedAction =
+  | { type: "walk"; direction: "left" | "right"; durationMs: number }
+  | { type: "attack_facing" }
+  | { type: "use_skill_facing"; skillId: SkillId }
+  | { type: "loot_nearby" }
+  | { type: "use_item_slot"; slot: number }
+  | { type: "jump" }
+  | { type: "climb"; direction: "up" | "down"; durationMs: number };
+
+/**
+ * Whether an adapter's ActionResult.accepted means anything.
+ *
+ * A screen adapter cannot observe acceptance; it can at best confirm that the
+ * frame changed. Runs whose acceptance is best-effort are not comparable with
+ * runs whose acceptance comes from the server.
+ */
+export type AcceptanceFidelity = "authoritative" | "best-effort";
+
+/** Per-episode adapter disclosure, recorded alongside the score. */
+export interface AdapterProfile {
+  name: string;
+  observation: ObservationProfile;
+  acceptance: AcceptanceFidelity;
+  /** Median cost of one observe() call. Two orders of magnitude between
+   *  adapters, so comparing scores without it compares plumbing. */
+  observationLatencyMsP50: number;
+}
+
 export interface TaskSpec {
   id: string;
   version: number;
   title: string;
   durationSeconds: number;
   seed: string;
+  /** Defaults to "server-authoritative" when absent, preserving v0 tasks. */
+  observationProfile?: ObservationProfile;
+  /** Cap on observe() calls, so a policy cannot buy score with observation
+   *  frequency that one adapter happens to make cheap. */
+  maxObservations?: number;
   character: {
     level: number;
     jobId: number;
