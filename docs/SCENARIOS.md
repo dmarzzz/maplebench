@@ -172,6 +172,27 @@ positions stayed on the floor, allowing Cosmic's normal one-pixel spawn offset;
 fresh-reset inventory, MP and XP checks passed. This is scripted mechanics
 validation, not an OpenAI model result.
 
+### Contact damage and replay visibility
+
+Contact damage runs on Cosmic's bot tick, including while the controller is idle.
+The server intersects the player's swept foot-position bounds with the monster's
+hitbox, rolls physical touch damage, deducts HP, applies eligible knockback, and
+starts a 1,500 ms contact-hit cooldown. Visual sprite overlap by itself does not
+guarantee another damaging hit: hitboxes, accuracy and that cooldown still apply.
+
+The moving-monster scripted check lost 253 and 244 HP during its opening idle
+period, leaving 7,503 of 8,000 HP. Its subsequent Brandish hunt had no further
+observed HP loss. The first moving-monster Astra ten-minute run recorded 69 HP
+decreases totaling 17,132 HP and 55 recoveries totaling 16,500 HP. All recoveries
+matched accepted White Potion actions in the same observation interval; inventory
+fell from 100 to 45. Brandish was the only accepted skill and has no HP cost.
+These are sampled HP changes, not an exact count of damage rolls.
+
+The older replay drew floating damage only over monsters. The player HUD updated,
+but lacked a visible incoming-loss indicator. Updated replays add player HP-loss
+and recovery numbers plus a health bar; see [replay semantics](REPLAY.md). This
+presentation fix does not change monster damage, HP, cooldowns or potion behavior.
+
 ## Evidence and release checks
 
 Live scripted mechanics checks on the natural C-1 map earned 4,200 XP in 55 seconds

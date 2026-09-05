@@ -120,5 +120,70 @@ class ReplayMonsterTest(unittest.TestCase):
             self.assertEqual(expected, {p: p.read_text() for p in expected})
 
 
+@unittest.skipUnless(shutil.which("node"), "Node.js is required for the replay exporter")
+class ReplayPlayerHpTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory(prefix="maplebench-hp-test-")
+        cls.addClassCleanup(cls.temp.cleanup)
+        root = Path(cls.temp.name)
+        run, map_dir, char_dir = root / "run", root / "map", root / "character"
+        for p in (run, map_dir, char_dir):
+            p.mkdir()
+        (map_dir / "map.fh").write_text("0 0 2048 1024\n")
+        (char_dir / "char.txt").write_text("stand1 0 100\nwalk1 0 100\njump 0 100\nswingO1 0 100\n")
+        c = {"id": 1, "mapId": 261020300, "position": {"x": 200, "y": 167},
+             "level": 130, "jobId": 112, "hp": 8000, "maxHp": 8000}
+        # Include enemy damage, recovery, a skill HP cost, and a new character.
+        characters = [c, dict(c, hp=7500), dict(c, hp=7800), dict(c, hp=7784),
+                      dict(c, id=2, hp=500), dict(c, id=2, hp=500)]
+        observations = [{"nowMs": i * 1000, "character": character,
+                         "monsters": [mob(1, 210, hp=100 if i == 0 else 50)]}
+                        for i, character in enumerate(characters)]
+        (run / "observations.json").write_text(json.dumps(observations))
+        (run / "episode.jsonl").write_text(json.dumps({"kind": "action", "tMs": 2990,
+            "accepted": True, "action": {"type": "use_skill", "skillId": 1001005}}) + "\n")
+        env = dict(os.environ, MAPLEBENCH_SNAPSHOTS_ONLY="true", MAPLEBENCH_MAP_DIR=str(map_dir),
+                   MAPLEBENCH_CHARACTER_DIR=str(char_dir), MAPLEBENCH_MAP_ID="261020300")
+        subprocess.run([shutil.which("node"), str(ROOT / "scripts/render-cosmic-clip.mjs"), str(run)],
+                       check=True, env=env, capture_output=True, text=True, timeout=15)
+        cls.ass = (run / "video/overlay.ass").read_text()
+        cls.rows = [line.split(",", 9) for line in cls.ass.splitlines() if line.startswith("Dialogue:")]
+
+    def test_player_hp_loss_is_visible_at_observation_time_and_distinct_from_monster_damage(self):
+        hits = [r for r in self.rows if r[3] == "PlayerHP" and r[9].endswith("-500 HP")]
+        self.assertTrue(hits)
+        self.assertEqual(hits[0][1], "0:00:01.00")
+        self.assertIn(r"\c&H7070FF&", hits[0][9])
+        self.assertTrue(any(r[3] == "Damage" and r[9].endswith("-50 HP") for r in self.rows))
+        self.assertIn("HP LOSS -500", self.ass)
+
+    def test_recovery_is_green_and_does_not_become_damage(self):
+        restored = [r for r in self.rows if r[3] == "PlayerHP" and r[9].endswith("+300 HP")]
+        self.assertTrue(restored)
+        self.assertEqual(restored[0][1], "0:00:02.00")
+        self.assertIn(r"\c&H8DEA91&", restored[0][9])
+        self.assertNotIn("-300 HP", self.ass)
+        self.assertIn("HP RESTORED +300", self.ass)
+
+    def test_hud_keeps_hp_discrete_and_does_not_invent_an_attacker_for_skill_costs(self):
+        before = [r[9] for r in self.rows if r[1] == "0:00:00.93" and "PLAYER HP" in r[9]]
+        after = [r[9] for r in self.rows if r[1] == "0:00:01.00" and "PLAYER HP" in r[9]]
+        self.assertEqual(len(before), 1)
+        self.assertEqual(len(after), 1)
+        self.assertIn("8000 / 8000", before[0])
+        self.assertIn("7500 / 8000", after[0])
+        self.assertIn("HP LOSS -16", self.ass)
+        self.assertNotIn("MONSTER HIT", self.ass)
+        self.assertIn("HP labels: observed changes", self.ass)
+
+    def test_character_switch_does_not_generate_a_false_hp_loss(self):
+        self.assertNotIn("-7284 HP", self.ass)
+        self.assertNotIn("HP LOSS -7284", self.ass)
+        at_switch = [r for r in self.rows if r[1] == "0:00:04.00"]
+        self.assertFalse(any(r[3] == "PlayerHP" for r in at_switch))
+        self.assertFalse(any("HP LOSS" in r[9] for r in at_switch))
+
+
 if __name__ == "__main__":
     unittest.main()

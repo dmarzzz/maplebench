@@ -31,8 +31,15 @@ const monsterSimulation = observations.some(o => o.monsterSimulation === 'ground
   ? ' / Ground-mob simulation' : '';
 let cameraX = observations[0].character.position.x;
 const damage = [];
+const playerHpChanges = [];
 for (let i = 1; i < observations.length; i++) {
   const before = observations[i - 1], after = observations[i];
+  // These are observed HP deltas, not damage rolls or source attribution. Skill
+  // HP costs and damage/healing within one sample interval can affect the delta.
+  const hpDelta = after.character.hp - before.character.hp;
+  if (before.character.id === after.character.id && Number.isFinite(hpDelta) && hpDelta !== 0) {
+    playerHpChanges.push({ tMs: after.nowMs, characterId: after.character.id, ...after.character.position, delta: hpDelta });
+  }
   for (const mob of before.monsters.filter(m => m.alive)) {
     const current = after.monsters.find(m => m.objectId === mob.objectId);
     const killed = !current && events.some(e => e.kind === 'xp_gain' && e.tMs > before.nowMs && e.tMs <= after.nowMs);
@@ -66,6 +73,8 @@ const ass = ['[Script Info]', 'ScriptType: v4.00+', 'PlayResX: 800', 'PlayResY: 
   'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
   'Style: HUD,DejaVu Sans,19,&H00FFFFFF,&H00FFFFFF,&H00201912,&H90201912,-1,0,0,0,100,100,0,0,3,7,0,7,20,20,16,1',
   'Style: Damage,DejaVu Sans,28,&H0047CAFF,&H00FFFFFF,&H00172954,&H90000000,-1,0,0,0,100,100,0,0,1,2,1,5,0,0,0,1',
+  'Style: PlayerHP,DejaVu Sans,30,&H007070FF,&H00FFFFFF,&H00151030,&H90000000,-1,0,0,0,100,100,0,0,1,2,1,5,0,0,0,1',
+  'Style: HealthHUD,DejaVu Sans,16,&H00FFFFFF,&H00FFFFFF,&H00201912,&H90201912,-1,0,0,0,100,100,0,0,1,1,0,7,0,0,0,1',
   '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'];
 let facing = 1;
 const mobPoses = new Map();
@@ -121,6 +130,18 @@ for (let i = 0; i < frames; i++) {
   const job = ({ 100: 'Warrior', 110: 'Fighter', 111: 'Crusader', 112: 'Hero' })[a.character.jobId] || `Job ${a.character.jobId}`;
   const hud = `MAPLEBENCH  /  ${hudText(mapName).toUpperCase()}\\NModel: ${hudText(controller.model)}\\NController: ${hudText(controller.name)}\\NLv ${a.character.level} ${job}   HP ${a.character.hp}/${a.character.maxHp}   XP +${xp}\\N${label}   |   ${((t - start) / 1000).toFixed(1)}s`;
   ass.push(`Dialogue: 0,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},HUD,,0,0,0,,${hud}`);
+  const recentHpChange = playerHpChanges.findLast(h => h.characterId === a.character.id && h.tMs <= t && t - h.tMs < 1400);
+  const hpColor = recentHpChange?.delta < 0 ? '7070FF' : '8DEA91';
+  const hpFraction = Math.max(0, Math.min(1, a.character.hp / Math.max(1, a.character.maxHp)));
+  const healthRow = text => ass.push(`Dialogue: 2,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},HealthHUD,,0,0,0,,${text}`);
+  healthRow('{\\pos(552,518)\\p1\\bord0\\c&H201912&\\alpha&H30&}m 0 0 l 228 0 228 72 0 72');
+  healthRow(`{\\pos(562,526)}PLAYER HP   ${a.character.hp} / ${a.character.maxHp}`);
+  healthRow('{\\pos(562,549)\\p1\\bord0\\c&H5B5050&}m 0 0 l 208 0 208 9 0 9');
+  if (hpFraction > 0) healthRow(`{\\pos(562,549)\\p1\\bord0\\c&H${hpColor}&}m 0 0 l ${(208 * hpFraction).toFixed(1)} 0 ${(208 * hpFraction).toFixed(1)} 9 0 9`);
+  const hpStatus = recentHpChange
+    ? `${recentHpChange.delta < 0 ? 'HP LOSS' : 'HP RESTORED'} ${recentHpChange.delta > 0 ? '+' : ''}${recentHpChange.delta}`
+    : 'Recorded server HP';
+  healthRow(`{\\pos(562,567)\\fs14\\c&H${recentHpChange ? hpColor : 'FFFFFF'}&}${hpStatus}`);
   for (const hit of damage.filter(d => t >= d.tMs && t - d.tMs < 850)) {
     const age = t - hit.tMs;
     const dx = Math.round((hit.x + offx - camx) * 800 / 1024);
@@ -128,8 +149,16 @@ for (let i = 0; i < frames; i++) {
     const alpha = Math.round(Math.max(0, (age - 500) / 350) * 255).toString(16).padStart(2, '0');
     ass.push(`Dialogue: 1,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},Damage,,0,0,0,,{\\pos(${dx},${dy})\\alpha&H${alpha}&}-${hit.amount} HP`);
   }
+  for (const change of playerHpChanges.filter(h => h.characterId === a.character.id && t >= h.tMs && t - h.tMs < 1100)) {
+    const age = t - change.tMs;
+    const px = Math.round((change.x + offx - camx) * 800 / 1024);
+    const py = Math.round((change.y + offy - camy - 88 - age * 0.04) * 600 / 768);
+    const alpha = Math.round(Math.max(0, (age - 750) / 350) * 255).toString(16).padStart(2, '0');
+    const color = change.delta < 0 ? '7070FF' : '8DEA91';
+    ass.push(`Dialogue: 3,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},PlayerHP,,0,0,0,,{\\pos(${px},${py})\\c&H${color}&\\alpha&H${alpha}&}${change.delta > 0 ? '+' : ''}${change.delta} HP`);
+  }
 }
-ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\N${hudText(fixtureLabel)}${monsterSimulation}\\NInterpolated movement and presentation poses`);
+ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\N${hudText(fixtureLabel)}${monsterSimulation}\\NInterpolated movement and presentation poses\\NHP labels: observed changes`);
 await writeFile(join(out, 'overlay.ass'), ass.join('\n') + '\n');
 if (process.env.MAPLEBENCH_SNAPSHOTS_ONLY === 'true') {
   console.log('Replay snapshots ready:', out);
