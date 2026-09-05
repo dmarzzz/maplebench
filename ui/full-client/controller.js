@@ -4,28 +4,56 @@
     .then(session => { Module.MapleBenchSession = session; }).catch(() => {});
   const game = document.getElementById('canvas');
   if (!game) return;
+  const ink = {base:'#10120f',panel:'#191d17',line:'#38432e',text:'#eef3dc',muted:'#a8b29b',
+    green:'#c3f45b',violet:'#b59af4',orange:'#ff9956',danger:'#ff776b'};
+  const leafPath = 'M12 1 15 7 20 5 18 11 23 13 15 18 13 17 13 23 11 23 11 17 9 18 1 13 6 11 4 5 9 7Z';
   const style = document.createElement('style');
   style.textContent = `
-    #maplebench-shell{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;background:#0c1320;color:#edf4ff;font:12px system-ui,sans-serif;text-align:left}
+    #maplebench-shell{--mb-signal:${ink.green};position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;background:${ink.base};color:${ink.text};font:12px system-ui,sans-serif;text-align:left;color-scheme:dark}
     #maplebench-shell *{box-sizing:border-box}
-    #maplebench-shell header{flex:none;padding:8px 12px;border-bottom:1px solid #2b3c55;display:grid;gap:3px}
-    #maplebench-shell .mb-title{display:flex;justify-content:space-between;gap:8px;color:#91b7e5;font-size:11px;letter-spacing:.04em}
-    #maplebench-shell .mb-controller{font-weight:650;font-size:14px;overflow-wrap:anywhere}
-    #maplebench-shell .mb-status{color:#b4c6dd;font-size:11px;overflow-wrap:anywhere}
-    #maplebench-shell .mb-telemetry{display:flex;flex-wrap:wrap;column-gap:14px;row-gap:2px;font-variant-numeric:tabular-nums}
-    #maplebench-shell .mb-note{color:#93a9c3;font-size:10px}
-    #maplebench-shell .mb-stage{flex:1;min-height:0;min-width:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#03070e}
+    #maplebench-shell header{flex:none;position:relative;padding:8px 12px 7px;border-top:3px solid #66528b;border-bottom:1px solid ${ink.line};display:grid;gap:4px;background:linear-gradient(105deg,#22202c 0%,${ink.base} 65%)}
+    #maplebench-shell header::after{content:'';position:absolute;bottom:-1px;left:0;width:72px;height:2px;background:var(--mb-signal)}
+    #maplebench-shell .mb-title{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+    #maplebench-shell .mb-brand{display:flex;align-items:center;gap:7px;min-width:0}
+    #maplebench-shell .mb-leaf{width:20px;height:22px;flex:none;fill:${ink.orange}}
+    #maplebench-shell .mb-wordmark{font:900 20px/1 'Arial Narrow',Impact,sans-serif;letter-spacing:-.04em}
+    #maplebench-shell .mb-wordmark b{color:${ink.green};font-weight:inherit}
+    #maplebench-shell .mb-engine{font:9px/1.2 ui-monospace,monospace;letter-spacing:.06em;color:${ink.muted};border-left:1px solid #5e5074;padding-left:9px;margin-left:3px}
+    #maplebench-shell .mb-capture{flex:none;min-width:55px;text-align:center;font:700 10px/1.2 ui-monospace,monospace;letter-spacing:.06em;color:${ink.green};border:1px solid ${ink.line};padding:4px 7px;clip-path:polygon(0 0,calc(100% - 5px) 0,100% 5px,100% 100%,0 100%)}
+    #maplebench-shell .mb-capture[data-recording=true]{color:${ink.orange};border-color:#965830;background:#2e2118}
+    #maplebench-shell .mb-controller{border-left:3px solid var(--mb-signal);padding-left:7px;font-weight:750;font-size:15px;line-height:1.2;overflow-wrap:anywhere}
+    #maplebench-shell .mb-status{color:${ink.muted};font-size:10px;line-height:1.3;overflow-wrap:anywhere}
+    #maplebench-shell[data-alert=true]{--mb-signal:${ink.orange}}
+    #maplebench-shell[data-alert=true] .mb-status{color:${ink.orange}}
+    #maplebench-shell .mb-telemetry{display:grid;grid-template-columns:1fr 1fr;gap:12px;font:11px/1.3 ui-monospace,monospace;font-variant-numeric:tabular-nums}
+    #maplebench-shell .mb-vital{min-width:0;color:${ink.green}}
+    #maplebench-shell .mb-vital-mp{color:${ink.violet}}
+    #maplebench-shell .mb-meter{height:4px;margin-top:3px;background:#30372a;overflow:hidden}
+    #maplebench-shell .mb-meter-fill{width:0;height:100%;background:repeating-linear-gradient(90deg,currentColor 0 8px,transparent 8px 10px)}
+    #maplebench-shell .mb-readout{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px;font:10px/1.3 ui-monospace,monospace;color:#d2dbc3}
+    #maplebench-shell .mb-note{color:${ink.muted};font-size:9px;line-height:1.2;letter-spacing:.04em}
+    #maplebench-shell .mb-note strong{font-weight:700;color:${ink.orange}}
+    #maplebench-shell .mb-stage{flex:1;min-height:0;min-width:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#070906;border-inline:1px solid #262d21}
     #maplebench-shell canvas{display:block!important;position:static!important;margin:0!important;border:0!important;flex:none;max-width:none!important;max-height:none!important;width:var(--mb-canvas-width)!important;height:var(--mb-canvas-height)!important}
-    #maplebench-shell footer{flex:none;background:#121d2d;border-top:1px solid #2b3c55;padding:6px 10px;max-height:45%;overflow:auto}
+    #maplebench-shell footer{flex:none;background:${ink.panel};border-top:1px solid ${ink.line};border-left:3px solid #66528b;padding:6px 10px;max-height:45%;overflow:auto}
     #maplebench-shell .mb-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
     #maplebench-shell details{flex:1;min-width:150px}
-    #maplebench-shell summary{cursor:pointer;padding:5px 0;color:#c3d9f5;font-weight:600}
+    #maplebench-shell details[open]{flex-basis:100%}
+    #maplebench-shell .mb-tools:has(details[open]){justify-content:flex-end}
+    #maplebench-shell summary{cursor:pointer;padding:5px 0;color:${ink.green};font-size:11px;font-weight:650}
+    #maplebench-shell summary::marker{color:${ink.orange}}
     #maplebench-shell .mb-controls{display:flex;flex-wrap:wrap;gap:5px;padding:5px 0}
-    #maplebench-shell button{border:1px solid #405673;border-radius:5px;background:#20334d;color:#eef5ff;padding:5px 8px;font:inherit;cursor:pointer;white-space:nowrap}
-    #maplebench-shell button:hover:not(:disabled){background:#304969}
-    #maplebench-shell button:disabled{opacity:.45;cursor:default}
-    #maplebench-shell button:focus-visible,#maplebench-shell summary:focus-visible{outline:2px solid #9bcdff;outline-offset:2px}
-    #maplebench-shell .mb-notice{color:#b7cce6;font-size:11px;margin-top:3px;overflow-wrap:anywhere}
+    #maplebench-shell .mb-models{border-top:1px solid ${ink.line};margin-top:4px;padding-top:8px}
+    #maplebench-shell button{border:1px solid #515c44;border-radius:0;background:#252c20;color:${ink.text};padding:6px 8px;font:600 11px/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+    #maplebench-shell .mb-models button{border-color:#6f5c94;background:#292333;color:#e0d4ff}
+    #maplebench-shell button.mb-record{border-color:#946037;color:${ink.orange};background:#30251c}
+    #maplebench-shell button:hover:not(:disabled){border-color:${ink.green};background:#354129;color:${ink.text}}
+    #maplebench-shell button:disabled{opacity:.4;cursor:default}
+    #maplebench-shell button:focus-visible,#maplebench-shell summary:focus-visible{outline:2px solid ${ink.green};outline-offset:2px}
+    #maplebench-shell .mb-notice{color:${ink.muted};font-size:10px;margin-top:4px;overflow-wrap:anywhere}
+    #maplebench-shell .mb-notice:empty{display:none}
+    @media(max-width:480px){#maplebench-shell .mb-engine{display:none}}
+    @media(max-width:340px){#maplebench-shell header{padding-inline:8px}#maplebench-shell .mb-telemetry{font-size:10px;gap:8px}#maplebench-shell .mb-controller{font-size:13px}}
   `;
   document.head.appendChild(style);
   const element = (tag, className, parent, text = '') => {
@@ -36,21 +64,34 @@
   shell.setAttribute('aria-label', 'MapleBench full-client controls');
   const header = element('header', '', shell);
   const title = element('div', 'mb-title', header);
-  element('span', '', title, 'MAPLEBENCH · JOURNEY + COSMIC');
-  const captureStatus = element('span', '', title, 'LIVE');
+  const brand = element('div', 'mb-brand', title);
+  const leaf = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  leaf.setAttribute('class','mb-leaf'); leaf.setAttribute('viewBox','0 0 24 24'); leaf.setAttribute('aria-hidden','true');
+  const leafShape = document.createElementNS('http://www.w3.org/2000/svg','path');
+  leafShape.setAttribute('d',leafPath); leaf.appendChild(leafShape); brand.appendChild(leaf);
+  const wordmark = element('span', 'mb-wordmark', brand, 'MAPLE');
+  element('b', '', wordmark, 'BENCH');
+  element('span', 'mb-engine', brand, 'JOURNEY × COSMIC');
+  const captureStatus = element('span', 'mb-capture', title, 'LIVE');
   const controller = element('div', 'mb-controller', header);
   const status = element('div', 'mb-status', header);
   const telemetry = element('div', 'mb-telemetry', header);
-  const hpText = element('span', '', telemetry), mpText = element('span', '', telemetry);
-  const xpText = element('span', '', telemetry), keysText = element('span', '', telemetry);
-  element('div', 'mb-note', header, 'Client telemetry · unranked · no server score');
+  const hpVital = element('div', 'mb-vital', telemetry), mpVital = element('div', 'mb-vital mb-vital-mp', telemetry);
+  const hpText = element('span', '', hpVital), mpText = element('span', '', mpVital);
+  const hpFill = element('div','mb-meter-fill',element('div','mb-meter',hpVital));
+  const mpFill = element('div','mb-meter-fill',element('div','mb-meter',mpVital));
+  hpFill.parentNode.setAttribute('aria-hidden','true'); mpFill.parentNode.setAttribute('aria-hidden','true');
+  const readout = element('div','mb-readout',header);
+  const xpText = element('span', '', readout), keysText = element('span', '', readout);
+  const note = element('div', 'mb-note', header);
+  element('strong','',note,'UNRANKED'); element('span','',note,' / Client telemetry · no server score');
   const stage = element('div', 'mb-stage', shell); stage.appendChild(game);
   const footer = element('footer', '', shell);
   const tools = element('div', 'mb-tools', footer);
   const details = element('details', '', tools);
   element('summary', '', details, 'Controls & models');
   const manualGroup = element('div', 'mb-controls', details);
-  const modelGroup = element('div', 'mb-controls', details);
+  const modelGroup = element('div', 'mb-controls mb-models', details);
   const notice = element('div', 'mb-notice', footer); notice.setAttribute('role', 'status');
   const resize = () => {
     const scale = Math.min(stage.clientWidth / game.width, stage.clientHeight / game.height);
@@ -124,6 +165,8 @@
   });
 
   const format = value => Number.isFinite(value) ? value.toLocaleString('en-US') : '—';
+  const fraction = (value, max) => Number.isFinite(value) && Number.isFinite(max) && max > 0
+    ? Math.min(1,Math.max(0,value/max)) : 0;
   const view = () => {
     const observation = observe(), available = fresh(observation), character = observation.character || {};
     if (!baseline && available) setBaseline(activeRun() ? 'run' : 'session');
@@ -144,12 +187,17 @@
     const keys = [...new Set([...held.keys(),...physical])].map(code => namesByCode[code] || code).join(' + ') || 'none';
     return {mode,state,hp:`HP ${available ? format(character.hp)+' / '+format(character.maxHp) : '—'}`,
       mp:`MP ${available ? format(character.mp)+' / '+format(character.maxMp) : '—'}`,xp,keys:`Keys: ${keys}`,
+      hpFraction:available ? fraction(character.hp,character.maxHp) : 0,
+      mpFraction:available ? fraction(character.mp,character.maxMp) : 0,
       stale:!available, alive:character.alive, level:character.level};
   };
   function renderHeader() {
     const data = view(); controller.textContent = data.mode; status.textContent = data.state;
     hpText.textContent = data.hp; mpText.textContent = data.mp; xpText.textContent = data.xp; keysText.textContent = data.keys;
-    hpText.style.color = data.alive === false ? '#ffa0a0' : '#a7e8bb';
+    shell.dataset.alert = String(data.stale || !relayConnected || data.alive === false);
+    hpVital.style.color = data.alive === false ? ink.danger : ink.green;
+    hpFill.style.width = `${data.hpFraction*100}%`; mpFill.style.width = `${data.mpFraction*100}%`;
+    captureStatus.dataset.recording = String(Boolean(capture) || saving);
     captureStatus.textContent = capture ? `● REC ${((performance.now()-capture.startedAt)/1000).toFixed(1)}s` : saving ? 'SAVING' : 'LIVE';
     manualButtons.forEach(node => { node.disabled = busy(); });
     runButtons.forEach(node => { node.disabled = busy() || !relayConnected || !fresh(observe()) || saving || Boolean(capture?.autoRunId) || Boolean(capture?.stopping); });
@@ -163,23 +211,43 @@
   function startRecording(autoRunId = null) {
     if (capture) { if (autoRunId) capture.autoRunId = autoRunId; return; }
     if (saving || closed) return;
-    const output = document.createElement('canvas'), headerHeight = 104;
+    const output = document.createElement('canvas'), headerHeight = 120;
     output.width = game.width; output.height = game.height + headerHeight;
     const ctx = output.getContext('2d');
     const item = {autoRunId,startedAt:performance.now(),chunks:[],stopping:false,animation:null,stream:null,recorder:null,finishTimer:null};
     const draw = () => {
       const data = view();
-      ctx.fillStyle='#101b2b';ctx.fillRect(0,0,output.width,headerHeight);
-      ctx.font='bold 15px sans-serif';ctx.fillStyle='#fff';
-      fitText(ctx,`MAPLEBENCH  |  ${data.mode}`,12,20,output.width-24);
-      ctx.font='12px sans-serif';ctx.fillStyle='#c1d8f3';
-      fitText(ctx,data.state,12,39,output.width-24);
-      ctx.fillStyle='#e5f1ff';ctx.font='bold 13px sans-serif';
-      fitText(ctx,`${data.hp}   ${data.mp}   ${data.xp}`,12,59,output.width-24);
-      ctx.font='12px sans-serif';ctx.fillStyle='#c1d8f3';
-      fitText(ctx,`${data.keys}   |   Capture ${((performance.now()-item.startedAt)/1000).toFixed(1)}s`,12,78,output.width-24);
-      ctx.font='11px sans-serif';ctx.fillStyle='#98b2d0';
-      fitText(ctx,'Actual Journey + Cosmic client canvas · client telemetry only · unranked / no server score',12,96,output.width-24);
+      const width=output.width, alert=data.stale || !relayConnected || data.alive===false;
+      const signal=alert ? ink.orange : ink.green;
+      ctx.fillStyle=ink.base;ctx.fillRect(0,0,width,headerHeight);
+      ctx.fillStyle='#24202e';ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(286,0);ctx.lineTo(262,29);ctx.lineTo(0,29);ctx.fill();
+      ctx.fillStyle='#66528b';ctx.fillRect(0,0,width,3);
+      ctx.save();ctx.translate(12,7);ctx.scale(.8,.8);ctx.fillStyle=ink.orange;ctx.fill(new Path2D(leafPath));ctx.restore();
+      ctx.font='900 20px "Arial Narrow",Impact,sans-serif';ctx.fillStyle=ink.text;
+      ctx.fillText('MAPLE',39,24);const brandWidth=ctx.measureText('MAPLE').width;
+      ctx.fillStyle=ink.green;ctx.fillText('BENCH',39+brandWidth,24);
+      ctx.font='10px monospace';ctx.fillStyle=ink.muted;ctx.fillText('JOURNEY × COSMIC',283,21);
+      ctx.fillStyle=ink.orange;ctx.font='bold 10px monospace';ctx.fillText('UNRANKED',width-186,21);
+      ctx.strokeStyle='#946037';ctx.strokeRect(width-116,8,104,19);
+      ctx.fillText(`● REC ${((performance.now()-item.startedAt)/1000).toFixed(1)}s`,width-108,21);
+      ctx.fillStyle=signal;ctx.fillRect(0,34,4,17);
+      ctx.font='bold 17px sans-serif';ctx.fillStyle=ink.text;fitText(ctx,data.mode,12,47,width-24);
+      ctx.font='11px sans-serif';ctx.fillStyle=alert ? ink.orange : ink.muted;fitText(ctx,data.state,12,63,width-24);
+      const vitalWidth=Math.floor((width-36)*.3), mpX=24+vitalWidth, readoutX=mpX+vitalWidth+12;
+      const meter=(label,value,x,color)=>{
+        ctx.fillStyle=color;ctx.font='bold 12px monospace';fitText(ctx,label,x,82,vitalWidth);
+        ctx.fillStyle='#30372a';ctx.fillRect(x,88,vitalWidth,4);
+        ctx.fillStyle=color;
+        for(let offset=0;offset<vitalWidth*value;offset+=10) ctx.fillRect(x+offset,88,Math.min(8,vitalWidth*value-offset),4);
+      };
+      meter(data.hp,data.hpFraction,12,data.alive===false ? ink.danger : ink.green);
+      meter(data.mp,data.mpFraction,mpX,ink.violet);
+      ctx.fillStyle=ink.text;ctx.font='11px monospace';fitText(ctx,data.xp,readoutX,81,width-readoutX-12);
+      ctx.fillStyle=ink.muted;fitText(ctx,data.keys,readoutX,97,width-readoutX-12);
+      ctx.font='10px sans-serif';ctx.fillStyle=ink.muted;
+      fitText(ctx,'ACTUAL CLIENT CANVAS / Client telemetry · no server score',12,110,width-24);
+      ctx.fillStyle=ink.line;ctx.fillRect(0,headerHeight-1,width,1);
+      ctx.fillStyle=signal;ctx.fillRect(0,headerHeight-2,72,2);
       ctx.drawImage(game,0,headerHeight,output.width,game.height);
     };
     item.draw = draw;
@@ -227,6 +295,7 @@
     renderHeader();
   }
   const recordButton = button('Record',()=>startRecording(),tools);
+  recordButton.classList.add('mb-record');
   const stopButton = button('Stop & save',stopRecording,tools);
 
   const clientId=crypto.randomUUID();

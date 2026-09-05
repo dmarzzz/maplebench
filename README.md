@@ -9,6 +9,9 @@ and server-backed scoring still need the full-client adapter. See
 [full-client control](docs/FULL_CLIENT.md) and the
 [NanoCodex controller candidate](docs/NANOCODEX.md).
 
+Moving to another computer? See [the laptop handoff](docs/LAPTOP_HANDOFF.md) to
+reuse the existing runner without transferring its assets or credentials.
+
 The earlier four-model server-bot batches and replay renderer remain available.
 Their scores and rendering provenance are separate from the new full-client
 recordings. See [scenarios](docs/SCENARIOS.md) and [replay provenance](docs/REPLAY.md).
