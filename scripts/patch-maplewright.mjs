@@ -40,6 +40,30 @@ insert('lib.rs', '    pub fn framebuffer(&self) -> &[u32] {', `    /// Keep repl
 
 `, 'pub fn set_replay_camera');
 
+insert('lib.rs', '    pub fn framebuffer(&self) -> &[u32] {', `    /// Present an observed monster pose at an explicit animation phase. Does not move it.
+    pub fn set_replay_mob_pose(&mut self, oid: i32, stance: &str, facing: f64, phase_ms: f64) {
+        let Some(mob) = self.mobs.iter_mut().find(|m| m.oid == oid) else { return };
+        let Some(set) = self.mob_art.get(&mob.mob_id) else { return };
+        let chosen = [stance, "stand", "move", "fly"].into_iter()
+            .find(|name| set.get(*name).is_some_and(|frames| !frames.is_empty()));
+        let Some(chosen) = chosen else { return };
+        let frames = &set[chosen];
+        let total: f64 = frames.iter().map(|f| f.delay.max(1) as f64).sum();
+        let mut remaining = if phase_ms.is_finite() { phase_ms.max(0.0) % total } else { 0.0 };
+        let mut selected = 0;
+        for (index, frame) in frames.iter().enumerate() {
+            selected = index;
+            if remaining < frame.delay.max(1) as f64 { break; }
+            remaining -= frame.delay.max(1) as f64;
+        }
+        mob.stance = chosen.to_string();
+        mob.facing = if facing < 0.0 { -1.0 } else { 1.0 };
+        mob.frame = selected;
+        mob.frame_ms = remaining;
+    }
+
+`, 'pub fn set_replay_mob_pose');
+
 insert('main.rs', '    // ---- headless screenshot ----', `    // MapleBench replay: TSV snapshots contain only server-observed positions and HP.
     if let Some(i) = args.iter().position(|a| a == "--benchshot") {
         let snapshot = fs::read_to_string(&args[i + 1]).expect("read snapshot");
@@ -78,6 +102,19 @@ if (!main.includes('game.set_replay_camera(c[1]')) {
   const anchor = '            } else if c.first() == Some(&"mob") {';
   if (main.split(anchor).length !== 2) throw new Error('Unexpected snapshot renderer source');
   main = main.replace(anchor, '            } else if c.first() == Some(&"camera") {\n                game.set_replay_camera(c[1].parse().unwrap(), c[2].parse().unwrap());\n' + anchor);
+  writeFileSync(mainPath, main);
+}
+if (!main.includes('game.set_replay_mob_pose(c[1]')) {
+  const anchor = '        game.render();\n        save_shot(&game.fb, &args[i + 2]);';
+  if (main.split(anchor).length !== 2) throw new Error('Unexpected monster replay renderer source');
+  main = main.replace(anchor, `        // Select each monster's WZ animation frame after its sprite set is loaded.
+        for line in snapshot.lines() {
+            let c: Vec<&str> = line.split_whitespace().collect();
+            if c.first() == Some(&"mob") && c.len() >= 9 {
+                game.set_replay_mob_pose(c[1].parse().unwrap(), c[6], c[7].parse().unwrap(), c[8].parse().unwrap());
+            }
+        }
+` + anchor);
   writeFileSync(mainPath, main);
 }
 const charPath = join(root, '../../wz/src/bin/wzchar.rs');

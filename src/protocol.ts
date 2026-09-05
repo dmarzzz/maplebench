@@ -43,6 +43,9 @@ export interface MonsterState {
   level?: number;
   position: Position;
   alive: boolean;
+  moving?: boolean;
+  facingLeft?: boolean;
+  movementMode?: string;
 }
 
 export interface DropState {
@@ -63,6 +66,8 @@ export interface Observation {
   nowMs: number;
   character: CharacterState;
   monsters: MonsterState[];
+  /** Version of the server-side replacement for an absent client mob controller. */
+  monsterSimulation?: string;
   drops: DropState[];
   inventory?: InventoryItem[];
   portals?: Array<{ id: number; name?: string; position: Position; targetMapId?: MapId }>;

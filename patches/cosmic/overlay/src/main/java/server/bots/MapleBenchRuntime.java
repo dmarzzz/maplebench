@@ -125,6 +125,7 @@ public final class MapleBenchRuntime {
                     map.spawnMonsterOnGroundBelow(advanced ? 5100000 : 210100, p.x + offset, p.y - 20);
                 }
             }
+            MapleBenchMobMotion.start(bot);
             MapleBenchEventSink.ensureStarted(bot);
             System.out.println("MapleBench seeded character ready: " + bot.getName() + " map=" + mapId
                     + " preset=" + preset.name().toLowerCase(Locale.ROOT) + " demoMobs=" + demoMobs

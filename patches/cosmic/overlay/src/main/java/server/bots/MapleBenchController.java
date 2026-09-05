@@ -49,7 +49,8 @@ final class MapleBenchController {
                 .append(",\"mapId\":").append(bot.getMapId())
                 .append(",\"position\":{\"x\":").append(p.x).append(",\"y\":").append(p.y).append('}')
                 .append(",\"alive\":").append(bot.isAlive())
-                .append("},\"monsters\":[");
+                .append("},\"monsterSimulation\":").append(MapleBenchJson.quote(MapleBenchMobMotion.VERSION))
+                .append(",\"monsters\":[");
 
         List<Monster> monsters = bot.getMap().getAllMonsters().stream()
                 .sorted(Comparator.comparingInt(Monster::getObjectId))
@@ -57,6 +58,7 @@ final class MapleBenchController {
         boolean first = true;
         for (Monster mob : monsters) {
             Point mp = mob.getPosition();
+            var motion = MapleBenchMobMotion.view(mob);
             if (!first) out.append(',');
             first = false;
             out.append('{')
@@ -66,6 +68,9 @@ final class MapleBenchController {
                     .append(",\"maxHp\":").append(mob.getMaxHp())
                     .append(",\"position\":{\"x\":").append(mp.x).append(",\"y\":").append(mp.y).append('}')
                     .append(",\"alive\":").append(mob.isAlive())
+                    .append(",\"moving\":").append(motion.moving())
+                    .append(",\"facingLeft\":").append(motion.facingLeft())
+                    .append(",\"movementMode\":").append(MapleBenchJson.quote(motion.mode()))
                     .append('}');
         }
         out.append("],\"inventory\":[");

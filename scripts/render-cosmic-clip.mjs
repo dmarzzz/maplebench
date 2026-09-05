@@ -27,6 +27,8 @@ const actions = events.filter(e => e.kind === 'action' && e.accepted && e.tMs >=
 const frames = Math.ceil((end - start) * fps / 1000);
 const [offx, offy, mapWidth, mapHeight] = (await readFile(join(mapDir, 'map.fh'), 'utf8')).split('\n')[0].split(/\s+/).map(Number);
 const cameraY = observations[0].character.position.y;
+const monsterSimulation = observations.some(o => o.monsterSimulation === 'ground-patrol-v1')
+  ? ' / Ground-mob simulation' : '';
 let cameraX = observations[0].character.position.x;
 const damage = [];
 for (let i = 1; i < observations.length; i++) {
@@ -35,7 +37,10 @@ for (let i = 1; i < observations.length; i++) {
     const current = after.monsters.find(m => m.objectId === mob.objectId);
     const killed = !current && events.some(e => e.kind === 'xp_gain' && e.tMs > before.nowMs && e.tMs <= after.nowMs);
     const hpLoss = current ? mob.hp - current.hp : killed ? mob.hp : 0;
-    if (hpLoss > 0) damage.push({ tMs: after.nowMs, x: mob.position.x, y: mob.position.y, amount: hpLoss });
+    if (hpLoss > 0) {
+      const hitPosition = current?.position || mob.position;
+      damage.push({ tMs: after.nowMs, x: hitPosition.x, y: hitPosition.y, amount: hpLoss });
+    }
   }
 }
 const animations = {};
@@ -63,6 +68,7 @@ const ass = ['[Script Info]', 'ScriptType: v4.00+', 'PlayResX: 800', 'PlayResY: 
   'Style: Damage,DejaVu Sans,28,&H0047CAFF,&H00FFFFFF,&H00172954,&H90000000,-1,0,0,0,100,100,0,0,1,2,1,5,0,0,0,1',
   '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'];
 let facing = 1;
+const mobPoses = new Map();
 for (let i = 0; i < frames; i++) {
   const t = start + i * 1000 / fps;
   let k = observations.findLastIndex(o => o.nowMs <= t);
@@ -87,7 +93,24 @@ for (let i = 0; i < frames; i++) {
   const pose = frameAt(stance, attacking ? t - action.tMs : t - start);
   const lines = [`player ${x.toFixed(2)} ${y.toFixed(2)} ${stance} ${pose} ${facing}`, `camera ${cameraX.toFixed(2)} ${cameraY}`];
   for (const m of a.monsters.filter(m => m.alive)) {
-    lines.push(`mob ${m.objectId} ${m.monsterId} ${m.position.x} ${m.position.y} ${Math.max(1, Math.ceil(100 * m.hp / m.maxHp))}`);
+    // Interpolate only an existing monster's two observed positions. A spawn/death
+    // boundary has no second position and must never create an invented path.
+    const nextMob = b.monsters.find(n => n.objectId === m.objectId && n.monsterId === m.monsterId && n.alive);
+    const nextPosition = nextMob?.position || m.position;
+    const dx = nextPosition.x - m.position.x, dy = nextPosition.y - m.position.y;
+    const mx = m.position.x + dx * alpha, my = m.position.y + dy * alpha;
+    const key = `${m.objectId}:${m.monsterId}`;
+    const lastPose = mobPoses.get(key);
+    const previous = lastPose?.lastFrame === i - 1 ? lastPose : undefined;
+    // New traces explicitly distinguish locomotion from knockback or a blocked mob.
+    // Older recordings can only infer locomotion/facing from observed displacement.
+    const mobMoving = typeof m.moving === 'boolean' ? m.moving : Math.hypot(dx, dy) > 0.5;
+    const mobFacing = typeof m.facingLeft === 'boolean' ? (m.facingLeft ? -1 : 1)
+      : Math.abs(dx) > 0.5 ? Math.sign(dx) : previous?.facing || -1;
+    const mobStance = mobMoving ? 'move' : 'stand';
+    const phaseStart = previous?.stance === mobStance ? previous.phaseStart : t;
+    mobPoses.set(key, { stance: mobStance, facing: mobFacing, phaseStart, lastFrame: i });
+    lines.push(`mob ${m.objectId} ${m.monsterId} ${mx.toFixed(2)} ${my.toFixed(2)} ${Math.max(1, Math.ceil(100 * m.hp / m.maxHp))} ${mobStance} ${mobFacing} ${(t - phaseStart).toFixed(2)}`);
   }
   await writeFile(join(out, `frame-${String(i).padStart(4, '0')}.tsv`), lines.join('\n') + '\n');
   const xp = events.filter(e => e.kind === 'xp_gain' && e.tMs >= start && e.tMs <= t).reduce((s, e) => s + e.amount, 0);
@@ -106,8 +129,11 @@ for (let i = 0; i < frames; i++) {
     ass.push(`Dialogue: 1,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},Damage,,0,0,0,,{\\pos(${dx},${dy})\\alpha&H${alpha}&}-${hit.amount} HP`);
   }
 }
-ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\N${hudText(fixtureLabel)} / interpolated movement and attack poses`);
+ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\N${hudText(fixtureLabel)}${monsterSimulation}\\NInterpolated movement and presentation poses`);
 await writeFile(join(out, 'overlay.ass'), ass.join('\n') + '\n');
+if (process.env.MAPLEBENCH_SNAPSHOTS_ONLY === 'true') {
+  console.log('Replay snapshots ready:', out);
+} else {
 if (process.env.MAPLEBENCH_OVERLAY_ONLY !== 'true') {
 // Warm each monster's asset cache serially: the upstream asset service does not
 // serialize concurrent first-time exports and can expose a partially written PNG.
@@ -138,4 +164,5 @@ if (process.env.MAPLEBENCH_KEEP_FRAMES === 'false') {
   for (const file of await readdir(out)) {
     if (/^frame-\d+\.(png|tsv)$/.test(file)) await unlink(join(out, file));
   }
+}
 }

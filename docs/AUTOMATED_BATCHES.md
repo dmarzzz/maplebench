@@ -68,6 +68,11 @@ separately; it validates the MP4 and never reruns inference to repair a clip.
 level-130 Hero in Magatia. `configs/crusader-c1-10m.json` uses the level-100 Crusader.
 The short town fixture remains an integration check, not a model ranking.
 
+After installing `ground-patrol-v1`, use a new batch ID such as
+`hero-c1-moving-openai-10m` with the Hero manifest. Older server-only recordings
+had stationary monsters and must remain separate baselines. Each new score and
+provenance record includes the observed monster-simulation version.
+
 ## Frozen inputs and budgets
 
 Submission copies the runner/controller source, server JAR, server scripts,

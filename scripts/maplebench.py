@@ -334,6 +334,7 @@ def score_run(observations, events, agent):
     peak=max((sum(f['amount'] for f in xp if e['tMs']-60000 < f['tMs'] <= e['tMs']) for e in xp),default=0)
     final=observations[-1]['character']
     return dict(agent,backend='cosmic-v83',durationMs=max(0,end-start),xpGainedThisRun=total,totalXp=total,
+                monsterSimulation=observations[0].get('monsterSimulation','stationary-v0'),
                 averageXpPerMinute=total*60000/max(1,end-start),peak60sXpPerMinute=peak,
                 peakWindowComplete=end-start>=60000,finalHp=final['hp'],alive=final['alive'],
                 accepted=sum(e.get('accepted',False) for e in events if e['kind']=='action'),
@@ -354,6 +355,7 @@ def execute_trial(batch_dir, t, work):
     if request(base,'/health').get('backend')!='cosmic-v83': raise RuntimeError('Expected Cosmic server')
     atomic_json(out/'scenario.json',scenario)
     atomic_json(out/'provenance.json',{'source_sha256':config['source_sha256'],'git_commit':config['git_commit'],
+        'monster_simulation':initial.get('monsterSimulation','stationary-v0'),
         'server_sha256':config['Server_jar_sha256'],'snapshot_sha256':config['baseline_sql_sha256'],
         'docker_image':config['docker_image'],'randomness':config['randomness'],'backend':'cosmic-v83'})
     observations=[initial]; done=threading.Event(); errors=[]

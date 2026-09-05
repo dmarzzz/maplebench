@@ -134,9 +134,43 @@ items and the USE inventory with the preset, sets supported skill levels, and
 validates that the database job matches the preset. The runner must reset persisted
 stats, learned skills and other character state before loading it.
 
-Random monster movement, damage and spawn scheduling are not yet deterministically
-seeded. Record upstream revision, scenario contents, runtime configuration identity,
+Damage and spawn scheduling are not yet deterministically seeded. Record upstream
+revision, scenario contents, runtime configuration identity,
 and action/observation timestamps; run repetitions before comparing models.
+
+## Ground-monster movement
+
+The original server-only clips and batches had stationary monsters. Cosmic's
+`MoveLifeHandler` expects coordinates from a connected v83 client; the offline bot
+does not supply those packets. Normal respawning and contact damage alone did not
+provide locomotion. Treat those older scores as stationary-monster baselines.
+
+`ground-patrol-v1` now supplies an explicit benchmark ground-mob simulation in the
+dedicated controlled map. Monsters patrol with staggered pauses, pursue the live
+character for six seconds after HP loss, and respect connected foothold slopes,
+walls and ledges. They stop for stun, freeze and web effects. Movement updates the
+actual server positions used by range and contact-damage checks. Normal spawn and
+combat handlers remain responsible for respawn, HP loss and XP.
+
+This controller approximates client behavior: speed is 40 pixels/second at WZ
+speed zero, scaled by the WZ speed and SPEED status. For C-1's Roid, WZ speed -40
+gives 24 pixels/second. This scale follows Maplewright's patrol baseline and has
+not been calibrated against a retail client. Flying mobs, bosses, jumping,
+knockback and active monster skill AI are not implemented. The controller yields
+when a real player is present. It must not be described as full v83 physics parity.
+
+Observations identify `monsterSimulation: "ground-patrol-v1"` and include each
+monster's `moving`, `facingLeft` and `movementMode`. Replays interpolate those
+recorded positions and animate the WZ walk/stand frames; they do not invent paths.
+Keep trials from different server/JAR versions in separate frozen batches.
+
+The moving-monster Hero check recorded 19 of 20 initial Roids displaced by at
+least ten pixels during an eight-second idle observation, with patrol, chase and
+boundary-turn states. The subsequent thirty-second scripted hunt earned 5,208 XP,
+hit three targets with Brandish, and observed 25 new natural respawn IDs. All mob
+positions stayed on the floor, allowing Cosmic's normal one-pixel spawn offset;
+fresh-reset inventory, MP and XP checks passed. This is scripted mechanics
+validation, not an OpenAI model result.
 
 ## Evidence and release checks
 

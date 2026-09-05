@@ -57,6 +57,8 @@ function installCosmicOverlay(cosmicDir) {
   const overlay = join(repoRoot, 'patches/cosmic/overlay/src/main/java/server/bots');
   const target = join(cosmicDir, 'src/main/java/server/bots');
   cpSync(overlay, target, { recursive: true });
+  cpSync(join(repoRoot, 'patches/cosmic/overlay/src/test/java/server/bots'),
+    join(cosmicDir, 'src/test/java/server/bots'), { recursive: true });
   console.log('==> Installed Cosmic MapleBench control-plane sources');
 
   const combatPath = join(target, 'BotCombatManager.java');

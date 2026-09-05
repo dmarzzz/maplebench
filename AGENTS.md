@@ -13,3 +13,10 @@ of personal data. Retain upstream license notices and keep WZ assets out of Git.
 
 Use localhost control endpoints and an SSH tunnel for remote experiments. Label
 mock runs, offline renders, baseline policies, and actual server runs accurately.
+
+The runtime machine is shared. Run only one build/test job at a time, with a hard
+memory limit and explicit JVM heap/fork limits. Use the focused tests for the
+change; do not launch the full bot optimizer suites concurrently. A useful Java
+build cap is 2300 MiB total, 768 MiB Maven heap, one 1024 MiB test fork, two CPUs,
+and a five-minute timeout. Build native replay code with one Cargo job and a
+hard memory limit. Check available memory before starting live experiments.
