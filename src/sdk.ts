@@ -68,7 +68,7 @@ export class MapleClient {
 
 export class HttpMapleTransport implements MapleTransport {
   constructor(
-    private readonly baseUrl = process.env.MAPLEBENCH_URL ?? "http://127.0.0.1:8787",
+    private readonly baseUrl = process.env.MAPLEBENCH_URL ?? "http://127.0.0.1:8790",
     private readonly token = process.env.MAPLEBENCH_TOKEN,
   ) {}
 

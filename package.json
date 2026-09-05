@@ -8,9 +8,18 @@
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/test/*.test.js",
     "score:demo": "npm run build --silent && node dist/src/cli-score.js examples/demo-episode.jsonl",
-    "check": "npm test"
+    "check": "npm test",
+    "ui": "node scripts/serve-ui.mjs",
+    "bootstrap": "node scripts/bootstrap-upstreams.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "mock": "node scripts/mock-cosmic.mjs",
+    "demo:agent": "npm run build --silent && node examples/demo-agent.mjs",
+    "demo:live": "npm run build --silent && node scripts/run-local-demo.mjs"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }

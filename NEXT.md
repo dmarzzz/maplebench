@@ -1,28 +1,28 @@
-# Immediate next work
+# Next experiments
 
-## When the GitHub repo exists
+Completed: compile and boot the patched Cosmic server, seed a synthetic Warrior,
+disable upstream autonomous policy for the controlled character, request movement
+and sword attacks through the SDK, and replay observations using Maplewright.
 
-Create an empty repository named `maplebench` (prefer private for the first prototype while asset/licensing boundaries are still being validated). Then either push this local git history or tell ChatGPT the repo exists; the connected GitHub integration can write commits to an existing repository.
+The first Henesys combat fixture earned 30 server-authoritative XP from three
+Slimes. Its initial idle check earned zero XP. This was a short baseline run,
+not the standardized ten-minute benchmark. Clips include action, controller/model,
+HP, level, elapsed-time, and XP overlays.
 
-Current local baseline commit:
+The OpenAI queue uses direct API requests and identical scenario resets. Record
+model IDs returned by the provider, request usage, latency, chosen actions,
+server observations, and XP. Keep model-driven runs distinct from scripted
+baselines and operator-driven demos.
 
-```text
-3e797aa8bba8dae6d2eec2e1e12b78863aa511c4  Initial MapleBench scaffold
-```
+1. Improve movement presentation and add authoritative damage numbers.
+2. Compare API models on a larger combat fixture with additional skills.
+3. Add full database snapshots and run the standardized ten-minute task in a
+   natural combat map.
+4. Connect an observer through the actual client network path for continuous
+   recordings. The current renderer replays observations and interpolates poses.
+5. Add loot, items, portals, and skill-allocation actions through normal handlers.
+6. Generalize the harness to four characters and implement the Kerning PQ task.
 
-A second commit adds the concrete Cosmic method map and first proposed server patch.
-
-## Coding order
-
-1. Pin `NDBellisario/cosmic` to a commit.
-2. Apply/test `0001-expose-requested-attack-plan.patch`.
-3. Add `server.bots.MapleBenchController` in the Cosmic working tree.
-4. Implement only `observe`, `moveTo`, `basicAttack`, `useSkill`.
-5. Manually control one spawned bot through those methods and verify another client can see it.
-6. Add XP event logging at the actual EXP award path.
-7. Put the controller behind localhost HTTP/JSON.
-8. Point the TypeScript `HttpMapleTransport` at it.
-9. Run `maximize-xp-10m` end to end.
-10. Add observer video capture.
-
-Do not build Harbor/MCP/PQ orchestration before step 9; the current SDK/task contract is enough to keep those layers unblocked.
+Keep secrets, personal data, runtime configuration, game assets, and recordings
+out of Git. Run the tracked-file guard and Gitleaks before each commit and scan
+the full history before publication or a visibility change.
