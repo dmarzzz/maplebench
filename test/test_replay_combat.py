@@ -35,6 +35,8 @@ class CombatReplayTest(unittest.TestCase):
                      actionName='brandish2',cooldownMs=900,hitDelayMs=250,facingLeft=False),
                 dict(kind='player_hit',tMs=1000,characterId=4,mapId=261020300,source='touch',objectId=1,
                      position=dict(x=190,y=150),damage=250,miss=False,knockback=True,hurtCooldownMs=1400),
+                dict(kind='monster_hit',tMs=1100,mapId=261020300,characterId=4,objectId=1,monsterId=5110301,
+                     position=dict(x=220,y=167),damageLines=[300,400],hpLoss=700,killed=False),
                 dict(kind='combat_attack',seq=3,tMs=1800,characterId=4,mapId=261020300,skillId=1121008,
                      actionName='brandish2',cooldownMs=600,hitDelayMs=250,facingLeft=False),
                 dict(kind='xp_gain',tMs=1900,amount=168),
@@ -95,3 +97,15 @@ class CombatReplayTest(unittest.TestCase):
         self.assertEqual(labels[1200],labels[1300])
         self.assertEqual(labels[2000],labels[2100])
         self.assertGreaterEqual(labels[2000]-labels[1200],88)
+
+    def test_incoming_hit_clears_intersecting_outgoing_rows(self):
+        import re
+        incoming=[]; outgoing=[]
+        for line in self.ass.splitlines():
+            if not line.startswith('Dialogue:'): continue
+            r=line.split(',',9)
+            if r[1]!='0:00:01.13' or r[3] not in ('PlayerHP','Damage'): continue
+            y=int(re.search(r'pos\(\d+,(\d+)\)',r[9]).group(1))
+            (incoming if r[3]=='PlayerHP' else outgoing).append(y)
+        self.assertTrue(incoming and outgoing)
+        self.assertLessEqual(max(incoming),min(outgoing)-35)

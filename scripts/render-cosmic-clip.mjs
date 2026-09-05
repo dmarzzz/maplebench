@@ -229,7 +229,15 @@ for (let i = 0; i < frames; i++) {
   for (const hit of playerHits.filter(h => h.characterId === a.character.id && t >= h.tMs && t - h.tMs < 1100)) {
     const age = t - hit.tMs;
     const px = Math.round((hit.position.x + offx - camx) * 800 / 1024);
-    const py = Math.round((hit.position.y + offy - camy - 90 - age * 0.04) * 600 / 768);
+    let py = Math.round((hit.position.y + offy - camy - 90 - age * 0.04) * 600 / 768);
+    // Incoming hits get a clear lane above intersecting outgoing damage rows.
+    for (const outgoing of visibleDamage) {
+      const column = damageColumns.get(outgoing.group);
+      if (!column || Math.abs(px - column.x) > column.width / 2 + 40) continue;
+      const outgoingY = (outgoing.y + offy - camy - 68 - (outgoing.row || 0) * 29
+        - (t - outgoing.tMs) * 0.035) * 600 / 768;
+      py = Math.min(py, Math.round(outgoingY - 36));
+    }
     const opacity = Math.round(Math.max(0, (age - 750) / 350) * 255).toString(16).padStart(2, '0');
     ass.push(`Dialogue: 3,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},PlayerHP,,0,0,0,,{\\pos(${px},${py})\\c&HFF80D4&\\alpha&H${opacity}&}${hit.miss ? 'MISS' : hit.damage}`);
   }
