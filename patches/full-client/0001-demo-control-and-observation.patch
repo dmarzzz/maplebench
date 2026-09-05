@@ -1,0 +1,310 @@
+diff --git a/src/client/Gameplay/MapleMap/MapMobs.cpp b/src/client/Gameplay/MapleMap/MapMobs.cpp
+index 09ba833..584cdc3 100644
+--- a/src/client/Gameplay/MapleMap/MapMobs.cpp
++++ b/src/client/Gameplay/MapleMap/MapMobs.cpp
+@@ -57,6 +57,19 @@ namespace jrc
+         mobs.update(physics);
+     }
+ 
++    std::vector<std::pair<int32_t, Point<int16_t>>> MapMobs::get_alive_positions() const
++    {
++        std::vector<std::pair<int32_t, Point<int16_t>>> result;
++        for (const auto& entry : mobs)
++        {
++            if (Optional<const Mob> mob = mobs.get(entry.first))
++            {
++                if (mob->is_alive()) result.emplace_back(entry.first, mob->get_position());
++            }
++        }
++        return result;
++    }
++
+     void MapMobs::spawn(MobSpawn&& spawn)
+     {
+         spawns.emplace(
+diff --git a/src/client/Gameplay/MapleMap/MapMobs.h b/src/client/Gameplay/MapleMap/MapMobs.h
+index a534d74..1e51bfa 100644
+--- a/src/client/Gameplay/MapleMap/MapMobs.h
++++ b/src/client/Gameplay/MapleMap/MapMobs.h
+@@ -69,6 +69,8 @@ namespace jrc
+         // Return the head position of a mob.
+         Point<int16_t> get_mob_head_position(int32_t oid) const;
+ 
++        std::vector<std::pair<int32_t, Point<int16_t>>> get_alive_positions() const;
++
+     private:
+         std::vector<int32_t> find_closest(Rectangle<int16_t> range, Point<int16_t> origin, uint8_t mobcount) const;
+ 
+diff --git a/src/client/Gameplay/Stage.cpp b/src/client/Gameplay/Stage.cpp
+index fb47f7c..5c645b5 100644
+--- a/src/client/Gameplay/Stage.cpp
++++ b/src/client/Gameplay/Stage.cpp
+@@ -27,6 +27,10 @@
+ #include "nlnx/nx.hpp"
+ 
+ #include <chrono>
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#include <sstream>
++#endif
+ 
+ namespace jrc
+ {
+@@ -152,6 +156,9 @@ namespace jrc
+     {
+         if (state != ACTIVE)
+         {
++#ifdef __EMSCRIPTEN__
++            EM_ASM({ Module.MapleBenchObservation = {ready:false}; });
++#endif
+             return;
+         }
+ 
+@@ -178,6 +185,40 @@ namespace jrc
+ 
+         portals.update(player.get_position());
+         camera.update(player.get_position());
++#ifdef __EMSCRIPTEN__
++        // Publish read-only state on the game loop; browser callbacks never enter WASM.
++        static unsigned observation_tick = 0;
++        if (++observation_tick % 6 == 0)
++        {
++            const auto& stats = player.get_stats();
++            const auto position = player.get_position();
++            std::ostringstream data;
++            data << "{\"ready\":true,\"source\":\"full-client\",\"character\":{"
++                 << "\"mapId\":" << mapid << ",\"level\":" << player.get_level()
++                 << ",\"hp\":" << stats.get_stat(Maplestat::HP)
++                 << ",\"maxHp\":" << stats.get_total(Equipstat::HP)
++                 << ",\"mp\":" << stats.get_stat(Maplestat::MP)
++                 << ",\"maxMp\":" << stats.get_total(Equipstat::MP)
++                 << ",\"exp\":" << stats.get_exp()
++                 << ",\"alive\":" << (stats.get_stat(Maplestat::HP) > 0 ? "true" : "false")
++                 << ",\"x\":" << position.x() << ",\"y\":" << position.y()
++                 << "},\"monsters\":[";
++            bool first = true;
++            for (const auto& mob : mobs.get_alive_positions())
++            {
++                if (!first) data << ',';
++                first = false;
++                data << "{\"objectId\":" << mob.first << ",\"x\":" << mob.second.x()
++                     << ",\"y\":" << mob.second.y() << '}';
++            }
++            data << "]}";
++            const auto json = data.str();
++            EM_ASM({
++                Module.MapleBenchObservation = JSON.parse(UTF8ToString($0));
++                Module.MapleBenchObservation.capturedAt = Date.now();
++            }, json.c_str());
++        }
++#endif
+ 
+         if (player.is_invincible())
+         {
+diff --git a/src/client/IO/UITypes/UICharSelect.cpp b/src/client/IO/UITypes/UICharSelect.cpp
+index c4930b9..f77f9a7 100644
+--- a/src/client/IO/UITypes/UICharSelect.cpp
++++ b/src/client/IO/UITypes/UICharSelect.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "UICharSelect.h"
++#include "../DemoLogin.h"
+ 
+ #include "UISoftKey.h"
+ #include "UICharCreation.h"
+@@ -181,6 +182,8 @@ namespace jrc
+     void UICharSelect::update()
+     {
+         UIElement::update();
++        if (characters.size() == 1 && demo_login::take("character"))
++            send_selection();
+ 
+         emptyslot.update();
+ 
+diff --git a/src/client/IO/UITypes/UILogin.cpp b/src/client/IO/UITypes/UILogin.cpp
+index 77e9cbb..709db5c 100644
+--- a/src/client/IO/UITypes/UILogin.cpp
++++ b/src/client/IO/UITypes/UILogin.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "UILogin.h"
++#include "../DemoLogin.h"
+ #include "UILoginWait.h"
+ 
+ #include "../UI.h"
+@@ -188,6 +189,12 @@ namespace jrc
+     void UILogin::update()
+     {
+         UIElement::update();
++        if (demo_login::take("login"))
++        {
++            account.change_text(demo_login::value("username"));
++            password.change_text(demo_login::value("password"));
++            login();
++        }
+ 
+         account.update(position);
+         password.update(position);
+diff --git a/src/client/IO/UITypes/UIStatusBar.cpp b/src/client/IO/UITypes/UIStatusBar.cpp
+index aa808bc..fa3aca3 100644
+--- a/src/client/IO/UITypes/UIStatusBar.cpp
++++ b/src/client/IO/UITypes/UIStatusBar.cpp
+@@ -16,6 +16,9 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "UIStatusBar.h"
++#ifdef MS_PLATFORM_WASM
++#include <emscripten.h>
++#endif
+ 
+ #include "../UI.h"
+ #include "../Components/MapleButton.h"
+@@ -99,6 +102,9 @@ namespace jrc
+         int32_t maxhp = stats.get_total(Equipstat::HP);
+         int32_t maxmp = stats.get_total(Equipstat::MP);
+         int64_t exp   = stats.get_exp();
++#ifdef MS_PLATFORM_WASM
++        EM_ASM({ const hud = {}; hud.hp=$0; hud.mp=$1; hud.maxHp=$2; hud.maxMp=$3; Module.MapleBenchHud=hud; }, hp, mp, maxhp, maxmp);
++#endif
+ 
+         std::string expstring = std::to_string(100 * getexppercent());
+         statset.draw(
+diff --git a/src/client/IO/Window.cpp b/src/client/IO/Window.cpp
+index 091d63f..d119a91 100644
+--- a/src/client/IO/Window.cpp
++++ b/src/client/IO/Window.cpp
+@@ -19,6 +19,8 @@
+ 
+ #ifdef MS_PLATFORM_WASM
+ #include <emscripten.h>
++#include <deque>
++#include <utility>
+ #endif
+ 
+ #include "UI.h"
+@@ -44,6 +46,11 @@ namespace jrc
+         };
+ 
+         DoubleclickState doubleclick_state;
++#ifdef MS_PLATFORM_WASM
++        // Consume input on the game loop: skill asset reads may suspend through
++        // Asyncify, while browser key callbacks can arrive during that suspension.
++        std::deque<std::pair<int, bool>> pending_keys;
++#endif
+ 
+         // GLFW does not emit double-click events, so synthesize them from
+         // successive left-button presses that happen close together.
+@@ -89,7 +96,11 @@ namespace jrc
+ 
+     void key_callback(GLFWwindow*, int key, int, int action, int)
+     {
++        #ifdef MS_PLATFORM_WASM
++        pending_keys.emplace_back(key, action != GLFW_RELEASE);
++#else
+         UI::get().send_key(key, action != GLFW_RELEASE);
++#endif
+     }
+ 
+     void mousekey_callback(GLFWwindow* window, int button, int action, int)
+@@ -358,6 +369,13 @@ namespace jrc
+     void Window::check_events()
+     {
+ #ifdef MS_PLATFORM_WASM
++        const auto count = pending_keys.size();
++        for (size_t i = 0; i < count; ++i)
++        {
++            const auto event = pending_keys.front();
++            pending_keys.pop_front();
++            UI::get().send_key(event.first, event.second);
++        }
+         int32_t f11state = glfwGetKey(glwnd, GLFW_KEY_F11);
+         if (f11state == GLFW_PRESS && !f11_down)
+         {
+diff --git a/src/client/Journey.cpp b/src/client/Journey.cpp
+index 3d115fb..2e72883 100644
+--- a/src/client/Journey.cpp
++++ b/src/client/Journey.cpp
+@@ -115,6 +115,12 @@ namespace jrc
+         Stage::get().draw(alpha);
+         UI::get().draw(alpha);
+         Window::get().end();
++#ifdef MS_PLATFORM_WASM
++        EM_ASM({
++            Module.MapleBenchRenderedAt = Date.now();
++            if (Module.MapleBenchOnRendered) Module.MapleBenchOnRendered();
++        });
++#endif
+     }
+ 
+     bool running()
+@@ -141,10 +147,16 @@ namespace jrc
+ 
+         int64_t elapsed = Timer::get().stop();
+ 
+-        for (accumulator += elapsed; accumulator >= timestep; accumulator -= timestep)
++        accumulator += elapsed;
++        // Keep asset-I/O catch-up from starving rendering. Preserve the remaining
++        // simulation time for the next frame instead of discarding physics ticks.
++        for (int updates = 0; accumulator >= timestep && updates < 8; ++updates)
++        {
+             update();
++            accumulator -= timestep;
++        }
+ 
+-        float alpha = static_cast<float>(accumulator) / timestep;
++        float alpha = std::min(1.0f, static_cast<float>(accumulator) / timestep);
+         draw(alpha);
+ 
+         bool show_fps = true; // Hardcoded or from config
+diff --git a/src/client/Net/Handlers/Helpers/LoginParser.cpp b/src/client/Net/Handlers/Helpers/LoginParser.cpp
+index bd090d1..a95691e 100644
+--- a/src/client/Net/Handlers/Helpers/LoginParser.cpp
++++ b/src/client/Net/Handlers/Helpers/LoginParser.cpp
+@@ -118,7 +118,7 @@ namespace jrc
+             statsentry.petids.push_back(recv.read_long());
+         }
+ 
+-        statsentry.stats[Maplestat::LEVEL] = recv.read_byte();
++        statsentry.stats[Maplestat::LEVEL] = static_cast<uint8_t>(recv.read_byte());
+         statsentry.stats[Maplestat::JOB]   = recv.read_short();
+         statsentry.stats[Maplestat::STR]   = recv.read_short();
+         statsentry.stats[Maplestat::DEX]   = recv.read_short();
+diff --git a/src/client/Net/Handlers/LoginHandlers.cpp b/src/client/Net/Handlers/LoginHandlers.cpp
+index eac4c0b..ee0493a 100644
+--- a/src/client/Net/Handlers/LoginHandlers.cpp
++++ b/src/client/Net/Handlers/LoginHandlers.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "LoginHandlers.h"
++#include "../../IO/DemoLogin.h"
+ 
+ #include "Helpers/LoginParser.h"
+ 
+@@ -127,6 +128,11 @@ namespace jrc
+         // Add the world selection screen to the ui.
+         UI::get().emplace<UIWorldSelect>(worlds, worldcount);
+         UI::get().enable();
++        if (!worlds.empty() && demo_login::take("world"))
++        {
++            UI::get().disable();
++            CharlistRequestPacket(static_cast<uint8_t>(worlds.front().wid), 0).dispatch();
++        }
+     }
+ 
+ 
+diff --git a/src/client/Net/Handlers/PlayerHandlers.cpp b/src/client/Net/Handlers/PlayerHandlers.cpp
+index fe46514..a7db08e 100644
+--- a/src/client/Net/Handlers/PlayerHandlers.cpp
++++ b/src/client/Net/Handlers/PlayerHandlers.cpp
+@@ -96,7 +96,7 @@ namespace jrc
+             player.change_look(stat, recv.read_int());
+             break;
+         case Maplestat::LEVEL:
+-            player.change_level(recv.read_byte());
++            player.change_level(static_cast<uint8_t>(recv.read_byte()));
+             break;
+         case Maplestat::JOB:
+             player.change_job(recv.read_short());

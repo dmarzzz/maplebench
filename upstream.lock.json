@@ -8,5 +8,10 @@
     "repository": "https://github.com/Sheilem/maplewright.git",
     "commit": "79b3e8fb25c84c45212c12b45235cdc00c6f6f3c",
     "license": "AGPL-3.0"
+  },
+  "journey_wasm": {
+    "repository": "https://github.com/nmnsnv/maplestory-wasm.git",
+    "commit": "bc0234fe7c7f53322453e7bdd79564d9aca4cd8b",
+    "license": "AGPL-3.0"
   }
 }

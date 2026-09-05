@@ -1,13 +1,17 @@
 # MapleBench
 
-**Status: active prototype.** The patched Cosmic server boots with a controllable
-character. The repository also includes a server-observation replay renderer.
-Four OpenAI API models have completed staged cavern hunts with continuous control
-through the narrow API. The equipped Timeless Hero scenario adds a complete armor
-set, Maple Warrior, learned Achilles mitigation and original WZ Brandish/cast art.
-These are integration and calibration runs; monster recoil, active attacks and
-full client movement remain fidelity gaps. See [scenarios](docs/SCENARIOS.md) and
-[replay provenance](docs/REPLAY.md).
+**Status: active prototype.** A full Journey WASM client now runs on Cosmic,
+with normal movement, monster contact, skill attacks, and hit effects. A
+sandboxed `sdk.observe()` / `sdk.pressKeys()` program has controlled it through
+the OpenAI API. Live and recorded overlays identify the controller/model and
+show client telemetry. These are unranked integration runs; standardized resets
+and server-backed scoring still need the full-client adapter. See
+[full-client control](docs/FULL_CLIENT.md) and the
+[NanoCodex controller candidate](docs/NANOCODEX.md).
+
+The earlier four-model server-bot batches and replay renderer remain available.
+Their scores and rendering provenance are separate from the new full-client
+recordings. See [scenarios](docs/SCENARIOS.md) and [replay provenance](docs/REPLAY.md).
 
 MapleBench is an experimental benchmark for evaluating coding agents in a persistent MapleStory-like game environment, beginning with simple XP optimization and progressing toward multi-agent party-quest coordination.
 

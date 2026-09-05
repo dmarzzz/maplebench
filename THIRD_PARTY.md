@@ -22,6 +22,15 @@ MapleBench modifications to Cosmic must retain upstream notices and be distribut
 
 Maplewright itself ships no MapleStory game content. Keep its generated asset paths ignored and retain its license/notices in any fork.
 
+### Journey WASM
+
+- Upstream: `nmnsnv/maplestory-wasm`
+- Pinned commit: `bc0234fe7c7f53322453e7bdd79564d9aca4cd8b`
+- License: GNU Affero General Public License v3.0 (AGPL-3.0)
+- Use: full client rendering, keyboard input, movement, and combat.
+
+The integration patch retains upstream notices. Client assets remain separate.
+
 ## MapleStory content
 
 MapleStory names, trademarks, WZ data, artwork, audio, maps and other proprietary game content are not included in MapleBench. Local development may point the upstream engines at WZ files the developer has obtained legally. Do not commit or redistribute those files from this repository.

@@ -145,6 +145,19 @@ def validate_rpc(message, scenario):
         return method, None
     if method == 'wait' and len(args) == 1:
         return method, _integer(args[0], 1, 3000, 'wait duration')
+    if method == 'pressKeys' and len(args) == 2:
+        if scenario.get('adapter') != 'full-client':
+            raise ValueError('Keyboard input requires the full-client adapter')
+        keys, duration = args
+        allowed = {'LEFT', 'RIGHT', 'UP', 'DOWN', 'JUMP', 'ATTACK', 'BRANDISH',
+                   'COMBO', 'BOOSTER', 'MAPLE_WARRIOR', 'HP_POTION', 'MP_POTION'}
+        if (type(keys) is not list or not 1 <= len(keys) <= 3
+                or any(type(key) is not str or key not in allowed for key in keys)
+                or len(set(keys)) != len(keys)
+                or {'LEFT', 'RIGHT'} <= set(keys) or {'UP', 'DOWN'} <= set(keys)):
+            raise ValueError('Invalid keyboard input')
+        duration = _integer(duration, 30, 1500, 'key hold duration')
+        return method, {'type': 'press_keys', 'keys': keys, 'durationMs': duration}
     if method == 'moveTo' and len(args) == 2:
         bounds = scenario.get('coordinate_bounds', {})
         x = _integer(args[0], max(-10000, bounds.get('min_x', -10000)), min(10000, bounds.get('max_x', 10000)), 'x coordinate')

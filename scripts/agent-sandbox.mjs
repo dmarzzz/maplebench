@@ -21,6 +21,7 @@ function rpc(method, args) {
 
 const sdk = Object.freeze({
   observe: () => rpc('observe', []),
+  pressKeys: (keys, milliseconds) => rpc('pressKeys', [keys, milliseconds]),
   moveTo: (x, y) => rpc('moveTo', [x, y]),
   attack: targetId => rpc('attack', [targetId]),
   useSkill: (skillId, targetId) => rpc('useSkill', targetId === undefined ? [skillId] : [skillId, targetId]),
