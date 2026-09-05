@@ -5,6 +5,7 @@ import client.SkillFactory;
 import client.inventory.InventoryType;
 import client.inventory.Item;
 import constants.skills.Warrior;
+import constants.skills.Crusader;
 import net.server.Server;
 import server.ItemInformationProvider;
 import java.awt.Point;
@@ -25,6 +26,7 @@ public final class MapleBenchRuntime {
             int mapId = Integer.parseInt(System.getenv().getOrDefault("MAPLEBENCH_MAP_ID", "100000000"));
             var map = Server.getInstance().getChannel(0, 1).getMapFactory().getMap(mapId);
             BotManager manager = BotManager.getInstance();
+            boolean crusader = "crusader".equalsIgnoreCase(System.getenv("MAPLEBENCH_PRESET"));
             boolean demoMobs = "true".equalsIgnoreCase(System.getenv("MAPLEBENCH_DEMO_MOBS"));
             Point spawn = demoMobs && mapId == 100000000 ? new Point(1473, 260) : null;
             Character bot = manager.loadOfflineBot(Integer.parseInt(id), 0, 1, map, spawn);
@@ -37,7 +39,7 @@ public final class MapleBenchRuntime {
             }
 
             // Seed equipment before the episode begins. Runtime actions use normal game handlers.
-            int[] equipment = {1040036, 1060026, 1072001, 1302000};
+            int[] equipment = {1040036, 1060026, 1072001, crusader ? 1402037 : 1302000};
             short[] slots = {-5, -6, -7, -11};
             for (int i = 0; i < equipment.length; i++) {
                 if (bot.getInventory(InventoryType.EQUIPPED).getItem(slots[i]) == null) {
@@ -46,7 +48,11 @@ public final class MapleBenchRuntime {
                     bot.getInventory(InventoryType.EQUIPPED).addItemFromDB(item);
                 }
             }
-            bot.changeSkillLevel(SkillFactory.getSkill(Warrior.POWER_STRIKE), (byte) 1, 0, -1);
+            bot.changeSkillLevel(SkillFactory.getSkill(Warrior.POWER_STRIKE), (byte) (crusader ? 20 : 1), 0, -1);
+            if (crusader) {
+                bot.changeSkillLevel(SkillFactory.getSkill(Warrior.SLASH_BLAST), (byte) 20, 0, -1);
+                bot.changeSkillLevel(SkillFactory.getSkill(Crusader.SHOUT), (byte) 30, 0, -1);
+            }
             bot.recalcLocalStats();
             BotEntry entry = manager.registerSpawnedBot(bot.getId(), null, bot);
             entry.following = false;
@@ -54,8 +60,9 @@ public final class MapleBenchRuntime {
             if (demoMobs) {
                 // Explicit town combat fixture; these are ordinary server monsters with normal HP/XP.
                 Point p = bot.getPosition();
-                for (int offset : new int[]{140, 260, 380}) {
-                    map.spawnMonsterOnGroundBelow(210100, p.x + offset, p.y - 20);
+                int[] offsets = crusader ? new int[]{100, 160, 220} : new int[]{140, 260, 380};
+                for (int offset : offsets) {
+                    map.spawnMonsterOnGroundBelow(crusader ? 5100000 : 210100, p.x + offset, p.y - 20);
                 }
             }
             MapleBenchEventSink.ensureStarted(bot);

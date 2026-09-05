@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 
 const run = promisify(execFile);
 const work = resolve(process.env.MAPLEBENCH_WORK || '..');
+const charDir = resolve(process.env.MAPLEBENCH_CHARACTER_DIR || join(work, 'baked/warrior'));
 const input = resolve(process.argv[2] || 'artifacts/henesys-demo');
 const out = join(input, 'video');
 const fps = 15;
@@ -34,10 +35,13 @@ for (let i = 1; i < observations.length; i++) {
   }
 }
 const animations = {};
-for (const line of (await readFile(join(work, 'baked/warrior/char.txt'), 'utf8')).trim().split('\n')) {
+for (const line of (await readFile(join(charDir, 'char.txt'), 'utf8')).trim().split('\n')) {
   const [stance, index, delay] = line.split(/\s+/);
   (animations[stance] ||= []).push({ index: Number(index), delay: Number(delay) });
 }
+const standPose = animations.stand1 ? 'stand1' : 'stand2';
+const walkPose = animations.walk1 ? 'walk1' : 'walk2';
+const attackPose = standPose === 'stand2' ? 'swingT1' : 'swingO1';
 function frameAt(stance, time) {
   const fs = animations[stance];
   let remaining = time % fs.reduce((s, f) => s + f.delay, 0);
@@ -72,7 +76,7 @@ for (let i = 0; i < frames; i++) {
     const target = a.monsters.find(m => m.objectId === action.action.targetId);
     if (target && target.position.x !== x) facing = Math.sign(target.position.x - x);
   }
-  const stance = attacking ? 'swingO1' : y < cameraY - 3 ? 'jump' : moving ? 'walk1' : 'stand1';
+  const stance = attacking ? attackPose : y < cameraY - 3 ? 'jump' : moving ? walkPose : standPose;
   const pose = frameAt(stance, attacking ? t - action.tMs : t - start);
   const lines = [`player ${x.toFixed(2)} ${y.toFixed(2)} ${stance} ${pose} ${facing}`, `camera ${cameraX.toFixed(2)} ${cameraY}`];
   for (const m of a.monsters.filter(m => m.alive)) {
@@ -81,7 +85,7 @@ for (let i = 0; i < frames; i++) {
   await writeFile(join(out, `frame-${String(i).padStart(4, '0')}.tsv`), lines.join('\n') + '\n');
   const xp = events.filter(e => e.kind === 'xp_gain' && e.tMs >= start && e.tMs <= t).reduce((s, e) => s + e.amount, 0);
   const attackName = action?.action.type === 'use_skill'
-    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST' }[action.action.skillId] || `SKILL ${action.action.skillId}`)
+    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST', 1111008: 'SHOUT' }[action.action.skillId] || `SKILL ${action.action.skillId}`)
     : 'BASIC ATTACK';
   const label = attacking ? attackName : moving ? (facing > 0 ? 'MOVE RIGHT' : 'MOVE LEFT') : 'OBSERVE';
   const job = ({ 100: 'Warrior', 110: 'Fighter', 111: 'Crusader', 112: 'Hero' })[a.character.jobId] || `Job ${a.character.jobId}`;
@@ -95,7 +99,7 @@ for (let i = 0; i < frames; i++) {
     ass.push(`Dialogue: 1,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},Damage,,0,0,0,,{\\pos(${dx},${dy})\\alpha&H${alpha}&}-${hit.amount} HP`);
   }
 }
-ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\NHenesys test slimes / interpolated movement and attack poses`);
+ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\NHenesys combat fixture / interpolated movement and attack poses`);
 await writeFile(join(out, 'overlay.ass'), ass.join('\n') + '\n');
 if (process.env.MAPLEBENCH_OVERLAY_ONLY !== 'true') {
 // Warm each monster's asset cache serially: the upstream asset service does not
@@ -111,7 +115,7 @@ let next = 0, done = 0;
 await Promise.all(Array.from({ length: 4 }, async () => {
   while (next < frames) {
     const i = next++, name = `frame-${String(i).padStart(4, '0')}`;
-    await run(join(work, 'maplewright/target/release/client'), [join(work, 'baked/henesys/fg.png'), join(work, 'baked/henesys/map.fh'), join(work, 'baked/henesys'), join(work, 'baked/warrior'), '--benchshot', join(out, name + '.tsv'), join(out, name + '.png')], { maxBuffer: 1024 * 1024 });
+    await run(join(work, 'maplewright/target/release/client'), [join(work, 'baked/henesys/fg.png'), join(work, 'baked/henesys/map.fh'), join(work, 'baked/henesys'), charDir, '--benchshot', join(out, name + '.tsv'), join(out, name + '.png')], { maxBuffer: 1024 * 1024 });
     if (++done % 30 === 0) console.log(`Rendered ${done}/${frames}`);
   }
 }));

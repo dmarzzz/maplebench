@@ -88,4 +88,10 @@ if (!chr.includes('"swingO1", "swingO2"')) {
   chr = chr.replace(old, 'let stances = [look.stand(), look.walk(), "jump", "prone", "alert", "swingO1", "swingO2", "swingO3", "stabO1", "stabO2"];');
   writeFileSync(charPath, chr);
 }
+if (!chr.includes('"swingT1", "swingT2"')) {
+  const old = '"swingO1", "swingO2", "swingO3", "stabO1", "stabO2"';
+  if (!chr.includes(old)) throw new Error('Unexpected character exporter source');
+  chr = chr.replace(old, old + ', "swingT1", "swingT2", "swingT3", "stabT1", "stabT2"');
+  writeFileSync(charPath, chr);
+}
 console.log('Maplewright authoritative-snapshot renderer installed.');

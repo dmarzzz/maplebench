@@ -6,10 +6,16 @@ import { peakXpRate, totalXp } from '../dist/src/scoring.js';
 const url = process.env.MAPLEBENCH_URL || 'http://127.0.0.1:8790';
 const out = process.env.MAPLEBENCH_OUTPUT || 'artifacts/cosmic-smoke';
 const duration = Number(process.env.MAPLEBENCH_DURATION_MS || 60000);
+const skillId = Number(process.env.MAPLEBENCH_SKILL_ID || 0);
+if (!Number.isSafeInteger(skillId) || skillId < 0) throw new Error('Invalid skill ID');
 if (!Number.isFinite(duration) || duration < 1000 || duration > 600000) throw new Error('Invalid duration');
 const health = await (await fetch(url + '/health')).json();
 if (health.backend !== 'cosmic-v83') throw new Error('This smoke test requires the real Cosmic backend');
 await mkdir(out, { recursive: true });
+await writeFile(join(out, 'controller.json'), JSON.stringify({
+  name: skillId ? `Scripted skill baseline (${skillId})` : 'Nearest-monster scripted baseline',
+  model: 'None (scripted policy)',
+}, null, 2) + '\n');
 const client = new MapleClient(new HttpMapleTransport(url));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const snapshots = [];
@@ -53,7 +59,7 @@ while (Date.now() - started < duration) {
       console.log('move', p, '->', target.position, result.accepted);
     }
   } else {
-    result = await client.attack(target.objectId);
+    result = skillId ? await client.useSkill(skillId, target.objectId) : await client.attack(target.objectId);
     console.log('attack', target.objectId, result.accepted, result.error || '');
   }
   if (result) result.accepted ? accepted++ : rejected++;
@@ -62,7 +68,7 @@ while (Date.now() - started < duration) {
 const final = await snapshot();
 const events = await client.events(0);
 const score = {
-  backend: health.backend, policy: 'nearest-monster-basic-attack',
+  backend: health.backend, policy: skillId ? `nearest-monster-skill-${skillId}` : 'nearest-monster-basic-attack',
   durationMs: Date.now() - started, idleXp, accepted, rejected,
   startingLevel: initial.character.level, finalLevel: final.character.level,
   startingExp: initial.character.exp, finalExp: final.character.exp,

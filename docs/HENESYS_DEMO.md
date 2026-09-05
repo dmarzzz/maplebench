@@ -122,6 +122,35 @@ pass. The upstream bot suite ran 403 tests with one remaining failure in
 `BotMovementSimulationLabTest.shouldReachMoveTargetOnFlatGround`; its other
 402 tests passed. Treat precise navigation as a known limitation.
 
+## Stronger Crusader fixture
+
+Apply `scripts/seed-crusader.sql` to the disposable experiment database, then use
+the returned character ID and `MAPLEBENCH_BOT_NAME=Agent90` with
+`MAPLEBENCH_PRESET=crusader`. This separate level-100 Crusader has a Stonetooth
+Sword, level-20 Power Strike and Slash Blast, and three Jr. Yetis as the town
+combat fixture. Keep the four-model comparison on its original Warrior fixture;
+these scenarios have different stats and monsters.
+
+```bash
+MAPLEBENCH_OUTPUT=artifacts/crusader-slashblast \
+MAPLEBENCH_SKILL_ID=1001005 MAPLEBENCH_DURATION_MS=25000 \
+  node scripts/run-cosmic-smoke.mjs
+MAPLEBENCH_WORK=<work-directory> \
+MAPLEBENCH_CHARACTER_DIR=<work-directory>/baked/crusader \
+  node scripts/render-cosmic-clip.mjs artifacts/crusader-slashblast
+```
+
+Export the equipped Crusader's character frames to that separate bake directory
+after patching and rebuilding Maplewright. The exporter includes two-handed sword
+attack poses. The renderer labels the skill and the scripted controller explicitly.
+
+The first Slash Blast validation earned 405 XP, killed all three Jr. Yetis, and
+left the character alive. This is a scripted skill test, not another API model
+run. An exploratory level-30 Shout test dealt only one HP per hit and earned no
+XP; that skill's upstream combat behavior needs investigation before benchmarking
+it. Restore the Warrior configuration and reset the scenario before another API
+batch.
+
 ## Before committing
 
 Enable `.githooks`, install Gitleaks on the development host, and run the tracked
