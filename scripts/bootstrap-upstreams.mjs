@@ -66,6 +66,57 @@ function installCosmicOverlay(cosmicDir) {
   const combatMethod = `    /**\n     * MapleBench control primitive: execute exactly the requested attack rather\n     * than allowing the upstream bot policy to choose the highest-scoring skill.\n     * skillId == 0 means a normal/basic attack.\n     */\n    static boolean tryRequestedAttack(BotEntry entry, Character bot, Monster target, int skillId) {\n        AttackPlan attackPlan = skillId == 0\n                ? planBasicAttack(bot, target)\n                : planSkillAttack(entry, bot, target, skillId);\n        if (attackPlan == null || entry.attackCooldownMs > 0 || entry.noAmmo) return false;\n        if (!isTargetInAttackRange(attackPlan, bot, target)) return false;\n        if (attackPlan.skillId != 0 && !canUseSkill(bot, attackPlan.skillId, attackPlan.skillLevel)) return false;\n        if (!canUseAttackPlanNow(entry, BotAttackExecutionProvider.getEquippedWeaponType(bot), attackPlan)) return false;\n        attackMonster(entry, bot, attackPlan);\n        return true;\n    }\n\n`;
   insertBeforeOnce(combatPath, combatAnchor, combatMethod, 'tryRequestedAttack(', 'requested-attack hook');
 
+  // Read-only combat telemetry hooks; shared player attack handlers stay intact.
+  const entryPath = join(target, 'BotEntry.java');
+  insertBeforeOnce(entryPath, '    // Physics', `    volatile String mapleBenchAction = "";
+    volatile long mapleBenchAttackAtMs = 0;
+
+`, 'volatile String mapleBenchAction', 'combat observation fields');
+  insertBeforeOnce(combatPath, '        boolean hasHitBox() {', `        String mapleBenchAction = "";
+        AttackPlan withMapleBenchAction(String action) {
+            this.mapleBenchAction = action;
+            return this;
+        }
+
+`, 'AttackPlan withMapleBenchAction', 'selected action name');
+  const basicAction = 'damageWeaponTypeForAction(0, BotAttackExecutionProvider.getEquippedWeaponType(bot), basicAttackData.action()));';
+  replaceOnce(combatPath, basicAction, basicAction.slice(0, -1) + '.withMapleBenchAction(basicAttackData.action());', 'basic action metadata');
+  const skillAction = 'damageWeaponTypeForAction(skillId, weaponType, action));';
+  replaceOnce(combatPath, skillAction, skillAction.slice(0, -1) + '.withMapleBenchAction(action);', 'skill action metadata');
+  replaceOnce(combatPath, '        BotAttackExecutionProvider.applyAttackRoute(attackPlan.route, attack, bot);',
+    `        MapleBenchCombatTrace.beginAttack(entry, attackPlan, attack);
+        try {
+            BotAttackExecutionProvider.applyAttackRoute(attackPlan.route, attack, bot);
+        } finally {
+            MapleBenchCombatTrace.endAttack();
+        }`, 'attack trace scope');
+  const mobHit = '        applyDamage(entry, bot, dmg, -1, mob.getId(), kb.direction(), kb.airVelX());';
+  replaceOnce(combatPath, mobHit, `        int hpBefore = bot.getHp();
+        Point hitPosition = new Point(bot.getPosition());
+        boolean knockedBack = applyDamage(entry, bot, dmg, -1, mob.getId(), kb.direction(), kb.airVelX());
+        MapleBenchCombatTrace.playerHit(entry, "touch", mob, dmg, hpBefore, hitPosition, knockedBack);`, 'touch damage trace');
+  const fallHit = '        applyDamage(entry, bot, dmg, -3, 0, 0, airVelX);';
+  replaceOnce(combatPath, fallHit, `        int hpBefore = bot.getHp();
+        Point hitPosition = new Point(bot.getPosition());
+        boolean knockedBack = applyDamage(entry, bot, dmg, -3, 0, 0, airVelX);
+        MapleBenchCombatTrace.playerHit(entry, "fall", null, dmg, hpBefore, hitPosition, knockedBack);`, 'fall damage trace');
+  // Report the existing Stance/rope/death decision without re-rolling it.
+  let combat = readFileSync(combatPath, 'utf8');
+  if (!combat.includes('private static boolean applyDamage(')) {
+    const begin = combat.indexOf('    private static void applyDamage(');
+    const end = combat.indexOf('    private static int rollPhysicalMobDamage(', begin);
+    if (begin < 0 || end < 0) throw new Error('Could not locate applyDamage result hook');
+    const method = combat.slice(begin, end).replace('private static void applyDamage(', 'private static boolean applyDamage(')
+      .replaceAll('            return;', '            return false;')
+      .replace('        BotMovementManager.broadcastMovement(entry);', '        BotMovementManager.broadcastMovement(entry);\n        return true;');
+    writeFileSync(combatPath, combat.slice(0, begin) + method + combat.slice(end));
+  }
+  const mapPath = join(cosmicDir, 'src/main/java/server/maps/MapleMap.java');
+  replaceOnce(mapPath, '        boolean killed = monster.damage(chr, damage, false);',
+    `        int mapleBenchHpBefore = monster.getHp();
+        boolean killed = monster.damage(chr, damage, false);
+        server.bots.MapleBenchCombatTrace.monsterHit(chr, monster, damage, mapleBenchHpBefore, killed);`, 'applied monster damage trace');
+
   const managerPath = join(target, 'BotManager.java');
   const managerAnchor = '    public Character getBot(int ownerCharId) {';
   const managerMethod = `    /** MapleBench helper: find an already-active bot without exposing owner policy. */\n    BotEntry findActiveBotEntry(String botName) {\n        if (botName == null || botName.isBlank()) return null;\n        for (List<BotEntry> entries : bots.values()) {\n            for (BotEntry entry : entries) {\n                if (entry != null && entry.bot != null && entry.bot.getName().equalsIgnoreCase(botName)) {\n                    return entry;\n                }\n            }\n        }\n        return null;\n    }\n\n`;
@@ -109,9 +160,10 @@ function installCosmicOverlay(cosmicDir) {
   replaceOnce(serverPath, mainAnchor, mainReplacement, 'control-plane startup hook');
 }
 
-const cosmicDir = checkoutPinned('cosmic', lock.cosmic);
+const patchOnly = process.argv.includes('--patch-only');
+const cosmicDir = patchOnly ? join(upstreamRoot, 'cosmic') : checkoutPinned('cosmic', lock.cosmic);
 installCosmicOverlay(cosmicDir);
-checkoutPinned('maplewright', lock.maplewright);
+if (!patchOnly) checkoutPinned('maplewright', lock.maplewright);
 
 console.log(`\nUpstreams ready in ${upstreamRoot}`);
 console.log('Cosmic bridge: MAPLEBENCH_ENABLED=true MAPLEBENCH_BOT_NAME=<bot> (port 8790 by default).');

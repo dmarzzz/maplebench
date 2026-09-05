@@ -138,3 +138,27 @@ if (!chr.includes('"brandish1", "brandish2"')) {
   chr = chr.replace(old, old + ', "brandish1", "brandish2"');
   writeFileSync(charPath, chr);
 }
+
+// Skill actions such as Brandish are WZ frame references, not body canvases.
+const dollPath = join(root, '../../wz/src/paperdoll.rs');
+let doll = readFileSync(dollPath, 'utf8');
+if (!doll.includes('// MapleBench: resolve a WZ action-frame reference')) {
+  const anchor = '        let body_img = self.image(&[&body_file])?.clone();';
+  if (doll.split(anchor).length !== 2) throw new Error('Unexpected paper-doll action source');
+  doll = doll.replace(anchor, anchor + `
+        // MapleBench: resolve a WZ action-frame reference (Brandish's swing/stab sequence).
+        // Only direct canvas destinations are supported, so malformed cycles cannot recurse.
+        if let Some(node) = nav(&body_img, &[stance, &fkey]) {
+            if let Some(WzValue::Str(action)) = child(node, "action") {
+                let target_frame = child(node, "frame").and_then(int_of)?;
+                let target_key = target_frame.to_string();
+                canvas_at(&body_img, &[action.as_str(), &target_key, "body"])?;
+                let delay = child(node, "delay").and_then(int_of).unwrap_or(120).saturating_abs().max(1);
+                let mut rendered = self.render(look, action, target_frame)?;
+                rendered.delay = delay;
+                return Some(rendered);
+            }
+        }
+`);
+  writeFileSync(dollPath, doll);
+}

@@ -109,9 +109,13 @@ public final class MapleBenchEventSink {
         }
     }
 
-    private static void appendPayload(String payload) {
+    static boolean records(Character chr) {
+        return started && chr != null && chr.getId() == characterId;
+    }
+
+    static long appendPayload(String payload) {
         synchronized (LOCK) {
-            if (!started) return;
+            if (!started) return -1;
             long seq = NEXT_SEQ.getAndIncrement();
             String json = "{\"seq\":" + seq + ",\"tMs\":" + elapsedMs() + "," + payload + "}";
             EVENTS.add(new Stored(seq, json));
@@ -121,6 +125,7 @@ public final class MapleBenchEventSink {
             } catch (IOException e) {
                 throw new IllegalStateException("Could not append MapleBench episode event", e);
             }
+            return seq;
         }
     }
 

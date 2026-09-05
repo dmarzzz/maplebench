@@ -49,7 +49,8 @@ final class MapleBenchController {
                 .append(",\"mapId\":").append(bot.getMapId())
                 .append(",\"position\":{\"x\":").append(p.x).append(",\"y\":").append(p.y).append('}')
                 .append(",\"alive\":").append(bot.isAlive())
-                .append("},\"monsterSimulation\":").append(MapleBenchJson.quote(MapleBenchMobMotion.VERSION))
+                .append(",\"motion\":").append(MapleBenchCombatTrace.motionJson(entry))
+                .append("},\"combatTrace\":\"combat-v1\",\"monsterSimulation\":").append(MapleBenchJson.quote(MapleBenchMobMotion.VERSION))
                 .append(",\"monsters\":[");
 
         List<Monster> monsters = bot.getMap().getAllMonsters().stream()

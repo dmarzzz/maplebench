@@ -110,9 +110,11 @@ class ReplayMonsterTest(unittest.TestCase):
             character = root / "upstream/maplewright/crates/wz/src/bin/wzchar.rs"
             character.parent.mkdir(parents=True)
             character.write_text('let stances = [look.stand(), look.walk(), "jump", "prone", "alert"];\n')
+            doll = root / "upstream/maplewright/crates/wz/src/paperdoll.rs"
+            doll.write_text('        let body_img = self.image(&[&body_file])?.clone();\n')
             cmd = [shutil.which("node"), str(script)]
             subprocess.run(cmd, check=True, capture_output=True, timeout=10)
-            expected = {p: p.read_text() for p in (lib, main, character)}
+            expected = {p: p.read_text() for p in (lib, main, character, doll)}
             self.assertLess(expected[main].index("game.add_mob_sprites"),
                             expected[main].index("game.set_replay_mob_pose"))
             self.assertEqual(expected[main].count("game.set_replay_mob_pose"), 1)

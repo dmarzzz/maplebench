@@ -32,6 +32,22 @@ export interface CharacterState {
   mapId: MapId;
   position: Position;
   alive: boolean;
+  motion?: CharacterMotion;
+}
+
+/** Sampled mechanics, including the real attack lock and facing during recoil. */
+export interface CharacterMotion {
+  inAir: boolean;
+  climbing: boolean;
+  swimming: boolean;
+  crouching: boolean;
+  facingLeft: boolean;
+  moving: boolean;
+  moveIntent: number;
+  attackCooldownMs: number;
+  hurtCooldownMs: number;
+  actionName: string;
+  attackAtMs: number;
 }
 
 export interface MonsterState {
@@ -68,6 +84,7 @@ export interface Observation {
   monsters: MonsterState[];
   /** Version of the server-side replacement for an absent client mob controller. */
   monsterSimulation?: string;
+  combatTrace?: "combat-v1";
   drops: DropState[];
   inventory?: InventoryItem[];
   portals?: Array<{ id: number; name?: string; position: Position; targetMapId?: MapId }>;
@@ -100,6 +117,9 @@ export interface MapleTransport {
 
 export type EpisodeEvent =
   | EpisodeStartEvent
+  | CombatAttackEvent
+  | MonsterHitEvent
+  | PlayerHitEvent
   | XpGainEvent
   | LevelUpEvent
   | MapChangeEvent
@@ -184,4 +204,52 @@ export interface TaskSpec {
   scoring:
     | { type: "total_xp" }
     | { type: "peak_xp_rate"; windowSeconds: number };
+}
+
+export interface CombatAttackEvent extends BaseEvent {
+  kind: "combat_attack";
+  characterId: EntityId;
+  mapId: MapId;
+  skillId: SkillId;
+  actionName: string;
+  cooldownMs: number;
+  hitDelayMs: number;
+  speed: number;
+  facingLeft: boolean;
+}
+
+export interface MonsterHitEvent extends BaseEvent {
+  kind: "monster_hit";
+  characterId: EntityId;
+  mapId: MapId;
+  /** combat_attack seq, or -1 when the application has no synchronous attack context. */
+  attackId: number;
+  objectId: EntityId;
+  monsterId: number;
+  position: Position;
+  damage: number;
+  /** Packet rolls; their sum can exceed HP loss through overkill or shared-handler adjustments. */
+  damageLines: number[];
+  criticalLines: number[];
+  hpBefore: number;
+  hpAfter: number;
+  hpLoss: number;
+  killed: boolean;
+}
+
+export interface PlayerHitEvent extends BaseEvent {
+  kind: "player_hit";
+  characterId: EntityId;
+  mapId: MapId;
+  source: "touch" | "fall";
+  objectId: EntityId;
+  monsterId: number;
+  position: Position;
+  damage: number;
+  hpBefore: number;
+  /** After the ordinary damage/autopot path; net loss can differ from damage. */
+  hpAfter: number;
+  miss: boolean;
+  knockback: boolean;
+  hurtCooldownMs: number;
 }

@@ -4,7 +4,8 @@ The replay draws recorded Cosmic positions. It interpolates a monster's x/y
 coordinates only between observations containing the same living object ID and
 monster type. A new spawn appears at its first observation; a removed monster is
 not extrapolated into an invented position. HP changes remain discrete observed
-values, and damage labels report observed HP loss rather than invented damage rolls.
+values. Legacy recordings show observed HP loss; `combat-v1` recordings carry
+individual server hit events and packet damage lines.
 
 When present, `facingLeft` and `moving` select the monster's presentation direction
 and move/stand stance. Legacy traces infer movement only when recorded coordinates
@@ -37,7 +38,7 @@ approximation, not parity with official MapleStory monster AI. The renderer does
 not add that movement: it only presents positions the simulation actually recorded.
 Frozen earlier runs retain their original movement and rendering versions.
 
-## Player HP feedback
+## Legacy player HP feedback
 
 The overlay shows a player health bar, red floating HP-loss numbers, and green
 HP-recovery numbers. Values change at the first observation that records them;
@@ -59,6 +60,64 @@ renderer with the original map/character settings and
 `MAPLEBENCH_OVERLAY_ONLY=true`. Keep the frozen trial's original artifacts intact
 and identify the copy as a rerender of the same recorded run.
 
+## Combat trace v1
+
+New Cosmic observations include `combatTrace: "combat-v1"` and
+`character.motion`: airborne/climbing/swimming/crouching state, facing, movement
+intent, the remaining attack/hurt cooldowns, and the selected action name/start.
+The bridge reads the existing mechanics; it does not change damage, movement,
+Stance probability, hitboxes, or attack timing.
+
+- `combat_attack` records the selected WZ action, skill, facing, speed and the
+  existing plan's cooldown/hit delay. Its sequence number identifies the attack.
+- `monster_hit` is emitted immediately after `MapleMap.damageMonster` applies
+  damage and before disposal/XP. It carries the monster object/type, position,
+  HP before/after, actual HP loss and the server's killed flag. Synchronous hits
+  reference the attack sequence and include its individual packet rolls and
+  critical-line indices. These rolls can exceed remaining HP or differ from
+  damage after shared-handler adjustments. Delayed/unattributed applications
+  have `attackId: -1` and no invented damage lines.
+- `player_hit` records touch/fall source, damage or miss, HP before/after, and the
+  actual knockback decision after Stance/rope/death checks. HP after the ordinary
+  damage/autopot path is separate from the damage number. Skill HP costs do not
+  become incoming-hit events.
+
+Replay uses the recorded attack duration, stops an attack pose on knockback, and
+keeps the recorded facing during recoil. Airborne state replaces the old
+height-relative-to-camera guess. Individual outgoing rolls stack above each
+monster; incoming damage/misses appear in purple. Green numbers remain observed
+net HP recovery. The health bar continues to show discrete observed HP.
+
+A surviving monster plays WZ `hit1` after a damaging hit; only an explicit killed
+flag starts `die1`. Reaction frames use the asset service's WZ durations, saved as
+`mob-animations.json` beside the recording. Death presentation ends after that
+sequence; a disappearing monster or unrelated XP event cannot imply a kill.
+Snapshot-only tests can supply this timing file without assets or network access.
+
+The paper-doll patch resolves direct WZ action/frame references, including both
+seven-frame Brandish sequences and their signed delay magnitudes. It refuses
+chained/cyclic references. Hero C-1 now selects the `hero-combat-v1` bake; generate
+it on the runtime host after applying `scripts/patch-maplewright.mjs` and rebuilding
+`wzchar` with the repository's memory/job limits:
+
+```sh
+# From the runtime work directory, using legally supplied local v83 assets:
+maplewright/target/release/wzchar assets/Character.wz assets/Base.wz \
+  baked/hero-combat-v1 0 20000 30030 1040036,1060026,1072001,1402037
+```
+
+`node scripts/bootstrap-upstreams.mjs --patch-only` installs the overlay/hooks
+into already pinned checkouts without fetching either upstream. Normal bootstrap
+continues to fetch the locked revisions. Patch application is repeatable.
+
+This is a Cosmic run presented by Maplewright, not a recording of an official
+client. Positions between observations are interpolated. Skill-effect particles,
+weapon trails, damage-font sprites, invulnerability blinking, full Hero buffs,
+and more demanding encounters remain future work. The recorded hit delay is
+metadata: these ordinary Cosmic damage applications occur synchronously, and
+replay does not move them to a fabricated impact time. Existing frozen batches
+retain their original server, character bake and rendering code.
+
 ## Gameplay references and next fidelity checks
 
 Visually reviewed selected sections of these YouTube videos, rather than relying
@@ -76,18 +135,13 @@ on their descriptions:
   but this is a MapleStory Worlds recreation with different progression settings,
   not evidence of exact v83 physics or balance.
 
-The immediate implementation priorities from this comparison are:
+The implementation priorities from this comparison were:
 
-1. Record individual server hits, their source and target, and action/knockback
-   state. The current observation deltas cannot reconstruct Brandish's separate
-   hits or distinguish an impact from an HP-consuming skill. The fixed 800 ms
-   presentation attack window and height-inferred jump pose are also insufficient
-   for judging action locks and airborne reactions.
-2. Render the actual skill effects and character actions, plus monster hit/death
-   states. The current mob exporter chooses move/stand only, although the local
-   Roid WZ contains `hit1` and `die1` sections. Validate those states against server
-   events before adding animations; a removed monster alone is not a death event.
-   Preserve the readable HP overlay while developing the original-style feedback.
+1. Record individual server hits, source/target and action/knockback state.
+   Implemented in `combat-v1`; legacy traces retain their original limitations.
+2. Render skill actions/effects and monster hit/death states. Brandish body
+   sequences and WZ monster reactions now use the trace; effect particles and
+   weapon trails remain to be implemented.
 3. Validate a complete, explicitly controlled Hero build: combo/buff state and
    available tactical skills, followed by a hunting scenario that rewards grouping
    and repositioning. C-1 remains a useful mechanics check; its level-54 Roids and

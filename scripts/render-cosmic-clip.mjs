@@ -30,7 +30,34 @@ const cameraY = observations[0].character.position.y;
 const monsterSimulation = observations.some(o => o.monsterSimulation === 'ground-patrol-v1')
   ? ' / Ground-mob simulation' : '';
 let cameraX = observations[0].character.position.x;
-const damage = [];
+const combatTrace = observations.some(o => o.combatTrace === 'combat-v1');
+const combatAttacks = events.filter(e => e.kind === 'combat_attack');
+const monsterHits = events.filter(e => e.kind === 'monster_hit' && e.mapId === mapId);
+const playerHits = events.filter(e => e.kind === 'player_hit' && e.mapId === mapId);
+const monsterIds = [...new Set(observations.flatMap(o => o.monsters.map(m => m.monsterId)))];
+// Persist the asset service's actual WZ timings with the recording for repeatable presentation.
+const timingPath = join(input, 'mob-animations.json');
+const mobTimings = JSON.parse(await readFile(timingPath, 'utf8').catch(() => '{}'));
+if (combatTrace && process.env.MAPLEBENCH_SNAPSHOTS_ONLY !== 'true') {
+  const assetHost = process.env.MAPLEBENCH_ASSETD || '127.0.0.1:8820';
+  for (const id of monsterIds) {
+    if (mobTimings[id]) continue;
+    const response = await fetch(`http://${assetHost}/mob/${id}/index.txt`);
+    if (!response.ok) throw new Error(`Monster export failed: ${response.status}`);
+    const durations = {};
+    for (const line of (await response.text()).trim().split('\n')) {
+      const [stance, , delay] = line.split(/\s+/);
+      if (Number.isFinite(Number(delay))) durations[stance] = (durations[stance] || 0) + Math.max(1, Number(delay));
+    }
+    mobTimings[id] = durations;
+  }
+  await writeFile(timingPath, JSON.stringify(mobTimings, null, 2) + '\n');
+}
+const damage = combatTrace ? monsterHits.flatMap(hit => {
+  const lines = hit.damageLines?.length ? hit.damageLines : [hit.hpLoss];
+  return lines.map((amount, row) => ({tMs: hit.tMs, ...hit.position, amount, row,
+    rolled: Boolean(hit.damageLines?.length)}));
+}) : [];
 const playerHpChanges = [];
 for (let i = 1; i < observations.length; i++) {
   const before = observations[i - 1], after = observations[i];
@@ -40,7 +67,7 @@ for (let i = 1; i < observations.length; i++) {
   if (before.character.id === after.character.id && Number.isFinite(hpDelta) && hpDelta !== 0) {
     playerHpChanges.push({ tMs: after.nowMs, characterId: after.character.id, ...after.character.position, delta: hpDelta });
   }
-  for (const mob of before.monsters.filter(m => m.alive)) {
+  for (const mob of (combatTrace ? [] : before.monsters.filter(m => m.alive))) {
     const current = after.monsters.find(m => m.objectId === mob.objectId);
     const killed = !current && events.some(e => e.kind === 'xp_gain' && e.tMs > before.nowMs && e.tMs <= after.nowMs);
     const hpLoss = current ? mob.hp - current.hp : killed ? mob.hp : 0;
@@ -60,9 +87,10 @@ const walkPose = animations.walk1 ? 'walk1' : 'walk2';
 // wzchar normalizes stand2/walk2 to stand1/walk1; choose weapon stance explicitly.
 const attackPose = process.env.MAPLEBENCH_ATTACK_POSE || (/crusader|hero/i.test(charDir) ? 'swingT1' : 'swingO1');
 if (!animations[attackPose]?.length) throw new Error('Selected weapon attack pose is missing');
-function frameAt(stance, time) {
+function frameAt(stance, time, duration) {
   const fs = animations[stance];
-  let remaining = time % fs.reduce((s, f) => s + f.delay, 0);
+  const total = fs.reduce((s, f) => s + Math.max(1, f.delay), 0);
+  let remaining = duration > 0 ? Math.min(total - 0.001, Math.max(0, time) / duration * total) : time % total;
   for (const f of fs) { if (remaining < f.delay) return f.index; remaining -= f.delay; }
   return 0;
 }
@@ -90,18 +118,31 @@ for (let i = 0; i < frames; i++) {
   const camx = Math.max(0, Math.min(mapWidth - 1024, Math.round(cameraX) + offx - 512));
   const camy = Math.max(0, Math.min(mapHeight - 768, Math.round(cameraY) + offy - 384));
   const moving = Math.abs(q.x - p.x) > 1;
-  if (moving) facing = Math.sign(q.x - p.x);
+  const motion = a.character.motion;
+  if (motion) facing = motion.facingLeft ? -1 : 1;
+  else if (moving) facing = Math.sign(q.x - p.x);
   const action = actions.findLast(e => e.tMs <= t);
-  const attacking = action && ['basic_attack', 'use_skill'].includes(action.action.type) && t - action.tMs < 800;
+  const attack = combatAttacks.findLast(e => e.characterId === a.character.id && e.mapId === mapId && e.tMs <= t);
+  const interrupted = attack && playerHits.some(e => e.characterId === a.character.id && e.knockback && (e.tMs > attack.tMs || (e.tMs === attack.tMs && e.seq > attack.seq)) && e.tMs <= t);
+  const attacking = combatTrace ? Boolean(attack && !interrupted && t - attack.tMs < attack.cooldownMs
+    && !(a.nowMs >= attack.tMs && motion?.attackCooldownMs === 0))
+    : action && ['basic_attack', 'use_skill'].includes(action.action.type) && t - action.tMs < 800;
   if (attacking) {
-    const target = a.monsters.find(m => m.objectId === action.action.targetId);
-    if (target && target.position.x !== x) facing = Math.sign(target.position.x - x);
+    if (attack) facing = attack.facingLeft ? -1 : 1;
+    else {
+      const target = a.monsters.find(m => m.objectId === action.action.targetId);
+      if (target && target.position.x !== x) facing = Math.sign(target.position.x - x);
+    }
   }
-  const selectedAttackPose = action?.action.skillId === 1121008 && animations.brandish1 ? 'brandish1' : attackPose;
-  const stance = attacking ? selectedAttackPose : y < cameraY - 3 ? 'jump' : moving ? walkPose : standPose;
-  const pose = frameAt(stance, attacking ? t - action.tMs : t - start);
+  const selectedAttackPose = attack && animations[attack.actionName] ? attack.actionName
+    : action?.action.skillId === 1121008 && animations.brandish1 ? 'brandish1' : attackPose;
+  const airborne = motion ? motion.inAir : y < cameraY - 3;
+  const stance = attacking ? selectedAttackPose : airborne ? 'jump'
+    : motion?.crouching && animations.prone ? 'prone'
+    : (motion ? motion.moving : moving) ? walkPose : standPose;
+  const pose = frameAt(stance, attacking ? t - (attack?.tMs ?? action.tMs) : t - start, attacking ? attack?.cooldownMs : undefined);
   const lines = [`player ${x.toFixed(2)} ${y.toFixed(2)} ${stance} ${pose} ${facing}`, `camera ${cameraX.toFixed(2)} ${cameraY}`];
-  for (const m of a.monsters.filter(m => m.alive)) {
+  for (const m of a.monsters.filter(m => m.alive && !monsterHits.some(h => h.objectId === m.objectId && h.monsterId === m.monsterId && h.killed && h.tMs <= t))) {
     // Interpolate only an existing monster's two observed positions. A spawn/death
     // boundary has no second position and must never create an invented path.
     const nextMob = b.monsters.find(n => n.objectId === m.objectId && n.monsterId === m.monsterId && n.alive);
@@ -116,17 +157,28 @@ for (let i = 0; i < frames; i++) {
     const mobMoving = typeof m.moving === 'boolean' ? m.moving : Math.hypot(dx, dy) > 0.5;
     const mobFacing = typeof m.facingLeft === 'boolean' ? (m.facingLeft ? -1 : 1)
       : Math.abs(dx) > 0.5 ? Math.sign(dx) : previous?.facing || -1;
-    const mobStance = mobMoving ? 'move' : 'stand';
-    const phaseStart = previous?.stance === mobStance ? previous.phaseStart : t;
+    const recentHit = monsterHits.findLast(h => h.objectId === m.objectId && h.monsterId === m.monsterId
+      && h.hpLoss > 0 && !h.killed && h.tMs <= t && t - h.tMs < (mobTimings[m.monsterId]?.hit1 || 0));
+    const mobStance = recentHit ? 'hit1' : mobMoving ? 'move' : 'stand';
+    const phaseStart = recentHit ? recentHit.tMs : previous?.stance === mobStance ? previous.phaseStart : t;
     mobPoses.set(key, { stance: mobStance, facing: mobFacing, phaseStart, lastFrame: i });
     lines.push(`mob ${m.objectId} ${m.monsterId} ${mx.toFixed(2)} ${my.toFixed(2)} ${Math.max(1, Math.ceil(100 * m.hp / m.maxHp))} ${mobStance} ${mobFacing} ${(t - phaseStart).toFixed(2)}`);
   }
+  for (const death of monsterHits.filter(h => h.killed && h.tMs <= t && t - h.tMs < (mobTimings[h.monsterId]?.die1 || 0))) {
+    const prior = observations.findLast(o => o.nowMs <= death.tMs)?.monsters.find(m => m.objectId === death.objectId);
+    const direction = prior?.facingLeft === false ? 1 : -1;
+    lines.push(`mob ${death.objectId} ${death.monsterId} ${death.position.x} ${death.position.y} 0 die1 ${direction} ${(t - death.tMs).toFixed(2)}`);
+  }
   await writeFile(join(out, `frame-${String(i).padStart(4, '0')}.tsv`), lines.join('\n') + '\n');
   const xp = events.filter(e => e.kind === 'xp_gain' && e.tMs >= start && e.tMs <= t).reduce((s, e) => s + e.amount, 0);
-  const attackName = action?.action.type === 'use_skill'
-    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST', 1111008: 'SHOUT', 1121008: 'BRANDISH' }[action.action.skillId] || `SKILL ${action.action.skillId}`)
+  const selectedSkill = attack?.skillId ?? action?.action.skillId;
+  const attackName = selectedSkill
+    ? ({ 1001004: 'POWER STRIKE', 1001005: 'SLASH BLAST', 1111008: 'SHOUT', 1121008: 'BRANDISH' }[selectedSkill] || `SKILL ${selectedSkill}`)
     : 'BASIC ATTACK';
-  const label = attacking ? attackName : moving ? (facing > 0 ? 'MOVE RIGHT' : 'MOVE LEFT') : 'OBSERVE';
+  const lastGroundedAt = observations.findLast(o => o.character.id === a.character.id && o.nowMs <= t && o.character.motion?.inAir === false)?.nowMs ?? -Infinity;
+  const recoil = airborne && playerHits.some(h => h.characterId === a.character.id && h.knockback
+    && h.tMs >= lastGroundedAt && h.tMs <= t && t - h.tMs < h.hurtCooldownMs);
+  const label = attacking ? attackName : recoil ? 'KNOCKBACK' : airborne ? 'AIRBORNE' : moving ? (facing > 0 ? 'MOVE RIGHT' : 'MOVE LEFT') : 'OBSERVE';
   const job = ({ 100: 'Warrior', 110: 'Fighter', 111: 'Crusader', 112: 'Hero' })[a.character.jobId] || `Job ${a.character.jobId}`;
   const hud = `MAPLEBENCH  /  ${hudText(mapName).toUpperCase()}\\NModel: ${hudText(controller.model)}\\NController: ${hudText(controller.name)}\\NLv ${a.character.level} ${job}   HP ${a.character.hp}/${a.character.maxHp}   XP +${xp}\\N${label}   |   ${((t - start) / 1000).toFixed(1)}s`;
   ass.push(`Dialogue: 0,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},HUD,,0,0,0,,${hud}`);
@@ -145,11 +197,18 @@ for (let i = 0; i < frames; i++) {
   for (const hit of damage.filter(d => t >= d.tMs && t - d.tMs < 850)) {
     const age = t - hit.tMs;
     const dx = Math.round((hit.x + offx - camx) * 800 / 1024);
-    const dy = Math.round((hit.y + offy - camy - 68 - age * 0.035) * 600 / 768);
+    const dy = Math.round((hit.y + offy - camy - 68 - (hit.row || 0) * 29 - age * 0.035) * 600 / 768);
     const alpha = Math.round(Math.max(0, (age - 500) / 350) * 255).toString(16).padStart(2, '0');
-    ass.push(`Dialogue: 1,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},Damage,,0,0,0,,{\\pos(${dx},${dy})\\alpha&H${alpha}&}-${hit.amount} HP`);
+    ass.push(`Dialogue: 1,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},Damage,,0,0,0,,{\\pos(${dx},${dy})\\alpha&H${alpha}&}${hit.rolled ? (hit.amount === 0 ? "MISS" : hit.amount) : `-${hit.amount} HP`}`);
   }
-  for (const change of playerHpChanges.filter(h => h.characterId === a.character.id && t >= h.tMs && t - h.tMs < 1100)) {
+  for (const hit of playerHits.filter(h => h.characterId === a.character.id && t >= h.tMs && t - h.tMs < 1100)) {
+    const age = t - hit.tMs;
+    const px = Math.round((hit.position.x + offx - camx) * 800 / 1024);
+    const py = Math.round((hit.position.y + offy - camy - 90 - age * 0.04) * 600 / 768);
+    const opacity = Math.round(Math.max(0, (age - 750) / 350) * 255).toString(16).padStart(2, '0');
+    ass.push(`Dialogue: 3,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},PlayerHP,,0,0,0,,{\\pos(${px},${py})\\c&HFF80D4&\\alpha&H${opacity}&}${hit.miss ? 'MISS' : hit.damage}`);
+  }
+  for (const change of playerHpChanges.filter(h => (!combatTrace || h.delta > 0) && h.characterId === a.character.id && t >= h.tMs && t - h.tMs < 1100)) {
     const age = t - change.tMs;
     const px = Math.round((change.x + offx - camx) * 800 / 1024);
     const py = Math.round((change.y + offy - camy - 88 - age * 0.04) * 600 / 768);
@@ -158,7 +217,7 @@ for (let i = 0; i < frames; i++) {
     ass.push(`Dialogue: 3,${stamp(i * 1000 / fps)},${stamp((i + 1) * 1000 / fps)},PlayerHP,,0,0,0,,{\\pos(${px},${py})\\c&H${color}&\\alpha&H${alpha}&}${change.delta > 0 ? '+' : ''}${change.delta} HP`);
   }
 }
-ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\N${hudText(fixtureLabel)}${monsterSimulation}\\NInterpolated movement and presentation poses\\NHP labels: observed changes`);
+ass.push(`Dialogue: 0,${stamp(0)},${stamp(frames * 1000 / fps)},HUD,,0,0,0,,{\\an1\\fs14}Cosmic server run / Maplewright replay\\N${hudText(fixtureLabel)}${monsterSimulation}\\N${combatTrace ? 'Server combat events / WZ reaction timing' : 'Interpolated movement and presentation poses'}\\N${combatTrace ? 'Damage: server hits / Healing: observed HP' : 'HP labels: observed changes'}`);
 await writeFile(join(out, 'overlay.ass'), ass.join('\n') + '\n');
 if (process.env.MAPLEBENCH_SNAPSHOTS_ONLY === 'true') {
   console.log('Replay snapshots ready:', out);

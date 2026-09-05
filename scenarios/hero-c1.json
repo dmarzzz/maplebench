@@ -16,5 +16,5 @@
   "reset": {"level": 130, "job": 112, "str": 500, "dex": 120, "int": 4, "luk": 4, "hp": 8000, "mp": 2000, "maxhp": 8000, "maxmp": 2000, "exp": 0, "meso": 1000},
   "objective": {"type": "xp"},
   "render_map": "lab-c1",
-  "render_character": "crusader"
+  "render_character": "hero-combat-v1"
 }
