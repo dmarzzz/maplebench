@@ -55,6 +55,7 @@ The demo command scores a tiny example server event stream. It is deliberately i
 - [x] Define server-authoritative episode/event schema.
 - [x] Implement total XP and rolling XP-rate scorers.
 - [x] Define narrow TypeScript SDK contract.
+- [x] Identify concrete Cosmic movement/combat integration methods.
 - [ ] Pin and boot Cosmic/bot fork in a reproducible local deployment.
 - [ ] Implement `observe` + `move_to` + `basic_attack` adapter path.
 - [ ] Log XP events from normal Cosmic reward logic.

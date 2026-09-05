@@ -1,0 +1,28 @@
+--- a/src/main/java/server/bots/BotCombatManager.java
++++ b/src/main/java/server/bots/BotCombatManager.java
+@@
+     static AttackPlan planAttack(BotEntry entry, Character bot, Monster target) {
+         long startedAt = System.nanoTime();
+         try {
+             List<AttackPlan> candidates = new ArrayList<>(3);
+@@
+         }
+     }
++
++    /**
++     * MapleBench/control-plane primitive: plan exactly the attack requested by
++     * the caller instead of selecting the bot AI's highest-scoring attack.
++     *
++     * skillId == 0 means a normal/basic attack. A non-zero skill id is planned
++     * only if that exact learned skill can currently produce a legal attack.
++     * Returning null lets the benchmark adapter reject an invalid/out-of-range
++     * action without substituting a different policy on the agent's behalf.
++     */
++    static AttackPlan planRequestedAttack(BotEntry entry, Character bot, Monster target, int skillId) {
++        if (skillId == 0) {
++            return planBasicAttack(bot, target);
++        }
++        return planSkillAttack(entry, bot, target, skillId);
++    }
+ 
+     private static List<Integer> cachedAttackSkillIds(BotEntry entry) {
