@@ -11,6 +11,7 @@ import argparse
 import array
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import pwd
@@ -28,7 +29,7 @@ import zipfile
 
 from full_client_collect import collect, DATABASE
 from full_client_freeze import verify_manifest
-from full_client_score import (SOURCE, JSON_LIMIT, parse_json, read_artifact_bytes,
+from full_client_score import (SOURCE, JSON_LIMIT, EvidenceError, parse_json, read_artifact_bytes,
                                open_verified_artifact, same_json, verify_trial_bundle)
 from full_client_trial import atomic_json, private_directory, read_private_json, validate_spec
 
@@ -41,6 +42,10 @@ MAX_VIDEO = 512 * 1024 * 1024
 ENV_NAMES = ("MAPLEBENCH_TRIAL_ID", "MAPLEBENCH_SERVER_INSTANCE_ID",
              "MAPLEBENCH_PERSIST_CHARACTER_ID", "MAPLEBENCH_PERSIST_ACCOUNT_ID",
              "MAPLEBENCH_SAVE_JOURNAL")
+# The navigation window includes capture tail and upload. These fixed scenario
+# fields make cold-cache verification speed irrelevant to the scored session.
+SETTLEMENT_POLICY = {"capture_tail_ms": 2000, "upload_after_program_ms": 5000,
+                     "disconnect_after_program_ms": 5000, "logout_after_disconnect_ms": 5000}
 
 
 class RuntimeErrorCode(ValueError):
@@ -279,7 +284,8 @@ class CosmicRuntime:
         require(result[0] != result[1], "distinct_inherited_locks_required")
         return result
 
-    def frozen(self):
+    def load_pins(self):
+        """Read only small immutable configuration; never inventory live assets."""
         self.scenario = parse_json(ref_bytes(self.config["scenario"]))
         duration = self.scenario.get("program_seconds")
         require(type(duration) is int and duration in (22, 60)
@@ -291,8 +297,22 @@ class CosmicRuntime:
                             "program_ms": duration * 1000, "run_ms": (duration + 53) * 1000,
                             "actions": 80 if duration == 22 else 240, "sdk_requests": 100 if duration == 22 else 600}
         require(same_json(self.scenario.get("budgets"), expected_budgets), "frozen_bridge_budgets_mismatch")
+        require(same_json(self.scenario.get("settlement_policy"), SETTLEMENT_POLICY),
+                "invalid_settlement_policy")
         self.baseline = parse_json(ref_bytes(self.config["baseline_snapshot"]))
-        manifest = parse_json(ref_bytes(self.config["runtime_manifest"]))
+        self.manifest = parse_json(ref_bytes(self.config["runtime_manifest"]))
+        absolute(self.manifest["working_directory"])
+        absolute(self.manifest["wz_path"])
+        db = self.config["mysql"]
+        require(self.baseline.get("account_logged_in") == 0 and all(
+            self.baseline["character"].get(k) == db[k] for k in ("character_id", "account_id")),
+            "baseline_identity_mismatch")
+
+    def frozen(self):
+        """Full byte inventory; callers must keep this outside the online session."""
+        require(self.account_state() == 0, "inventory_requires_offline_account")
+        self.load_pins()
+        manifest = self.manifest
         absolute(manifest["working_directory"])
         absolute(manifest["wz_path"])
         verify_manifest(manifest, docker_command=[self.config["docker"]],
@@ -303,7 +323,6 @@ class CosmicRuntime:
                                     "server_jar", maximum=512 * 1024 * 1024) as stream:
             with zipfile.ZipFile(stream) as archive:
                 require(NATIVE_CLASS in archive.namelist(), "native_persistence_class_missing")
-        self.manifest = manifest
         cosmic, web = self.unit("cosmic"), self.unit("web")
         require(pwd.getpwnam(cosmic.get("User", "")).pw_uid != 0
                 and pwd.getpwnam(web.get("User", "")).pw_uid != 0
@@ -311,15 +330,17 @@ class CosmicRuntime:
         self.web_identity(web)
         ref_bytes(self.config["java"], MAX_SQL)
         require(os.access(self.config["java"]["path"], os.X_OK), "java_executable_required")
-        db = self.config["mysql"]
-        require(self.baseline.get("account_logged_in") == 0 and all(
-            self.baseline["character"].get(k) == db[k] for k in ("character_id", "account_id")),
-            "baseline_identity_mismatch")
         # Validate SQL bytes before considering the backend ready, never execute here.
         ref_bytes(self.config["baseline"], MAX_SQL)
         ref_bytes(self.config["orchestrator"])
 
-    def web_identity(self, unit):
+    def online_identity(self):
+        """Bounded process/UID/environment checks without scanning WZ/NX/JAR bytes."""
+        web = self.unit("web")
+        require(web.get("ActiveState") == "active", "unprivileged_services_required")
+        self.web_identity(web, verify_bytes=False)
+
+    def web_identity(self, unit, *, verify_bytes=True):
         """Bind frozen files to the actual serving process and its import roots."""
         manifest = self.manifest
         root = absolute(manifest["client_js"]["path"]).parent.parent
@@ -344,7 +365,8 @@ class CosmicRuntime:
             asset_targets.add(str(target))
         require(asset_targets and asset_targets == {path for path in extras if Path(path).suffix == ".nx"},
                 "client_asset_inventory_mismatch")
-        ref_bytes(self.config["web_python"], MAX_SQL)
+        if verify_bytes:
+            ref_bytes(self.config["web_python"], MAX_SQL)
         pid = int(unit.get("MainPID", "0"))
         require(pid > 1, "web_process_missing")
         require(self.host.executable(pid) == self.config["web_python"]["path"], "web_interpreter_mismatch")
@@ -472,7 +494,14 @@ class CosmicRuntime:
             self.host.sleep()
 
     def status(self):
-        self.frozen()
+        if (self.context.get("recovery") and self.state) or self.account_state() != 0:
+            # Recovery must reach ordinary disconnect before any large read.
+            self.load_pins()
+            if self.context.get("recovery"):
+                self.ownership()
+            self.online_identity()
+        else:
+            self.frozen()
         world, worker, cosmic = self.unit("world"), self.unit("worker"), self.unit("cosmic")
         admin = self.admin("status")
         session, bridge = admin.get("session", {}), admin.get("bridge", {})
@@ -622,6 +651,13 @@ class CosmicRuntime:
         return {"ordinary_login": True, "login_at_ms": at}
 
     def run_controller(self):
+        """One API attempt followed by ordinary logout, before artifact analysis.
+
+        The runner's pending run_controller operation authorizes this complete
+        operation. Each external action still has its own durable backend intent.
+        A later disconnect phase only verifies the saved receipt; it never retries
+        an uncertain navigation or replays a model request.
+        """
         self.owned_server()
         require(self.state["session"].get("login_at_ms") and self.account_state() == 2,
                 "ordinary_login_required")
@@ -638,23 +674,52 @@ class CosmicRuntime:
         require(self.scenario.get("instructions_sha256") == hashlib.sha256(prompt.encode()).hexdigest()
                 and self.scenario.get("reasoning") == {"effort": "low"}, "frozen_prompt_mismatch")
         self.intent("run_controller")
-        self.admin("start", model=spec["model"], duration_seconds=duration,
-                   run_id=self.run_id, request_id=self.run_id, total_token_limit=budgets["max_total_tokens"],
-                   docker_image_id=self.manifest["docker_image_id"],
-                   trial_context={"scenario_fingerprint": spec["scenario_fingerprint"],
-                                  "baseline_sha256": spec["baseline_sha256"]})
-        def completed():
-            self.owned_server()
-            status = self.admin("status")
-            run = status.get("bridge", {}).get("run") or {}
-            require(run.get("id") == self.run_id, "controller_run_identity_lost")
-            if run.get("status") in ("failed", "timed_out", "cancelled"):
-                raise RuntimeErrorCode("controller_run_failed")
-            return (run.get("status") == "completed" and run.get("evidenceStatus") == "saved"
-                    and run.get("recordingStatus") == "saved"
-                    and status.get("session", {}).get("artifactsSettled") is True)
-        self.wait_for(completed)
-        self.copy_run()
+        try:
+            self.admin("start", model=spec["model"], duration_seconds=duration,
+                       run_id=self.run_id, request_id=self.run_id, total_token_limit=budgets["max_total_tokens"],
+                       docker_image_id=self.manifest["docker_image_id"],
+                       trial_context={"scenario_fingerprint": spec["scenario_fingerprint"],
+                                      "baseline_sha256": spec["baseline_sha256"]})
+            terminal_seen = None
+            def completed():
+                nonlocal terminal_seen
+                self.owned_server()
+                self.online_identity()
+                status = self.admin("status")
+                run = status.get("bridge", {}).get("run") or {}
+                require(run.get("id") == self.run_id, "controller_run_identity_lost")
+                if run.get("status") in ("failed", "timed_out", "cancelled"):
+                    raise RuntimeErrorCode("controller_run_failed")
+                if run.get("status") == "completed":
+                    now = self.host.now()
+                    terminal_seen = now if terminal_seen is None else terminal_seen
+                    require(now - terminal_seen <= SETTLEMENT_POLICY["upload_after_program_ms"],
+                            "settlement_upload_timeout")
+                return (status if run.get("status") == "completed" and run.get("workerActive") is False
+                        and run.get("evidenceStatus") == "saved" and run.get("recordingStatus") == "saved"
+                        and status.get("session", {}).get("artifactsSettled") is True else None)
+            status = self.wait_for(completed)
+            observed = self.host.now()
+            self.state["upload_status"] = {"schema_version": 1, "source": "full_client_runtime_status",
+                                            **self.identity(), "observed_at_ms": observed, "status": status}
+            self.state["session"]["upload_observed_at_ms"] = observed
+            # This persists the exact observed status with disconnect intent and
+            # issues navigation before copying or verifying any controller file.
+            self.request_ordinary_disconnect()
+        except Exception:
+            # Bounded ordinary disconnection is part of the authorized online
+            # operation even when API outcome is uncertain. Never stop/reset the
+            # server here; preserve the original failure and quarantine on return.
+            if not self.state.get("ordinary_logout") and "disconnect" not in self.state["intents"]:
+                try:
+                    self.settle_owned_controller()
+                    self.request_ordinary_disconnect()
+                    self.preserve_failure_evidence()
+                except Exception:
+                    self.state["failure_disconnect_unconfirmed"] = True
+                    self.persist()
+            raise
+        self.copy_controller_metadata()
         result = self.state["result"]
         api = result["api"]
         require(result.get("source") == "full-client-trial" and result["controller"]["id"] == self.run_id
@@ -673,6 +738,7 @@ class CosmicRuntime:
             self.state["session"][field] = started + timeline[offset]
         require(started >= self.state["session"]["login_at_ms"] and result["timing"]["endedAtMs"] <= self.host.now(),
                 "controller_host_clock_mismatch")
+        self.validate_settlement()
         return {"status": "completed", "requested_model": spec["model"], "returned_model": api["model"],
                 "api_requests": 1, "output_tokens": api["usage"]["output_tokens"],
                 "total_tokens": api["usage"]["total_tokens"], "actions": result["program"]["actions"],
@@ -705,7 +771,9 @@ class CosmicRuntime:
         require(raw == program["code"].encode() and arts["program"]["sha256"] == result["programSha256"],
                 "executed_program_mismatch")
 
-    def copy_run(self):
+    def copy_controller_metadata(self):
+        require(self.account_state() == 0 and self.state.get("ordinary_logout"),
+                "controller_collection_requires_logout")
         source = absolute(self.config["relay_output_root"]) / self.run_id
         require(source.resolve() == source and source.is_dir(), "run_artifacts_missing")
         names = {"result": "result.json", "api_request": "api-request-body.json",
@@ -724,6 +792,14 @@ class CosmicRuntime:
                 "recording_upload_receipt_missing")
         require(recording.get("capture_sha256") == self.state["artifacts"]["capture"]["sha256"],
                 "capture_metadata_hash_mismatch")
+        self.state["artifacts"]["upload_status"] = self.artifact("upload-status.json", self.state["upload_status"])
+
+    def copy_run(self):
+        """Large recording reads and probes run only after ordinary logout."""
+        require(self.account_state() == 0 and self.state.get("ordinary_logout"),
+                "controller_collection_requires_logout")
+        source = absolute(self.config["relay_output_root"]) / self.run_id
+        recording = parse_json(read_artifact_bytes(self.directory, self.state["artifacts"]["recording"], "recording"))
         path = source / "video.webm"
         with open_verified_artifact(source, {"path": path.name, "sha256": recording["sha256"]},
                                     "video", maximum=MAX_VIDEO) as stream:
@@ -736,10 +812,20 @@ class CosmicRuntime:
                 os.fsync(out.fileno())
         self.state["artifacts"]["video"] = {"path": "video.webm", "sha256": recording["sha256"]}
         from full_client_publish import _probe_video, verify_capture_bundle
-        probe = _probe_video(self.directory / "video.webm", recording["sha256"]) | {"video_sha256": recording["sha256"]}
+        try:
+            probe = _probe_video(self.directory / "video.webm", recording["sha256"]) | {"video_sha256": recording["sha256"]}
+        except EvidenceError:
+            raise RuntimeErrorCode("recording_probe_failed") from None
+        require(type(recording.get("duration_ms")) in (int, float)
+                and math.isfinite(recording["duration_ms"])
+                and abs(probe["duration_ms"] - recording["duration_ms"]) <= 100,
+                "recording_duration_mismatch")
         self.state["artifacts"]["video_probe"] = self.artifact("video-probe.json", probe)
-        verify_capture_bundle({"result": self.state["result"], "video": recording,
-                               "artifacts": self.state["artifacts"]}, self.directory)
+        try:
+            verify_capture_bundle({"result": self.state["result"], "video": recording,
+                                   "artifacts": self.state["artifacts"]}, self.directory)
+        except EvidenceError:
+            raise RuntimeErrorCode("capture_verification_failed") from None
 
     @staticmethod
     def read_stable(path, maximum):
@@ -755,20 +841,29 @@ class CosmicRuntime:
                     for key in fields), "artifact_changed_during_collection")
             return raw
 
-    def disconnect(self):
+    def request_ordinary_disconnect(self):
+        """One journaled ordinary navigation; never automatically reissue it."""
         self.owned_server()
-        self.intent("disconnect")
+        require("disconnect" not in self.state["intents"], "operation_already_attempted")
         requested = self.host.now()
         self.state["session"]["disconnect_requested_at_ms"] = requested
-        self.persist()
-        self.admin("disconnect")
+        self.intent("disconnect")
         def offline():
             self.owned_server()
+            self.online_identity()
             session = self.admin("status").get("session", {})
             return (session.get("state") == "waiting" and session.get("fresh") is True
                     and session.get("artifactsSettled") is True and self.account_state() == 0)
-        self.wait_for(offline)
+        deadline = self.host.deadline
+        self.host.deadline = min(deadline, time.monotonic() + SETTLEMENT_POLICY["logout_after_disconnect_ms"] / 1000)
+        try:
+            self.admin("disconnect")
+            self.wait_for(offline)
+        finally:
+            self.host.deadline = deadline
         logged_out = self.host.now()
+        require(0 <= logged_out - requested <= SETTLEMENT_POLICY["logout_after_disconnect_ms"],
+                "settlement_logout_timeout")
         rows = [parse_json(row) for row in self.read_stable(Path(self.state["native_directory"]) / "save.jsonl", JSON_LIMIT).splitlines()]
         require(rows and all(row.get("kind") == "save_committed" and all(row.get(k) == v for k, v in self.identity().items())
                             for row in rows), "native_save_failure_or_identity_mismatch")
@@ -777,12 +872,66 @@ class CosmicRuntime:
         self.state["session"]["logged_out_at_ms"] = logged_out
         self.state["committed_at_ms"] = selected[0]["committed_at_ms"]
         self.event("logged_out", logged_out)
+        self.state["ordinary_logout"] = {"schema_version": 1, "source": "cosmic_ordinary_disconnect",
+                                          **self.identity(), "disconnect_requested_at_ms": requested,
+                                          "logged_out_at_ms": logged_out,
+                                          "save_committed_at_ms": self.state["committed_at_ms"]}
+        self.persist()
+        return self.disconnect()
+
+    def disconnect(self):
+        """Verify a durable ordinary logout receipt; this phase never navigates."""
+        self.owned_server()
+        require(self.account_state() == 0 and self.state.get("ordinary_logout")
+                and "disconnect" in self.state["intents"], "normal_committed_logout_required")
+        expected = {"schema_version": 1, "source": "cosmic_ordinary_disconnect", **self.identity(),
+                    "disconnect_requested_at_ms": self.state["session"]["disconnect_requested_at_ms"],
+                    "logged_out_at_ms": self.state["session"]["logged_out_at_ms"],
+                    "save_committed_at_ms": self.state["committed_at_ms"]}
+        require(same_json(self.state["ordinary_logout"], expected), "ordinary_logout_receipt_mismatch")
         return {"normal_disconnect": True, "save_committed_at_ms": self.state["committed_at_ms"]}
+
+    def validate_settlement(self):
+        """Bind actual offline artifacts to the frozen, identical settlement policy."""
+        require(same_json(self.scenario.get("settlement_policy"), SETTLEMENT_POLICY),
+                "invalid_settlement_policy")
+        result, session = self.state["result"], self.state["session"]
+        program_end = result["timing"]["startedAtMs"] + result["timeline"]["program_ended_ms"]
+        upload, requested, offline = (session[name] for name in
+            ("upload_observed_at_ms", "disconnect_requested_at_ms", "logged_out_at_ms"))
+        require(all(type(value) is int and 0 <= value <= 2**53 - 1
+                    for value in (program_end, upload, requested, offline)), "invalid_settlement_timestamps")
+        require(program_end <= upload <= requested
+                and upload - program_end <= SETTLEMENT_POLICY["upload_after_program_ms"]
+                and requested - program_end <= SETTLEMENT_POLICY["disconnect_after_program_ms"]
+                and 0 <= offline - requested <= SETTLEMENT_POLICY["logout_after_disconnect_ms"],
+                "settlement_interval_exceeded")
+        observation = self.state["upload_status"]
+        require(all(observation.get(key) == value for key, value in self.identity().items())
+                and observation.get("schema_version") == 1 and observation.get("source") == "full_client_runtime_status"
+                and observation.get("observed_at_ms") == upload, "settlement_status_mismatch")
+        status = observation["status"]
+        run = status.get("bridge", {}).get("run") or {}
+        require(run.get("id") == self.run_id and run.get("status") == "completed"
+                and run.get("workerActive") is False and run.get("evidenceStatus") == "saved"
+                and run.get("recordingStatus") == "saved"
+                and status.get("session", {}).get("artifactsSettled") is True, "settlement_status_mismatch")
+        capture = parse_json(read_artifact_bytes(self.directory, self.state["artifacts"]["capture"], "capture"))
+        clock = capture["clock"]
+        times = (capture["end_wall_ms"], clock["server_received_ms"], clock["client_sent_ms"])
+        require(all(type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 2**53 - 1
+                    for value in times), "invalid_settlement_timestamps")
+        end_upper = times[0] + times[1] - times[2]
+        require(end_upper <= program_end + SETTLEMENT_POLICY["capture_tail_ms"],
+                "settlement_capture_tail_exceeded")
 
     def collect_final(self):
         self.owned_server()
         require(self.state.get("committed_at_ms") and self.account_state() == 0, "normal_committed_logout_required")
         self.intent("collect_final")
+        self.disconnect()
+        self.validate_settlement()
+        self.copy_run()
         final = self.host.snapshot(self.config["mysql"], self.run_id)
         self.event("collection_completed", final["captured_at_ms"])
         arts = self.state["artifacts"]
@@ -855,21 +1004,26 @@ class CosmicRuntime:
         status = self.wait_for(quiescent)
         run = status["bridge"]["run"]
         if run.get("status") != "completed" or run.get("recordingStatus") != "saved":
-            # Preserve available failed evidence before acknowledging navigation.
-            # release_failed_run retains original bridge files, including partial
-            # recordings; no file removal or successful-run relabel occurs here.
-            source = absolute(self.config["relay_output_root"]) / self.run_id
-            if not self.state.get("failure_evidence_preserved"):
-                for filename in ("controller.json", "failure.json", "api-request.json", "api-request-body.json",
-                                 "api-response.json", "result.json", "recording.json", "capture.json", "cancel.json"):
-                    path = source / filename
-                    if path.exists():
-                        self.artifact("failure-" + filename, raw=self.read_stable(path, JSON_LIMIT))
-                self.artifact("failure-cleanup-status.json", status)
-                self.state["failure_evidence_preserved"] = True
+            # Persist the actual status before acknowledging failure. The bridge
+            # retains all original files; copying them must wait until offline.
+            if not self.state.get("failure_cleanup_status"):
+                self.state["failure_cleanup_status"] = status
                 self.persist()
             if run.get("failureAcknowledged") is not True:
                 self.admin("release_failed_run", run_id=self.run_id)
+
+    def preserve_failure_evidence(self):
+        require(self.account_state() == 0, "controller_collection_requires_logout")
+        if self.state.get("failure_cleanup_status") and not self.state.get("failure_evidence_preserved"):
+            source = absolute(self.config["relay_output_root"]) / self.run_id
+            for filename in ("controller.json", "failure.json", "api-request.json", "api-request-body.json",
+                             "api-response.json", "result.json", "recording.json", "capture.json", "cancel.json"):
+                path = source / filename
+                if path.exists():
+                    self.artifact("failure-" + filename, raw=self.read_stable(path, JSON_LIMIT))
+            self.artifact("failure-cleanup-status.json", self.state["failure_cleanup_status"])
+            self.state["failure_evidence_preserved"] = True
+            self.persist()
 
     def cleanup(self):
         # Recovery can encounter a start whose response was lost. Native env plus
@@ -885,11 +1039,16 @@ class CosmicRuntime:
                 require(unit.get("InvocationID") == self.state["invocation_id"], "server_instance_ownership_lost")
         self.settle_owned_controller()
         if not self.stopped(unit):
+            # Explicit recovery may retry an uncertain navigation, but its own
+            # intent is durable and it can never produce a valid trial receipt.
+            self.state.setdefault("recovery_disconnect_requests", []).append(self.host.now())
+            self.persist()
             self.admin("disconnect")
             self.wait_for(lambda: self.account_state() == 0)
             self.host.command([self.config["systemctl"], "stop", self.config["services"]["cosmic"]])
         require(self.stopped(self.unit("cosmic")) and self.account_state() == 0,
                 "cleanup_requires_stopped_offline")
+        self.preserve_failure_evidence()
         if self.state.get("dropin"):
             path = absolute(self.state["dropin"])
             if path.exists():
@@ -923,7 +1082,11 @@ class CosmicRuntime:
         spec = validate_spec(context["request"])
         require(spec["baseline_sha256"] == self.config["baseline"]["sha256"]
                 and spec["scenario_fingerprint"] == self.config["scenario"]["sha256"], "frozen_spec_mismatch")
-        self.frozen()
+        if operation in ("run_controller", "disconnect", "cleanup"):
+            self.load_pins()
+            self.online_identity()
+        else:
+            self.frozen()
         require(same_json(self.scenario.get("trial_budgets"), spec["budgets"]), "scenario_trial_budgets_mismatch")
         if self.state is None:
             if operation == "cleanup":
@@ -935,10 +1098,27 @@ class CosmicRuntime:
                           "server_instance_id": uuid.uuid4().hex, "intents": [], "events": [],
                           "session": {}, "artifacts": {}, "publication_eligible": False}
             self.persist()
+        if operation == "login":
+            self.state["prelogin_frozen"] = {"scenario_sha256": self.config["scenario"]["sha256"],
+                                             "manifest_sha256": self.config["runtime_manifest"]["sha256"],
+                                             "checked_at_ms": self.host.now()}
+            self.persist()
+        elif operation == "run_controller":
+            checkpoint = self.state.get("prelogin_frozen", {})
+            require(checkpoint.get("scenario_sha256") == self.config["scenario"]["sha256"]
+                    and checkpoint.get("manifest_sha256") == self.config["runtime_manifest"]["sha256"]
+                    and type(checkpoint.get("checked_at_ms")) is int
+                    and checkpoint["checked_at_ms"] <= self.state["session"].get("login_at_ms", -1),
+                    "prelogin_inventory_required")
         result = getattr(self, operation)()
         self.ownership()
         self.quiet()
-        self.frozen()
+        if operation == "login":
+            self.online_identity()
+            self.owned_server()
+        else:
+            require(self.account_state() == 0, "inventory_requires_offline_account")
+            self.frozen()
         self.persist()
         return {"attempt_id": self.run_id, **result}
 

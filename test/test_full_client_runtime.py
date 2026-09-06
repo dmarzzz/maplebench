@@ -45,6 +45,7 @@ class RuntimeTests(unittest.TestCase):
         self.backend.ownership = MagicMock()
         self.backend.quiet = MagicMock()
         self.backend.frozen = MagicMock()
+        self.backend.online_identity = MagicMock()
         self.offline_unit = {"LoadState": "loaded", "ActiveState": "inactive", "MainPID": "0"}
         self.host.unit.return_value = self.offline_unit
         self.host.admin.return_value = {"session": {"state": "waiting", "fresh": True, "pinned": True,
@@ -165,7 +166,7 @@ class RuntimeTests(unittest.TestCase):
         (native / "save.jsonl").write_bytes(runtime.encoded({**self.backend.identity(), "kind": "save_committed", "committed_at_ms": 1000}))
         self.backend.state["native_directory"] = str(native)
         with self.assertRaisesRegex(runtime.RuntimeErrorCode, "native_logout_commit_missing_or_ambiguous"):
-            self.backend.disconnect()
+            self.backend.request_ordinary_disconnect()
         self.assertNotIn("committed_at_ms", self.backend.state)
 
     def test_native_failed_save_invalidates_logout(self):
@@ -175,7 +176,7 @@ class RuntimeTests(unittest.TestCase):
         (native / "save.jsonl").write_bytes(runtime.encoded({**self.backend.identity(), "kind": "save_failed", "committed_at_ms": 2000}))
         self.backend.state["native_directory"] = str(native)
         with self.assertRaisesRegex(runtime.RuntimeErrorCode, "native_save_failure_or_identity_mismatch"):
-            self.backend.disconnect()
+            self.backend.request_ordinary_disconnect()
 
     def test_offline_positive_native_commit_records_ordinary_logout(self):
         self.backend.owned_server = MagicMock()
@@ -183,10 +184,42 @@ class RuntimeTests(unittest.TestCase):
         native.mkdir()
         (native / "save.jsonl").write_bytes(runtime.encoded({**self.backend.identity(), "kind": "save_committed", "committed_at_ms": 2000}))
         self.backend.state["native_directory"] = str(native)
-        result = self.backend.disconnect()
+        result = self.backend.request_ordinary_disconnect()
         self.assertTrue(result["normal_disconnect"])
         self.assertEqual(self.backend.state["committed_at_ms"], 2000)
         self.assertEqual(self.backend.state["events"][-1]["event"], "logged_out")
+        persisted = json.loads((self.directory / "backend-state.json").read_text())
+        self.assertEqual(persisted["ordinary_logout"]["save_committed_at_ms"], 2000)
+        before = self.host.admin.call_count
+        self.assertEqual(self.backend.disconnect(), result)
+        self.assertEqual(self.backend.disconnect(), result)
+        self.assertEqual(self.host.admin.call_count, before)
+
+    def test_disconnect_phase_never_reissues_an_uncertain_navigation(self):
+        self.backend.owned_server = MagicMock()
+        self.backend.state["intents"] = ["disconnect"]
+        self.backend.state["session"]["disconnect_requested_at_ms"] = 1000
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "normal_committed_logout_required"):
+            self.backend.disconnect()
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "operation_already_attempted"):
+            self.backend.request_ordinary_disconnect()
+        self.assertEqual(self.backend.state["session"]["disconnect_requested_at_ms"], 1000)
+        self.host.admin.assert_not_called()
+
+    def test_disconnect_intent_is_durable_before_navigation_and_late_logout_is_invalid(self):
+        self.backend.owned_server = MagicMock()
+        self.host.now.side_effect = [1000, 6001]
+        def admin(path, request, **kwargs):
+            if request["op"] == "disconnect":
+                stored = json.loads((self.directory / "backend-state.json").read_text())
+                self.assertIn("disconnect", stored["intents"])
+                self.assertEqual(stored["session"]["disconnect_requested_at_ms"], 1000)
+                return {}
+            return {"session": {"state": "waiting", "fresh": True, "artifactsSettled": True}}
+        self.host.admin.side_effect = admin
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "settlement_logout_timeout"):
+            self.backend.request_ordinary_disconnect()
+        self.assertNotIn("ordinary_logout", self.backend.state)
 
     def test_collector_cannot_start_without_normal_commit(self):
         self.backend.owned_server = MagicMock()
@@ -221,7 +254,220 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn("run_controller", persisted["intents"])
         with self.assertRaisesRegex(runtime.RuntimeErrorCode, "operation_already_attempted"):
             self.backend.run_controller()
-        self.backend.admin.assert_called_once()
+        self.assertEqual(sum(call.args[0] == "start" for call in self.backend.admin.call_args_list), 1)
+        self.assertTrue(self.backend.state["failure_disconnect_unconfirmed"])
+
+    def controller_fixture(self, terminal="completed"):
+        from full_client_bridge import PROMPT
+        self.host.now.return_value = 25000
+        self.backend.owned_server = MagicMock()
+        self.backend.manifest = {"docker_image_id": "sha256:" + "1" * 64}
+        self.backend.context["request"].update(scenario_fingerprint="2" * 64, baseline_sha256="3" * 64,
+            budgets={"controller_seconds": 24, "max_actions": 80, "max_output_tokens": 3000, "max_total_tokens": 9000})
+        self.backend.scenario = {"program_seconds": 22, "reasoning": {"effort": "low"},
+            "instructions_sha256": hashlib.sha256(PROMPT.format(program_seconds=22, action_limit=80,
+                                                                  sdk_request_limit=100).encode()).hexdigest(),
+            "settlement_policy": dict(runtime.SETTLEMENT_POLICY)}
+        self.backend.state["session"]["login_at_ms"] = 1000
+        native = self.root / "native"
+        native.mkdir()
+        (native / "save.jsonl").write_bytes(runtime.encoded({**self.backend.identity(), "kind": "save_committed",
+                                                            "committed_at_ms": 25000}))
+        self.backend.state["native_directory"] = str(native)
+        online, events = [True], []
+        self.backend.account_state = lambda: 2 if online[0] else 0
+        run = {"id": self.run_id, "status": terminal, "workerActive": False,
+               "evidenceStatus": "saved" if terminal == "completed" else "failed", "recordingStatus": "saved"}
+        def admin(op, **kwargs):
+            events.append(op)
+            if op == "disconnect":
+                stored = json.loads((self.directory / "backend-state.json").read_text())
+                self.assertIn("disconnect", stored["intents"])
+                self.assertNotIn("result", stored)
+                if terminal == "completed":
+                    self.assertEqual(stored["upload_status"]["status"]["bridge"]["run"]["id"], self.run_id)
+                online[0] = False
+            if op == "release_failed_run":
+                run["failureAcknowledged"] = True
+            return {"bridge": {"run": dict(run), "browserReleasePending": False},
+                    "session": {"state": "connected" if online[0] else "waiting", "fresh": True,
+                                "artifactsSettled": True}}
+        self.backend.admin = admin
+        def metadata():
+            self.assertFalse(online[0])
+            events.append("metadata")
+            self.backend.state["result"] = {"source": "full-client-trial",
+                "controller": run | {"model": "gpt-6-astra", "mode": "api", "dockerImageId": self.backend.manifest["docker_image_id"]},
+                "api": {"model": "gpt-6-astra", "status": "completed", "usage": {"output_tokens": 30, "total_tokens": 50}},
+                "trialContext": {"scenario_fingerprint": "2" * 64, "baseline_sha256": "3" * 64},
+                "timing": {"startedAtMs": 1000, "endedAtMs": 23000},
+                "timeline": {"api_started_ms": 100, "api_ended_ms": 2000, "program_started_ms": 2000,
+                             "program_ended_ms": 22000}, "program": {"actions": 4}}
+            self.backend.state["artifacts"]["capture"] = self.backend.artifact("capture.json",
+                {"end_wall_ms": 24000, "clock": {"server_received_ms": 1000, "client_sent_ms": 1000}})
+        self.backend.copy_controller_metadata = MagicMock(side_effect=metadata)
+        self.backend.copy_run = MagicMock()
+        self.backend.verify_api_result = MagicMock()
+        return online, events
+
+    def test_completed_run_logs_out_before_any_artifact_work(self):
+        online, events = self.controller_fixture()
+        receipt = self.backend.run_controller()
+        self.assertFalse(online[0])
+        self.assertLess(events.index("disconnect"), events.index("metadata"))
+        self.assertEqual(events.count("start"), 1)
+        self.assertEqual(events.count("disconnect"), 1)
+        self.assertEqual(receipt["actions"], 4)
+        self.backend.copy_run.assert_not_called()
+        self.backend.frozen.assert_not_called()
+        self.assertEqual(self.backend.state["session"]["upload_observed_at_ms"], 25000)
+
+    def test_failed_run_ordinary_disconnects_before_quarantine_without_replaying_api(self):
+        online, events = self.controller_fixture("failed")
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "controller_run_failed"):
+            self.backend.run_controller()
+        self.assertFalse(online[0])
+        self.assertLess(events.index("release_failed_run"), events.index("disconnect"))
+        self.assertEqual(events.count("start"), 1)
+        self.assertEqual(events.count("disconnect"), 1)
+        self.backend.copy_controller_metadata.assert_not_called()
+        self.backend.copy_run.assert_not_called()
+        self.backend.frozen.assert_not_called()
+        self.assertTrue(self.backend.state["ordinary_logout"])
+
+    def test_settlement_rejects_overlong_upload_navigation_logout_or_capture(self):
+        self.controller_fixture()
+        self.backend.run_controller()
+        session = self.backend.state["session"]
+        for field, value in (("upload_observed_at_ms", 28001), ("disconnect_requested_at_ms", 28001),
+                             ("logged_out_at_ms", 30001), ("upload_observed_at_ms", 22999),
+                             ("upload_observed_at_ms", True)):
+            original = session[field]
+            session[field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(runtime.RuntimeErrorCode):
+                self.backend.validate_settlement()
+            session[field] = original
+        capture = {"end_wall_ms": 25001, "clock": {"server_received_ms": 1000, "client_sent_ms": 1000}}
+        self.backend.state["artifacts"]["capture"] = self.backend.artifact("late-capture.json", capture)
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "settlement_capture_tail_exceeded"):
+            self.backend.validate_settlement()
+
+    def test_settlement_requires_frozen_policy_and_actual_upload_status_identity(self):
+        self.controller_fixture()
+        self.backend.run_controller()
+        self.backend.state["upload_status"]["status"]["bridge"]["run"]["id"] = "f" * 32
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "settlement_status_mismatch"):
+            self.backend.validate_settlement()
+        self.backend.scenario["settlement_policy"]["disconnect_after_program_ms"] = 6000
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "invalid_settlement_policy"):
+            self.backend.validate_settlement()
+
+    def perform_fixture(self):
+        request = {"schema_version": 1, "model": "gpt-6-astra", "scenario_fingerprint": "2" * 64,
+                   "baseline_sha256": "3" * 64, "budgets": {"total_seconds": 120, "operation_seconds": 30,
+                   "controller_seconds": 24, "max_actions": 80, "max_api_requests": 1,
+                   "max_output_tokens": 3000, "max_total_tokens": 9000}}
+        self.backend.config.update(baseline={"sha256": "3" * 64}, scenario={"sha256": "2" * 64},
+                                   runtime_manifest={"sha256": "4" * 64})
+        self.backend.scenario = {"trial_budgets": request["budgets"]}
+        self.backend.load_pins = MagicMock()
+        return {"attempt_id": self.run_id, "attempt_dir": str(self.directory), "request": request}
+
+    def test_login_perform_inventories_only_before_client_connects(self):
+        context = self.perform_fixture()
+        online, events = [False], []
+        def freeze():
+            self.assertFalse(online[0])
+            events.append("freeze")
+        def login():
+            stored = json.loads((self.directory / "backend-state.json").read_text())
+            self.assertIn("prelogin_frozen", stored)
+            online[0] = True
+            self.backend.state["session"]["login_at_ms"] = 2000
+            events.append("login")
+            return {"ordinary_login": True}
+        self.backend.frozen.side_effect = freeze
+        self.backend.login = login
+        self.backend.owned_server = MagicMock()
+        self.backend.account_state = lambda: 2 if online[0] else 0
+        self.backend.perform("login", context, timeout_seconds=30)
+        self.assertEqual(events, ["freeze", "login"])
+        self.backend.online_identity.assert_called_once()
+
+    def test_run_and_recovery_cleanup_perform_disconnect_before_full_inventory(self):
+        context = self.perform_fixture()
+        self.backend.state["prelogin_frozen"] = {"scenario_sha256": "2" * 64, "manifest_sha256": "4" * 64,
+                                                 "checked_at_ms": 1000}
+        self.backend.state["session"]["login_at_ms"] = 2000
+        for operation in ("run_controller", "cleanup"):
+            online, events = [True], []
+            def body():
+                events.append(operation)
+                online[0] = False
+                return {"clean": True}
+            def freeze():
+                self.assertFalse(online[0])
+                events.append("freeze")
+            setattr(self.backend, operation, body)
+            self.backend.frozen.side_effect = freeze
+            self.backend.account_state = lambda: 2 if online[0] else 0
+            self.backend.perform(operation, context | {"recovery": operation == "cleanup"}, timeout_seconds=30)
+            self.assertEqual(events, [operation, "freeze"])
+
+    def test_recovery_status_and_online_preflight_never_inventory_live_assets(self):
+        self.backend.context["recovery"] = True
+        self.backend.load_pins = MagicMock()
+        self.host.command.return_value = b"2\n"
+        result = self.backend.status()
+        self.assertFalse(result["ready"])
+        self.backend.frozen.assert_not_called()
+        self.backend.ownership.assert_called_once()
+        self.backend.load_pins.assert_called_once()
+        self.backend.context["recovery"] = False
+        self.backend.status()
+        self.backend.frozen.assert_not_called()
+
+    def test_full_inventory_and_large_artifact_reads_require_offline_account(self):
+        self.backend.account_state = MagicMock(return_value=2)
+        for operation in (lambda: runtime.CosmicRuntime.frozen(self.backend),
+                          self.backend.copy_controller_metadata, self.backend.copy_run,
+                          self.backend.preserve_failure_evidence):
+            with self.assertRaises(runtime.RuntimeErrorCode):
+                operation()
+
+    def video_fixture(self):
+        source = Path(self.backend.config["relay_output_root"]) / self.run_id
+        source.mkdir(parents=True)
+        video = b"synthetic media bytes; decoder is mocked"
+        (source / "video.webm").write_bytes(video)
+        recording = {"sha256": hashlib.sha256(video).hexdigest(), "duration_ms": 1000}
+        self.backend.state["ordinary_logout"] = {"synthetic": True}
+        self.backend.state["result"] = {"synthetic": True}
+        self.backend.state["artifacts"]["recording"] = self.backend.artifact("recording.json", recording)
+
+    def test_offline_probe_failure_has_distinct_safe_code(self):
+        self.video_fixture()
+        with patch("full_client_publish._probe_video", side_effect=runtime.EvidenceError("/private/secret-marker")):
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^recording_probe_failed$") as error:
+                self.backend.copy_run()
+        self.assertNotIn("secret-marker", str(error.exception))
+
+    def test_offline_capture_failure_has_distinct_safe_code(self):
+        self.video_fixture()
+        probe = {"duration_ms": 1000, "width": 800, "height": 720, "frames": 60}
+        with patch("full_client_publish._probe_video", return_value=probe), \
+                patch("full_client_publish.verify_capture_bundle", side_effect=runtime.EvidenceError("secret-marker")):
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^capture_verification_failed$") as error:
+                self.backend.copy_run()
+        self.assertNotIn("secret-marker", str(error.exception))
+
+    def test_offline_video_duration_must_match_independent_capture(self):
+        self.video_fixture()
+        with patch("full_client_publish._probe_video", return_value={"duration_ms": 899}), \
+                patch("full_client_publish.verify_capture_bundle") as capture:
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode, "recording_duration_mismatch"):
+                self.backend.copy_run()
+            capture.assert_not_called()
 
     def test_status_does_not_treat_stale_waiting_page_as_ready(self):
         self.host.admin.return_value["session"]["fresh"] = False
@@ -349,11 +595,15 @@ class RuntimeTests(unittest.TestCase):
             if op == "status":
                 return statuses.pop(0)
             if op == "release_failed_run":
-                self.assertTrue((self.directory / "failure-cleanup-status.json").exists())
+                stored = json.loads((self.directory / "backend-state.json").read_text())
+                self.assertEqual(stored["failure_cleanup_status"]["bridge"]["run"]["id"], self.run_id)
+                self.assertFalse((self.directory / "failure-cleanup-status.json").exists())
             return {}
         self.backend.admin = admin
         self.backend.settle_owned_controller()
         self.assertEqual(events, ["status", "cancel", "status", "status", "release_failed_run"])
+        self.assertNotIn("failure_evidence_preserved", self.backend.state)
+        self.backend.preserve_failure_evidence()
         self.assertTrue(self.backend.state["failure_evidence_preserved"])
 
     def test_cleanup_refuses_to_cancel_another_active_run(self):

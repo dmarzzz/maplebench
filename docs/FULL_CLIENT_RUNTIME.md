@@ -47,10 +47,18 @@ PROMPT, and `reasoning:{effort:"low"}`. Keep the publication scenario's `id` and
 seconds, or 240 actions/600 SDK calls for 60 seconds, with 3000 output tokens and
 two seconds of controller termination slack. Configure a finite total token
 ceiling and enough total/operation time for bounded API planning and collection.
+Freeze `settlement_policy` with `capture_tail_ms:2000`,
+`upload_after_program_ms:5000`, `disconnect_after_program_ms:5000`, and
+`logout_after_disconnect_ms:5000`. Upload timing records when the coordinator
+observed the saved receipt, rather than claiming an unavailable wire timestamp.
+The disconnect deadline includes recording finalization and upload. An overrun
+invalidates the attempt even if the character survived and the video was saved.
 
 The runtime manifest includes working directory, WZ path, exact scripts/WZ
-inventory, config.yaml, JAR, client JS/WASM, and existing Docker image ID. Every
-phase checks these inputs before and after. The JAR must contain
+inventory, config.yaml, JAR, client JS/WASM, and existing Docker image ID. Full
+inventories run outside the online session, including immediately before login
+and after confirmed logout. Cheap process, identity and lock checks continue
+while the character is online. The JAR must contain
 `server/bots/MapleBenchPersistence.class`. The owned trial drop-in overrides
 WorkingDirectory and ExecStart with the pinned Java/JAR/WZ paths, a 1536 MiB Java
 heap and two active processors. Actual process arguments and service working
@@ -106,17 +114,20 @@ runner dies. No phase opens a replacement lock and calls that ownership.
    private `start` with run ID equal to request ID, exact model/image, token
    ceiling, trial context and lock descriptions. A lost response stays uncertain.
    It waits for that exact terminal run and both recording/evidence uploads,
-   copies actual request/response/program/result/video bytes, verifies their
-   model/prompt/observation/code bindings, and probes the saved video.
-   It retains the raw capture/clock/first-frame/terminal receipts and recomputes
-   bounded continuous coverage of API planning and the program. A stopped or
-   interrupted recorder fails that phase even if a video upload exists.
-6. `disconnect` uses ordinary browser navigation to waiting, independently waits
-   for DB offline, and requires one positive native commit during that disconnect.
+   durably records a disconnect intent, and immediately requests ordinary
+   navigation to waiting. It independently waits for DB offline and one positive
+   native commit before copying or verifying artifacts. This ordinary logout is
+   part of the preauthorized controller operation and has its own durable backend
+   intent, so an interrupted response cannot cause an API replay.
+   Actual request/response/program/result/video bytes retain their exact bindings;
+   capture and media verification occur offline.
+6. `disconnect` verifies the already completed ordinary disconnect and its
+   durable native commit receipt. It does not issue a second navigation or save.
    Offline alone and forced service stop cannot manufacture a save receipt.
 7. `collect_final` exports the offline numeric row, native journal and actual
    fresh invocation's stdout/stderr, constructs the measured lifecycle bundle,
-   and calls `verify_trial_bundle`. Journal initialization and absence of native
+   probes the encoded recording and checks the frozen settlement policy and
+   capture receipts, then calls `verify_trial_bundle`. Journal initialization and absence of native
    save/journal failures are checked from actual logs by that verifier.
 8. `cleanup` disconnects/stops only a process matching its durable owner,
    invocation, nonroot user, exact JAR, native environment and drop-in. It removes

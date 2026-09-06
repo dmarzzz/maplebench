@@ -17,6 +17,7 @@ results or establish a production deployment.
 | Durable attempts | Fsynced intent before each side effect; no model request replay; process descendants cannot outlive released world locks; interrupted attempts retained and quarantined. |
 | Resource and spending bounds | Monotonic total/operation/controller limits, bounded input and output, one reserved API request, conservative uncertain usage, bounded host workloads. |
 | Authoritative score | Offline initial/final database snapshots, positive native post-commit receipt, clean complete native log, preserved death penalties, and explicit unsupported-level-transition rejection. |
+| Bounded scoring interval | Full input inventories run before login and after logout. Recorded upload, disconnect and save timestamps satisfy the frozen settlement policy; file copying and video probing cannot extend the live session. |
 | Exact attribution | Requested/returned model, complete safe API bodies, exact executed program, frozen prompt/observation, budget and timing cross-checks. |
 | Complete recording | Saved bytes and capture identity match the attempt; verified media covers the full controller interval; visual review binds the exact video hash. |
 | Operational recovery | Read-only health distinguishes an expired world from a working web server; a deliberate failed attempt can recover without another API call or unrelated service changes. |
@@ -47,6 +48,11 @@ not claimed to be deterministic.
 - `scripts/full_client_freeze.py`: read-only inventory and drift verification
   for existing server/client builds, configuration, scripts, WZ and sandbox
   image. It does not create a database baseline or copy game assets.
+- `scripts/full_client_dashboard.py`: allowlisted results projection for the
+  full-client dashboard. It rechecks completed runner receipts, keeps failures
+  visible, separates diagnostic client XP from persisted XP, and groups only
+  matching frozen inputs. The gallery serves the exported JSON and explicitly
+  copied recordings; private attempt directories are never web roots.
 
 ## Native save receipts
 
@@ -101,3 +107,11 @@ Production acceptance remains pending until the concrete backend and browser
 lifecycle complete that real end-to-end verification. Do not infer acceptance
 from documentation, synthetic receipts, successful compilation, or a previous
 integration demo.
+
+Real integration exposed two launch/evidence issues that synthetic phases did
+not reveal: systemd requires an unquoted scalar WorkingDirectory, and Chrome
+MediaRecorder WebM files can omit container duration metadata. Launch validation
+must check the actual loaded command and working directory. Recording duration
+must come from bounded inspection of the encoded media, with incomplete or
+corrupt recordings rejected. A successful gameplay program remains an invalid
+benchmark attempt if any subsequent evidence check fails.

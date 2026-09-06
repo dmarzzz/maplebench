@@ -21,7 +21,7 @@
     }catch{cell.textContent='Not linked';}
   }
   function cell(row,value,className){const node=el('td',value);if(className)node.className=className;row.append(node);return node;}
-  function scoreCell(tr,row){const node=cell(tr,xp(row.persisted_xp),'numeric');if(row.persisted_xp<0)node.classList.add('negative');else if(row.persisted_xp>0)node.classList.add('positive');if(row.persisted_xp!=null)node.append(el('small','Runner verified'));else node.append(el('small',row.kind==='integration'?'Unscored integration':'Awaiting verification'));}
+  function scoreCell(tr,row){const node=cell(tr,xp(row.persisted_xp),'numeric');if(row.persisted_xp<0)node.classList.add('negative');else if(row.persisted_xp>0)node.classList.add('positive');if(row.persisted_xp!=null)node.append(el('small','Runner verified'));else node.append(el('small',row.kind==='integration'?'Unscored integration':['failed','interrupted','recovered'].includes(row.status)?'No verified score':'Awaiting verification'));}
   function renderLive(){
     const rows=snapshot.attempts;
     const row=rows.find(item=>['running','recovering','requesting'].includes(item.status))||rows[0];

@@ -28,8 +28,10 @@ import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import resource
 import subprocess
 import sys
+import tempfile
 
 from full_client_score import (EvidenceError, SOURCE, JSON_LIMIT, parse_json,
                                open_verified_artifact, read_artifact_bytes, read_json_artifact,
@@ -42,6 +44,10 @@ KEYS = frozenset({"LEFT", "RIGHT", "UP", "DOWN", "JUMP", "ATTACK", "BRANDISH",
 SLACK_MS = 100
 CAPTURE_TAIL_MS = 2000
 CAPTURE_UNCERTAINTY_MS = 250
+VIDEO_MAX_MS = 125000
+VIDEO_MAX_FRAMES = 100000
+SETTLEMENT_POLICY = {"capture_tail_ms": 2000, "upload_after_program_ms": 5000,
+                     "disconnect_after_program_ms": 5000, "logout_after_disconnect_ms": 5000}
 PROGRAM_FORMAT = {"type": "json_schema", "name": "maple_program", "strict": True,
                   "schema": {"type": "object", "additionalProperties": False,
                              "properties": {"note": {"type": "string"}, "code": {"type": "string"}},
@@ -283,6 +289,73 @@ def _validate_structure(manifest):
     return {"ready": not reasons, "reasons": reasons}
 
 
+def _video_probe_limits():
+    """Bound the independent decoder, including bytes produced before parsing."""
+    for kind, requested in ((resource.RLIMIT_FSIZE, JSON_LIMIT),
+                            (resource.RLIMIT_AS, 768 * 1024**2),
+                            (resource.RLIMIT_CPU, 30)):
+        _, hard = resource.getrlimit(kind)
+        limit = requested if hard == resource.RLIM_INFINITY else min(requested, hard)
+        resource.setrlimit(kind, (limit, limit))
+
+
+def _measure_video_probe(probe):
+    """Measure actual presentation timestamps; never infer duration from FPS.
+
+    MediaRecorder WebM often lacks a finalized Segment duration. The last video
+    packet's presentation endpoint still measures the saved stream. When that
+    packet has no declared duration, its presentation timestamp is a conservative
+    endpoint; independent capture-duration comparison must still pass afterward.
+    """
+    def require(condition, reason):
+        if not condition:
+            raise EvidenceError(reason)
+    require(isinstance(probe, dict) and isinstance(probe.get("streams"), list)
+            and len(probe["streams"]) == 1, "video: require one selected decoded video stream")
+    stream = probe["streams"][0]
+    require(isinstance(stream, dict) and isinstance(probe.get("format", {}), dict),
+            "video: invalid stream metadata")
+    width, height, frames = (int(stream[key]) for key in ("width", "height", "nb_read_frames"))
+    require(0 < width <= 8192 and 0 < height <= 8192 and width * height <= 32 * 1024**2
+            and 0 < frames <= VIDEO_MAX_FRAMES, "video: decoded dimensions or frame count exceed limits")
+    packets = probe.get("packets")
+    # The supported recorder/container encodings carry one decoded video frame
+    # per packet. Decoder drops or incomplete packet/frame accounting fail closed.
+    require(isinstance(packets, list) and len(packets) == frames,
+            "video: require complete bounded packet and decoded-frame accounting")
+    presentations = []
+    for packet in packets:
+        require(isinstance(packet, dict) and isinstance(packet.get("flags"), str)
+                and "C" not in packet["flags"] and "D" not in packet["flags"],
+                "video: corrupt or discarded video packet")
+        require(type(packet.get("pts_time")) in (str, int, float)
+                and type(packet.get("duration_time")) in (str, int, float, type(None)),
+                "video: invalid packet timestamp types")
+        timestamp = float(packet["pts_time"]) * 1000
+        raw_duration = packet.get("duration_time")
+        duration = 0 if raw_duration in (None, "N/A") else float(raw_duration) * 1000
+        require(_number(timestamp, -VIDEO_MAX_MS) and timestamp <= VIDEO_MAX_MS
+                and _number(duration) and duration <= 1000,
+                "video: invalid or out-of-bounds packet timestamps")
+        presentations.append((timestamp, duration))
+    presentations.sort()
+    require(all(0 < later[0] - earlier[0] <= 1000
+                for earlier, later in zip(presentations, presentations[1:])),
+            "video: duplicate timestamps or excessive gaps in the saved stream")
+    extent = max(timestamp + duration for timestamp, duration in presentations) - presentations[0][0]
+    require(_number(extent, 1) and extent <= VIDEO_MAX_MS,
+            "video: require a bounded nonempty presentation interval")
+    headers = []
+    for value in (probe.get("format", {}).get("duration"), stream.get("duration")):
+        if value not in (None, "N/A"):
+            header = float(value) * 1000
+            require(_number(header, 1) and header <= VIDEO_MAX_MS and abs(header - extent) <= SLACK_MS,
+                    "video: duration metadata disagrees with decoded packet coverage")
+            headers.append(header)
+    return {"width": width, "height": height, "frames": frames,
+            "duration_ms": headers[0] if headers else extent}
+
+
 def _probe_video(path, expected_sha256):
     """Inspect the actual video stream under a bounded, read-only subprocess."""
     try:
@@ -292,26 +365,27 @@ def _probe_video(path, expected_sha256):
         with open_verified_artifact(path.parent, reference, "video", 1024**3) as stream:
             fd = stream.fileno()
             descriptor_path = ("/proc/self/fd/" if sys.platform.startswith("linux") else "/dev/fd/") + str(fd)
-            try:
-                process = subprocess.run(
-                    ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
-                     "-show_entries", "stream=width,height,nb_read_frames,duration:format=duration",
-                     "-of", "json", descriptor_path], stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
-                    check=False, pass_fds=(fd,))
-            except (OSError, subprocess.TimeoutExpired) as error:
-                raise EvidenceError("video: ffprobe unavailable or timed out") from error
-        if process.returncode != 0 or len(process.stdout) > JSON_LIMIT:
-            raise EvidenceError("video: actual recording could not be probed")
-        probe = parse_json(process.stdout)
-        stream = probe["streams"][0]
-        duration = float(probe.get("format", {}).get("duration", stream.get("duration"))) * 1000
-        width, height, frames = (int(stream[key]) for key in ("width", "height", "nb_read_frames"))
-        if not _number(duration, 1) or min(width, height, frames) <= 0:
-            raise EvidenceError("video: require a nonempty measurable video stream")
-        return {"width": width, "height": height, "frames": frames, "duration_ms": duration}
+            with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+                try:
+                    process = subprocess.run(
+                        ["ffprobe", "-v", "error", "-threads", "1", "-err_detect", "explode",
+                         "-select_streams", "v:0", "-count_frames", "-show_packets",
+                         "-show_entries", "packet=pts_time,duration_time,flags:stream=width,height,nb_read_frames,duration:format=duration",
+                         "-of", "json", descriptor_path], stdin=subprocess.DEVNULL,
+                        stdout=output, stderr=errors, timeout=30, check=False, pass_fds=(fd,),
+                        preexec_fn=_video_probe_limits,
+                        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+                except (OSError, subprocess.SubprocessError) as error:
+                    raise EvidenceError("video: ffprobe unavailable or timed out") from error
+                if process.returncode != 0 or not 0 < output.tell() < JSON_LIMIT or errors.tell() != 0:
+                    raise EvidenceError("video: decoder failed, reported corruption, or exceeded output limits")
+                output.seek(0)
+                probe = parse_json(output.read(JSON_LIMIT + 1))
+            measured = _measure_video_probe(probe)
+        return measured
     except EvidenceError:
         raise
-    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, KeyError, IndexError) as error:
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError, IndexError, OverflowError) as error:
         raise EvidenceError("video: ffprobe unavailable, timed out, or rejected the recording") from error
 
 
@@ -421,6 +495,7 @@ def _verify_persisted_manifest(manifest, artifact_root):
                 "outcome: time_limit requires exhaustion of the frozen program budget")
 
     verify_capture_bundle(manifest, artifact_root)
+    _verify_settlement_policy(manifest, artifact_root, evidence, scenario)
 
     video = manifest["video"]
     video_path = verified_artifact(artifact_root, artifacts.get("video"), "video", 1024**3)
@@ -502,6 +577,50 @@ def verify_capture_bundle(manifest, artifact_root):
             and capture["end_wall_ms"] + upper <= ended + CAPTURE_TAIL_MS,
             "capture: terminal receipt and conservative bounds must cover the program with a bounded tail")
     return measured
+
+
+def _verify_settlement_policy(manifest, artifact_root, evidence, scenario):
+    """Bind actual settled-upload observation and logout to the frozen cutoff."""
+    def require(condition, reason):
+        if not condition:
+            raise EvidenceError(reason)
+    require(same_json(scenario.get("settlement_policy"), SETTLEMENT_POLICY),
+            "settlement: require the supported policy frozen before the trial")
+    artifacts, session = manifest["artifacts"], evidence["session"]
+    result = manifest["result"]
+    receipt = read_json_artifact(artifact_root, artifacts, "upload_status")
+    require(isinstance(receipt, dict) and set(receipt) == {"schema_version", "source", "run_id",
+            "server_instance_id", "character_id", "account_id", "observed_at_ms", "status"}
+            and type(receipt["schema_version"]) is int and receipt["schema_version"] == 1
+            and receipt["source"] == "full_client_runtime_status", "settlement: invalid raw upload observation")
+    identity = {"run_id": evidence["run_id"], "server_instance_id": session["server_instance_id"],
+                "character_id": evidence["baseline"]["character"]["character_id"],
+                "account_id": evidence["baseline"]["character"]["account_id"]}
+    require(all(same_json(receipt.get(key), value) for key, value in identity.items()),
+            "settlement: upload observation belongs to another trial or character")
+    observed = session.get("upload_observed_at_ms")
+    require(_integer(observed) and same_json(receipt["observed_at_ms"], observed),
+            "settlement: session upload timestamp differs from the actual status observation")
+    status = _object(receipt["status"])
+    bridge = _object(status.get("bridge"))
+    run = _object(bridge.get("run"))
+    require(run.get("id") == evidence["run_id"] and run.get("status") == "completed"
+            and run.get("evidenceStatus") == "saved" and run.get("recordingStatus") == "saved"
+            and run.get("workerActive") is False and run.get("leaseReleasePending") is False
+            and bridge.get("browserReleasePending") is False
+            and _object(status.get("session")).get("artifactsSettled") is True,
+            "settlement: raw status must prove this completed run and both settled uploads")
+    program_end = result["timing"]["startedAtMs"] + result["timeline"]["program_ended_ms"]
+    disconnect, logout = session["disconnect_requested_at_ms"], session["logged_out_at_ms"]
+    require(program_end <= observed <= disconnect
+            and observed - program_end <= SETTLEMENT_POLICY["upload_after_program_ms"]
+            and disconnect - program_end <= SETTLEMENT_POLICY["disconnect_after_program_ms"]
+            and disconnect <= logout <= disconnect + SETTLEMENT_POLICY["logout_after_disconnect_ms"],
+            "settlement: upload/disconnect/logout exceeded the frozen post-program cutoff")
+    capture = read_json_artifact(artifact_root, artifacts, "capture")
+    require(capture["end_wall_ms"] + manifest["video"]["clock_offset_ms"]["upper"]
+            <= program_end + SETTLEMENT_POLICY["capture_tail_ms"],
+            "settlement: capture extended beyond the frozen post-program tail")
 
 
 def validate_manifest(manifest, artifact_root=None):

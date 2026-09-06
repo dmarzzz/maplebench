@@ -13,7 +13,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from full_client_publish import PROGRAM_FORMAT, main, validate_manifest
+from full_client_publish import (PROGRAM_FORMAT, main, validate_manifest, _measure_video_probe,
+                                _probe_video, _video_probe_limits, _verify_settlement_policy, JSON_LIMIT)
 from full_client_score import open_verified_artifact, verify_trial_bundle
 from full_client_capture import capture_receipt
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -228,6 +229,8 @@ class PublicationGateTests(unittest.TestCase):
 
 
 PROBE = {"width": 1024, "height": 768, "frames": 120, "duration_ms": 5000}
+POLICY = {"capture_tail_ms": 2000, "upload_after_program_ms": 5000,
+          "disconnect_after_program_ms": 5000, "logout_after_disconnect_ms": 5000}
 
 
 def persisted_manifest(directory):
@@ -238,7 +241,18 @@ def persisted_manifest(directory):
     instructions = "Synthetic program-generation instructions; this is not an actual API run."
     reasoning = {"effort": "low"}
     evidence, artifacts = bundle_fixture(directory, {"id": "fixture-scenario", "budgets": manifest["budgets"],
-        "instructions_sha256": hashlib.sha256(instructions.encode()).hexdigest(), "reasoning": reasoning})
+        "instructions_sha256": hashlib.sha256(instructions.encode()).hexdigest(), "reasoning": reasoning,
+        "settlement_policy": copy.deepcopy(POLICY)})
+    evidence["session"].update(upload_observed_at_ms=7300, disconnect_requested_at_ms=7400)
+    write_artifact(directory, artifacts, "session", evidence["session"])
+    write_artifact(directory, artifacts, "persistence", evidence)
+    write_artifact(directory, artifacts, "upload_status", {"schema_version": 1,
+        "source": "full_client_runtime_status", "run_id": evidence["run_id"],
+        "server_instance_id": evidence["session"]["server_instance_id"], "character_id": 7, "account_id": 9,
+        "observed_at_ms": 7300, "status": {"bridge": {"run": {"id": evidence["run_id"], "status": "completed",
+            "evidenceStatus": "saved", "recordingStatus": "saved", "workerActive": False,
+            "leaseReleasePending": False},
+            "browserReleasePending": False}, "session": {"artifactsSettled": True}}})
     result = manifest["result"]
     result["source"] = "full-client-trial"
     result["controller"]["id"] = evidence["run_id"]
@@ -294,6 +308,65 @@ def persisted_manifest(directory):
 
 
 class PersistedPublicationTests(unittest.TestCase):
+    def test_upload_status_is_required_and_cannot_claim_another_run_or_unsettled_upload(self):
+        changes = [lambda r: r.update(run_id="other-run"), lambda r: r.update(character_id=True),
+                   lambda r: r.update(observed_at_ms=7301), lambda r: r.update(source="model_claim"),
+                   lambda r: r["status"]["bridge"]["run"].update(status="running"),
+                   lambda r: r["status"]["bridge"]["run"].update(recordingStatus="pending"),
+                   lambda r: r["status"]["bridge"]["run"].update(evidenceStatus="pending"),
+                   lambda r: r["status"]["bridge"]["run"].update(workerActive=True),
+                   lambda r: r["status"]["bridge"]["run"].update(leaseReleasePending=True),
+                   lambda r: r["status"]["bridge"]["run"].update(leaseReleasePending="false"),
+                   lambda r: r["status"]["bridge"].update(browserReleasePending=True),
+                   lambda r: r["status"]["session"].update(artifactsSettled=False)]
+        for change in changes:
+            with tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory)
+                artifacts = manifest["artifacts"]
+                receipt = json.loads((Path(directory) / artifacts["upload_status"]["path"]).read_text())
+                change(receipt)
+                write_artifact(directory, artifacts, "upload_status", receipt)
+                with patch("full_client_publish._probe_video", return_value=PROBE):
+                    self.assertFalse(validate_manifest(manifest, directory)["ready"])
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory)
+            manifest["artifacts"].pop("upload_status")
+            self.assertFalse(validate_manifest(manifest, directory)["ready"])
+
+    def test_settlement_cutoff_validator_enforces_frozen_limits_independently(self):
+        for upload, disconnect, logout in ((6999, 7400, 8000), (7401, 7400, 8000),
+                                           (12001, 12002, 12003), (7300, 12001, 12002),
+                                           (7300, 7400, 12401)):
+            with tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory)
+                arts = manifest["artifacts"]
+                evidence = json.loads((Path(directory) / arts["persistence"]["path"]).read_text())
+                scenario = json.loads((Path(directory) / arts["scenario"]["path"]).read_text())
+                evidence["session"].update(upload_observed_at_ms=upload, disconnect_requested_at_ms=disconnect,
+                                             logged_out_at_ms=logout)
+                receipt = json.loads((Path(directory) / arts["upload_status"]["path"]).read_text())
+                receipt["observed_at_ms"] = upload
+                write_artifact(directory, arts, "upload_status", receipt)
+                with self.assertRaisesRegex(ValueError, "post-program cutoff"):
+                    _verify_settlement_policy(manifest, directory, evidence, scenario)
+
+    def test_policy_cannot_be_missing_relaxed_or_extend_tail_from_result_end(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory)
+            arts = manifest["artifacts"]
+            evidence = json.loads((Path(directory) / arts["persistence"]["path"]).read_text())
+            scenario = json.loads((Path(directory) / arts["scenario"]["path"]).read_text())
+            _verify_settlement_policy(manifest, directory, evidence, scenario)
+            for policy in (None, POLICY | {"disconnect_after_program_ms": 10000}):
+                with self.assertRaisesRegex(ValueError, "policy frozen"):
+                    _verify_settlement_policy(manifest, directory, evidence, scenario | {"settlement_policy": policy})
+            capture = json.loads((Path(directory) / arts["capture"]["path"]).read_text())
+            # This would fit result-ended+2s but exceeds program-ended+2s.
+            capture["end_wall_ms"] = 9000
+            write_artifact(directory, arts, "capture", capture)
+            with self.assertRaisesRegex(ValueError, "post-program tail"):
+                _verify_settlement_policy(manifest, directory, evidence, scenario)
+
     def test_measured_capture_tail_does_not_rewrite_controller_timing(self):
         with tempfile.TemporaryDirectory() as directory:
             manifest = persisted_manifest(directory)
@@ -445,8 +518,10 @@ class PersistedPublicationTests(unittest.TestCase):
                 replacement.replace(path)
                 self.assertEqual(os.pread(fd, len(original), 0), original)
                 raw = {"streams": [{"width": 1024, "height": 768, "nb_read_frames": "120"}],
-                       "format": {"duration": "4.0"}}
-                return SimpleNamespace(returncode=0, stdout=json.dumps(raw).encode())
+                       "format": {"duration": "4.0"},
+                       "packets": [{"pts_time": str(i / 30), "duration_time": str(1 / 30), "flags": "__"} for i in range(120)]}
+                kwargs["stdout"].write(json.dumps(raw).encode())
+                return SimpleNamespace(returncode=0)
 
             with patch("full_client_publish.subprocess.run", side_effect=substituted_probe) as probe:
                 self.assertFalse(validate_manifest(manifest, directory)["ready"])
@@ -465,8 +540,10 @@ class PersistedPublicationTests(unittest.TestCase):
                 # Deterministic stamp change even on filesystems with coarse clocks.
                 os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
                 raw = {"streams": [{"width": 1024, "height": 768, "nb_read_frames": "120"}],
-                       "format": {"duration": "4.0"}}
-                return SimpleNamespace(returncode=0, stdout=json.dumps(raw).encode())
+                       "format": {"duration": "4.0"},
+                       "packets": [{"pts_time": str(i / 30), "duration_time": str(1 / 30), "flags": "__"} for i in range(120)]}
+                kwargs["stdout"].write(json.dumps(raw).encode())
+                return SimpleNamespace(returncode=0)
 
             with patch("full_client_publish.subprocess.run", side_effect=changed_probe):
                 self.assertFalse(validate_manifest(manifest, directory)["ready"])
@@ -515,6 +592,121 @@ class PersistedPublicationTests(unittest.TestCase):
             path.write_text('{"schema_version":1,"schema_version":2}')
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(main([str(path)]), 2)
+
+
+class VideoTimestampProbeTests(unittest.TestCase):
+    @staticmethod
+    def packets():
+        # Explicit synthetic VFR packets; absent WebM header duration is normal.
+        return {"streams": [{"width": 800, "height": 720, "nb_read_frames": "4"}], "format": {},
+                "packets": [{"pts_time": str(t), "flags": "__"} for t in (0, .038, .071)]
+                           + [{"pts_time": ".104", "duration_time": ".033", "flags": "__"}]}
+
+    def test_absent_webm_duration_uses_actual_variable_packet_timestamps(self):
+        value = _measure_video_probe(self.packets())
+        self.assertAlmostEqual(value["duration_ms"], 137)
+        self.assertEqual(value["frames"], 4)
+        self.assertEqual((value["width"], value["height"]), (800, 720))
+
+    def test_missing_final_packet_duration_is_a_conservative_presentation_span(self):
+        probe = self.packets()
+        probe["packets"][-1].pop("duration_time")
+        self.assertAlmostEqual(_measure_video_probe(probe)["duration_ms"], 104)
+
+    def test_header_duration_must_agree_with_the_complete_saved_stream(self):
+        probe = self.packets()
+        probe["format"]["duration"] = ".137"
+        self.assertAlmostEqual(_measure_video_probe(probe)["duration_ms"], 137)
+        for header in ("4", "NaN", "inf", "0"):
+            probe["format"]["duration"] = header
+            with self.assertRaises(ValueError):
+                _measure_video_probe(probe)
+
+    def test_corruption_missing_frames_and_timestamp_resource_bounds_fail_closed(self):
+        mutations = [
+            lambda p: p["streams"][0].update(nb_read_frames="3"),
+            lambda p: p["streams"][0].update(nb_read_frames="100001"),
+            lambda p: p["streams"][0].update(width=20000),
+            lambda p: p["packets"][1].update(flags="_C"),
+            lambda p: p["packets"][1].update(flags="_D"),
+            lambda p: p["packets"][1].pop("pts_time"),
+            lambda p: p["packets"][1].update(pts_time="NaN"),
+            lambda p: p["packets"][1].update(pts_time=True),
+            lambda p: p["packets"][1].update(pts_time="0"),
+            lambda p: p["packets"][-1].update(pts_time="2"),
+            lambda p: p["packets"][-1].update(pts_time="126"),
+            lambda p: p["packets"][-1].update(duration_time="-1"),
+            lambda p: p["packets"][-1].update(duration_time="2"),
+        ]
+        for mutation in mutations:
+            probe = self.packets()
+            mutation(probe)
+            with self.assertRaises((ValueError, KeyError)):
+                _measure_video_probe(probe)
+
+    def test_clean_packet_boundary_truncation_cannot_override_independent_capture_duration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory)
+            probe = {"streams": [{"width": 1024, "height": 768, "nb_read_frames": "3"}], "format": {},
+                     "packets": [{"pts_time": str(i), "duration_time": "1", "flags": "__"} for i in range(3)]}
+            measured = _measure_video_probe(probe)
+            write_artifact(directory, manifest["artifacts"], "video_probe", measured | {"video_sha256": manifest["video"]["sha256"]})
+            with patch("full_client_publish._probe_video", return_value=measured):
+                self.assertFalse(validate_manifest(manifest, directory)["ready"])
+
+    def test_probe_limits_are_hard_caps_and_respect_inherited_limits(self):
+        import resource
+        with patch("full_client_publish.resource.getrlimit", return_value=(resource.RLIM_INFINITY, resource.RLIM_INFINITY)), \
+             patch("full_client_publish.resource.setrlimit") as limit:
+            _video_probe_limits()
+            self.assertEqual({call.args[0]: call.args[1] for call in limit.call_args_list}, {
+                resource.RLIMIT_FSIZE: (JSON_LIMIT, JSON_LIMIT),
+                resource.RLIMIT_AS: (768 * 1024**2, 768 * 1024**2), resource.RLIMIT_CPU: (30, 30)})
+        with patch("full_client_publish.resource.getrlimit", return_value=(7, 7)), \
+             patch("full_client_publish.resource.setrlimit") as limit:
+            _video_probe_limits()
+            self.assertTrue(all(call.args[1] == (7, 7) for call in limit.call_args_list))
+
+    def test_probe_bounds_subprocess_output_stderr_and_timeout_on_verified_descriptor(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recording.webm"
+            raw = b"synthetic mocked media"
+            path.write_bytes(raw)
+            digest = hashlib.sha256(raw).hexdigest()
+            def process(command, **kwargs):
+                fd, = kwargs["pass_fds"]
+                self.assertEqual(os.pread(fd, len(raw), 0), raw)
+                self.assertTrue(command[-1].endswith("/fd/" + str(fd)))
+                self.assertEqual(kwargs["timeout"], 30)
+                self.assertIs(kwargs["preexec_fn"], _video_probe_limits)
+                self.assertNotIn("capture_output", kwargs)
+                self.assertIn("-show_packets", command)
+                self.assertIn("-count_frames", command)
+                kwargs["stdout"].write(json.dumps(self.packets()).encode())
+                return SimpleNamespace(returncode=0)
+            with patch("full_client_publish.subprocess.run", side_effect=process):
+                self.assertAlmostEqual(_probe_video(path, digest)["duration_ms"], 137)
+            def corrupt(command, **kwargs):
+                kwargs["stderr"].write(b"File ended prematurely")
+                return process(command, **kwargs)
+            with patch("full_client_publish.subprocess.run", side_effect=corrupt):
+                with self.assertRaisesRegex(ValueError, "corruption"):
+                    _probe_video(path, digest)
+            def huge(command, **kwargs):
+                kwargs["stdout"].seek(JSON_LIMIT)
+                kwargs["stdout"].write(b"x")
+                return SimpleNamespace(returncode=0)
+            with patch("full_client_publish.subprocess.run", side_effect=huge):
+                with self.assertRaisesRegex(ValueError, "output limits"):
+                    _probe_video(path, digest)
+            with patch("full_client_publish.subprocess.run", side_effect=subprocess.TimeoutExpired("ffprobe", 30)):
+                with self.assertRaisesRegex(ValueError, "timed out"):
+                    _probe_video(path, digest)
+            with patch("full_client_publish.subprocess.run") as call:
+                with self.assertRaises(ValueError):
+                    _probe_video(path, "0" * 64)
+                call.assert_not_called()
 
 
 if __name__ == "__main__":
