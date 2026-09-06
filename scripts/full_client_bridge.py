@@ -18,6 +18,7 @@ from pathlib import Path
 from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, validate_rpc
 from full_client_capture import capture_receipt
 from full_client_docker import DockerBindingError, validate_binding
+from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
 
 
 class ControlError(ValueError):
@@ -101,6 +102,10 @@ def _observation(value):
 SCENARIO = {'adapter': 'full-client'}
 PROMPT = '''You control a level 180 Hero in a private MapleStory v83 full client.
 Write a JavaScript async function body using ONLY the frozen SDK:
+The harness already wraps and invokes your code as an async function. Use
+top-level await, for example: const state = await sdk.observe();
+Do not return only an outer function declaration such as async function run().
+If you define a helper function, explicitly await its call in the body.
   sdk.observe(): current character {{x,y,hp,maxHp,mp,maxMp,exp,alive,mapId,level}}
     and live monsters [{{objectId,x,y}}]. These are client observations, not scoring.
   sdk.pressKeys(keys, milliseconds): hold 1..3 named keys for 30..1500ms, then release.
@@ -153,6 +158,9 @@ class FullClientBridge:
         self.leases = {}
         self.release_acks = set()
         self.capture_clock = None
+        self.capture_clock_received_ms = None
+        self.frame_transit = None
+        self.readiness = None
         self.quarantines = {}
         self.run = {'status': 'idle', 'mode': 'manual', 'model': None}
         self._recover_incomplete()
@@ -249,7 +257,7 @@ class FullClientBridge:
             elif (folder/'api-request.json').is_file():
                 try:
                     intent = json.loads((folder/'api-request.json').read_text())
-                    api_outcome = 'not_started' if intent.get('status') in ('preparing','budget_rejected') else 'uncertain'
+                    api_outcome = 'not_started' if intent.get('status') in ('preparing','budget_rejected','readiness_rejected') else 'uncertain'
                 except (OSError,ValueError,AttributeError):
                     api_outcome = 'uncertain'
             path = self.output/'cancellations'/f'{run_id}.json'
@@ -289,6 +297,123 @@ class FullClientBridge:
                 remaining=deadline-time.monotonic()
                 if remaining<=0: raise ControlError('recorder_not_ready')
                 self.lock.wait(remaining)
+
+    def _readiness_sample(self, observation, rendered_frames, received_ms, now):
+        sampled_now=time.monotonic()
+        proof=self.frame_transit
+        residence=max(0,(sampled_now-self.last_seen)*1000)
+        observation['ageMs']=proof['reported_age_ms']+proof['transit_upper_ms']+residence
+        observation['renderAgeMs']=proof['reported_render_age_ms']+proof['transit_upper_ms']+residence
+        return {'rendered_frames':rendered_frames,'server_received_at_ms':round(time.time()*1000),
+                'run_elapsed_ms':round((sampled_now-self.readiness['run_started'])*1000),
+                'map_id':observation['character']['mapId'],'alive':observation['character']['alive'],
+                'monster_count':len(observation['monsters']),'age_ms':observation['ageMs'],
+                'render_age_ms':observation['renderAgeMs'],'observation_sha256':observation_sha256(observation),
+                **proof,'server_residence_ms':max(0,residence)}
+
+    def _record_readiness_frame(self, capture, received_ms, now):
+        """Called under the same lock that accepts this run's post-render frame."""
+        state=self.readiness
+        if state is None:
+            return
+        valid=(self.run.get('id')==state['run_id'] and self.client==state['client_id']
+               and self.run.get('captureClockAccepted')==state['capture_clock_id']
+               and self.run.get('captureReady') is True and self.fresh()
+               and observation_matches(self.observation,state['policy']))
+        if not valid:
+            state['samples']=[]; state['generation']+=1
+            self.lock.notify_all()
+            return
+        counter=capture['renderedFrames']
+        previous=state.get('counter')
+        if previous is not None and counter<previous:
+            state['fault']=True
+        if previous is not None and counter<=previous:
+            self.lock.notify_all()
+            return
+        if state['samples'] and (now-state['last_received']>=1.5
+                or round((now-state['run_started'])*1000)-state['samples'][-1]['frame_received_run_ms']>=1500
+                or not 0<=received_ms-state['samples'][-1]['frame_received_at_ms']<1500):
+            state['samples']=[]; state['generation']+=1
+        if not state['samples']:
+            state['first_received']=now
+        state['counter']=counter
+        state['last_received']=now
+        observation=self._snapshot()
+        sample=self._readiness_sample(observation,counter,received_ms,now)
+        state['samples'].append(sample)
+        # Keep the first point and a bounded recent tail, even under frame spam.
+        if len(state['samples'])>64: del state['samples'][1]
+        state['observation']=observation
+        self.lock.notify_all()
+
+    def _wait_for_readiness(self, run, started):
+        policy=run['readinessPolicy']
+        with self.lock:
+            now=time.monotonic()
+            self.readiness={'run_id':run['id'],'client_id':run['client'],
+                'capture_clock_id':self.run.get('captureClockAccepted'),'policy':policy,
+                'run_started':started,'wait_started':now,'wait_started_at_ms':round(time.time()*1000),
+                'samples':[],'generation':0,'fault':False}
+            state=self.readiness
+            deadline=now+policy['timeout_ms']/1000
+            while True:
+                self._check_cancelled(run['id'])
+                if (self.run.get('id')!=run['id'] or self.client!=run['client']
+                        or self.run.get('captureClockAccepted')!=state['capture_clock_id'] or state['fault']):
+                    raise ControlError('readiness_state_changed')
+                now=time.monotonic()
+                if now>=deadline: raise ControlError('readiness_timeout')
+                samples=state['samples']
+                if (len(samples)>=policy['min_samples']
+                        and samples[-1]['frame_received_run_ms']-samples[0]['frame_received_run_ms']>=policy['min_span_ms']
+                        and samples[-1]['frame_received_at_ms']-samples[0]['frame_received_at_ms']>=policy['min_span_ms']
+                        and state['last_received']-state['first_received']>=policy['min_span_ms']/1000
+                        and self.run.get('captureReady') and self.fresh()
+                        and observation_matches(self._snapshot(),policy)):
+                    state['qualified_generation']=state['generation']
+                    state['qualified_received']=state['last_received']
+                    initial=json.loads(json.dumps(state['observation']))
+                    return initial, {'schema_version':1,'run_id':run['id'],'client_id':run['client'],
+                        'capture_clock_id':state['capture_clock_id'],
+                        'capture_clock_client_received_ms':self.capture_clock_received_ms,
+                        'capture_ready_at_ms':self.run['captureReadyAtMs'],'policy':policy,
+                        'wait_started_at_ms':state['wait_started_at_ms'],
+                        'wait_started_run_ms':round((state['wait_started']-started)*1000),
+                        'qualified_at_ms':round(time.time()*1000),'qualified_run_ms':round((now-started)*1000),
+                        'samples':json.loads(json.dumps(samples)),
+                        'initial_observation_sha256':observation_sha256(initial)}
+                self.lock.wait(min(0.2,deadline-now))
+
+    def _readiness_dispatch(self, run, receipt):
+        """Recheck the latest frame; never replace the already chosen API input."""
+        state=self.readiness
+        self._check_cancelled(run['id'])
+        if (state is None or state['run_id']!=run['id'] or self.run.get('id')!=run['id']
+                or self.client!=receipt['client_id'] or state['fault']
+                or state['generation']!=state.get('qualified_generation')
+                or self.run.get('captureClockAccepted')!=receipt['capture_clock_id']
+                or not self.run.get('captureReady') or not self.fresh()
+                or time.monotonic()-state['wait_started']>=state['policy']['timeout_ms']/1000):
+            raise ControlError('readiness_state_changed')
+        observation=self._snapshot()
+        if not observation_matches(observation,state['policy']):
+            raise ControlError('readiness_state_changed')
+        now=time.monotonic()
+        initial=receipt['samples'][-1]
+        initial_elapsed=max(0,(now-state['qualified_received'])*1000)
+        if max(initial['reported_age_ms'],initial['reported_render_age_ms'])+initial['transit_upper_ms']+initial_elapsed>=1500:
+            raise ControlError('readiness_state_changed')
+        rounded_elapsed=round((now-state['run_started'])*1000)-initial['run_elapsed_ms']
+        if max(initial['age_ms'],initial['render_age_ms'])+rounded_elapsed>=1500:
+            raise ControlError('readiness_state_changed')
+        sample=self._readiness_sample(observation,state['counter'],
+                                      state['samples'][-1]['server_received_at_ms'],now)
+        if (max(sample['age_ms'],sample['render_age_ms'])>=1500
+                or max(initial['age_ms'],initial['render_age_ms'])+sample['run_elapsed_ms']-initial['run_elapsed_ms']>=1500):
+            raise ControlError('readiness_state_changed')
+        return {key:value for key,value in sample.items() if key!='server_received_at_ms'} | {
+            'checked_at_ms':round(time.time()*1000)}
 
     def frame(self, body):
         if not isinstance(body, dict):
@@ -333,11 +458,42 @@ class FullClientBridge:
             if self.run.get('id') and _number(body.get('clientSentAtMs')):
                 if not self.run.get('captureClockAccepted'):
                     if self.capture_clock and body.get('captureClockAck')==self.capture_clock['id']:
-                        self.run['captureClockAccepted']=self.capture_clock['id']
-                        write_json(self.output/self.run['id']/'capture-clock.json',self.capture_clock)
+                        received=body.get('captureClockReceivedAtMs')
+                        clock=self.capture_clock
+                        valid_clock=(_number(received) and clock['client_sent_ms']<=received<=body['clientSentAtMs']
+                            and 0 <= (clock['server_received_ms']-clock['client_sent_ms'])
+                                -(clock['server_sent_ms']-received) <= 500)
+                        if not self.run.get('readinessPolicy') or valid_clock:
+                            self.run['captureClockAccepted']=clock['id']
+                            self.capture_clock_received_ms=received if valid_clock else None
+                            write_json(self.output/self.run['id']/'capture-clock.json',clock)
                     else:
                         self.capture_clock={'id':uuid.uuid4().hex,'client_sent_ms':body['clientSentAtMs'],
                             'server_received_ms':server_received_ms,'server_sent_ms':round(time.time()*1000)}
+            if self.run.get('readinessPolicy'):
+                # The recorded handshake gives an offset interval, not equal
+                # clocks. Its lower endpoint conservatively bounds POST transit.
+                clock=self.capture_clock
+                sent=body.get('clientSentAtMs')
+                proof_valid=(clock is not None and self.run.get('captureClockAccepted')==clock['id']
+                    and _number(self.capture_clock_received_ms) and _number(sent)
+                    and sent>=self.capture_clock_received_ms)
+                transit=(server_received_ms-(sent+clock['server_sent_ms']-self.capture_clock_received_ms)
+                         if proof_valid else -1)
+                self.frame_transit=None
+                if proof_valid and 0<=transit<=5000:
+                    self.frame_transit={'frame_received_at_ms':server_received_ms,
+                        'frame_received_run_ms':round((now-self.readiness['run_started'])*1000) if self.readiness else None,
+                        'client_sent_at_ms':sent,'reported_age_ms':age,'reported_render_age_ms':render_age,
+                        'transit_upper_ms':transit}
+                    age+=transit; render_age+=transit
+                else:
+                    valid_frame=False
+                valid_frame=valid_frame and max(age,render_age)<1500
+                self.observation=obs | {'ageMs':age,'renderAgeMs':render_age,'renderedHud':hud} if valid_frame else {'ready':False}
+                self.fresh_until=now+(1500-max(age,render_age))/1000 if valid_frame else now
+                self.run['captureReady']=self.run['captureReady'] and valid_frame
+            self._record_readiness_frame(capture,server_received_ms,now)
             if (self.run.get('id') and (self.output/self.run['id']).is_dir()
                     and self.run['status'] in ('completed','failed') and not self.run.get('captureTerminal')):
                 self.run['captureTerminal']={'id':uuid.uuid4().hex,'serverIssuedAtMs':server_received_ms}
@@ -510,7 +666,8 @@ class FullClientBridge:
             write_json(folder/'controller.json',self.run)
 
     def start(self, mode, model=None, duration_seconds=22, *, client=None, run_id=None, request_id=None,
-              total_token_limit=None, trial_context=None, docker_image_id=None, docker_binding=None, lease_fds=(), private=False):
+              total_token_limit=None, trial_context=None, docker_image_id=None, docker_binding=None,
+              readiness_policy=None, lease_fds=(), private=False):
         if mode not in ('script', 'api') or (mode == 'api' and model not in MODELS):
             raise ValueError('Invalid controller selection')
         if type(duration_seconds) is not int or duration_seconds not in (22, 60):
@@ -534,6 +691,14 @@ class FullClientBridge:
             raise ControlError('trial_requires_matching_attempt_identity')
         if trial_context is not None and (docker_binding is None or docker_image_id is None):
             raise ControlError('docker_binding_required')
+        if trial_context is not None and readiness_policy is None:
+            raise ControlError('readiness_policy_required')
+        if readiness_policy is not None:
+            try:
+                readiness_policy=validate_policy(readiness_policy)
+            except ReadinessError as error:
+                raise ControlError(str(error)) from None
+            if trial_context is None: raise ControlError('invalid_readiness_policy')
         if docker_binding is not None:
             try:
                 docker_binding = validate_binding(docker_binding)
@@ -546,6 +711,8 @@ class FullClientBridge:
                     'totalTokenLimit':total_token_limit,'trialContext':trial_context,'dockerImageId':docker_image_id}
         if docker_binding is not None:
             identity['dockerBinding'] = docker_binding
+        if readiness_policy is not None:
+            identity['readinessPolicy'] = readiness_policy
         with self.lock:
             claim = self.output/'requests'/f'{request_id}.json'
             if claim.exists():
@@ -599,6 +766,9 @@ class FullClientBridge:
             write_json(folder/'controller.json', value)
             self.run = dict(value)
             self.capture_clock = None
+            self.capture_clock_received_ms = None
+            self.frame_transit = None
+            self.readiness = None
             self.cancel_events[run_id] = threading.Event()
             retained = []
             try:
@@ -631,6 +801,8 @@ class FullClientBridge:
         progress_steps = []
         cancel_event = self.cancel_events.get(run['id'])
         input_deadline = None
+        readiness_receipt = None
+        readiness_sha256 = None
 
         def run_request(url, payload=None, timeout=3):
             return self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
@@ -639,12 +811,16 @@ class FullClientBridge:
             if run.get('trialContext'):
                 phase='capture_prepare'
                 self._wait_for_capture(run['id'])
-                phase='initial_observation'
-            initial = run_request('/v1/observe')
+                phase='readiness'
+                timeline['readiness_started_ms']=round((time.monotonic()-started)*1000)
+                initial,readiness_receipt=self._wait_for_readiness(run,started)
+                timeline['readiness_started_ms']=readiness_receipt['wait_started_run_ms']
+                timeline['readiness_ended_ms']=readiness_receipt['qualified_run_ms']
+            else:
+                initial = run_request('/v1/observe')
             code, meta = SMOKE_CODE, None
             if run['mode'] == 'api':
-                api_started = time.monotonic()
-                timeline['api_started_ms'] = round((api_started-started)*1000)
+                api_started = None
                 key = read_private_file(self.key_file).strip()
                 prompt = PROMPT.format(program_seconds=program_seconds,
                                        action_limit=action_limit, sdk_request_limit=sdk_request_limit)
@@ -656,7 +832,7 @@ class FullClientBridge:
                 requested = False
 
                 def api_request(url, payload, credential, timeout):
-                    nonlocal requested, api_outcome
+                    nonlocal requested, api_outcome, api_started, readiness_receipt, readiness_sha256
                     if requested:
                         raise ControlError('api_request_limit')
                     with self.lock:
@@ -665,7 +841,6 @@ class FullClientBridge:
                         if run.get('dockerBinding') is None:
                             raise ControlError('docker_binding_required')
                         validate_binding(run['dockerBinding'])
-                    requested = True
                     payload = payload | {'metadata':dict(payload.get('metadata', {}),maplebench_run_id=run['id'])}
                     # Conservative preflight estimate, not a provider-guaranteed
                     # input cap: UTF-8 bytes plus fixed envelope/metadata allowance.
@@ -680,10 +855,28 @@ class FullClientBridge:
                         write_json(out/'api-request.json',intent)
                         raise ControlError('api_token_budget_too_small')
                     write_json(out/'api-request-body.json', payload)
-                    intent['status']='requesting'
                     with self.lock:
                         self._check_cancelled(run['id'])
+                        if readiness_receipt is not None:
+                            readiness_receipt=readiness_receipt | {'dispatch':self._readiness_dispatch(run,readiness_receipt)}
+                            write_json(out/'readiness.json',readiness_receipt)
+                            readiness_sha256=hashlib.sha256((out/'readiness.json').read_bytes()).hexdigest()
+                            intent.update(readiness=readiness_receipt,readinessSha256=readiness_sha256)
+                        intent['status']='requesting'
                         write_json(out/'api-request.json',intent)
+                        # Disk synchronization can take time. Recheck after it,
+                        # before marking the single provider request submitted.
+                        try:
+                            self._check_cancelled(run['id'])
+                            if readiness_receipt is not None:
+                                self._readiness_dispatch(run,readiness_receipt)
+                        except ControlError:
+                            intent['status']='readiness_rejected'
+                            write_json(out/'api-request.json',intent)
+                            raise
+                        api_started=time.monotonic()
+                        timeline['api_started_ms']=round((api_started-started)*1000)
+                        requested = True
                         api_outcome = 'uncertain'
                     response = bounded_request(url, payload, credential, timeout)
                     write_json(out/'api-response.json', response)
@@ -698,7 +891,7 @@ class FullClientBridge:
                                                  output_tokens=3000, timeout=50, request_fn=api_request)
                 finally:
                     del key
-                api_ms = round((time.monotonic()-api_started)*1000)
+                api_ms = round((time.monotonic()-api_started)*1000) if api_started is not None else 0
                 timeline['api_ended_ms'] = round((time.monotonic()-started)*1000)
                 write_json(out/'response.json', meta)
                 api_outcome = 'receipt_saved'
@@ -773,6 +966,8 @@ class FullClientBridge:
                                                    'elapsedMs':round((time.monotonic()-started)*1000),
                                                    'apiLatencyMs':api_ms},
                                          'api':meta,
+                                         **({'readiness':readiness_receipt,'readinessSha256':readiness_sha256}
+                                            if readiness_receipt is not None else {}),
                                          'timeline':timeline,
                                          'programSha256':hashlib.sha256(code.encode()).hexdigest(),
                                          'observedXpDelta':final['character']['exp']-initial['character']['exp']
@@ -782,7 +977,7 @@ class FullClientBridge:
                 'result':result_document,
                 'budgets':{'api_requests':1 if run['mode']=='api' else 0, 'output_tokens':3000,
                            'total_tokens':run.get('totalTokenLimit'), 'program_ms':program_seconds*1000,
-                           'run_ms':(program_seconds+53)*1000, 'actions':action_limit,
+                           'run_ms':(program_seconds+(63 if readiness_receipt is not None else 53))*1000, 'actions':action_limit,
                            'sdk_requests':sdk_request_limit},
                 'timeline':timeline,
                 'scenario':{'id':'hero-full-client-skeletons-integration',
@@ -810,8 +1005,12 @@ class FullClientBridge:
                                 apiOutcome=api_outcome, evidenceStatus='failed')
                 final_controller = dict(self.run)
             try:
+                if phase=='readiness':
+                    timeline['readiness_ended_ms']=round((time.monotonic()-started)*1000)
                 write_json(out/'failure.json', {'controller':final_controller, 'error':reason,
-                    'phase':phase,'apiOutcome':api_outcome,'program':result,'timeline':timeline})
+                    'phase':phase,'apiOutcome':api_outcome,'program':result,'timeline':timeline,
+                    **({'readiness':readiness_receipt,'readinessSha256':readiness_sha256}
+                       if readiness_receipt is not None else {})})
             except OSError:
                 pass
         finally:

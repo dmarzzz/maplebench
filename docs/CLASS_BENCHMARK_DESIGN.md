@@ -1,13 +1,15 @@
 # Class and task coverage for MapleBench
 
-Status: proposed experiment design. Only the short Hero full-client scenario has
-completed the current multi-model acceptance run. The classes and longer tasks
-below are not implemented or benchmarked yet.
+Status: proposed experiment design. Short Hero full-client trials have completed
+across the supported models, but the historical checks did not prove a populated
+scene at the first model observation. The new readiness/prompt contract and live
+repeated-trial coordination are not accepted yet. The other classes and longer
+tasks below are not implemented or benchmarked.
 
 A useful benchmark should show which kinds of gameplay a model can handle. A
 single well-equipped melee character on one monster map tests only a small part
 of that ability. The next suite should vary class mechanics and objectives while
-keeping each comparison's starting state, rules and budgets identical.
+keeping each comparison's declared baseline, rules and budgets identical.
 
 ## Comparisons within each class
 
@@ -33,6 +35,18 @@ rules. It also needs a class-specific SDK/prompt derived from that frozen
 manifest. Verify actual movement and skill effects; a key acknowledgment alone
 cannot qualify a fixture. The runtime, assets, scenario, prompt and budget hashes
 remain part of the comparison identity.
+
+Equal fixture hashes alone do not establish equal live scenes. The next Hero
+protocol adds a pre-API check for three distinct post-render frames spanning at
+least one second, with fresh observations, a living character on the baseline
+map and at least one monster. The ten-second readiness deadline and revised
+async-body prompt must be frozen before any model call. The one-API cap stays
+fixed; the future run envelope is `program_seconds + 63` seconds, including the
+new readiness allowance. This contract still requires a separate live acceptance;
+see [the exact policy](FULL_CLIENT_EXPERIMENTS.md#scene-readiness-and-the-next-protocol-version).
+It establishes minimum scene population, not controlled monster positions,
+reachable targets or deterministic combat. Other class fixtures need their own
+validated readiness requirements before inclusion.
 
 All models receive the same fixture within a class. Different classes can have
 different inherent damage, resource costs and XP opportunities; raw XP totals
@@ -104,6 +118,12 @@ infrastructure/evidence failures. Report both eligible-run performance and the
 fraction of attempts that produced eligible evidence; do not silently drop the
 hardest runs. Combat RNG is not currently controlled. If seeds are introduced,
 verify what state they actually control and pair the same seeds across models.
+
+Historical zero-XP and no-op outcomes remain part of their original declared
+attempt sets. A later readiness or prompt fix creates a new fixture version; it
+does not repair old output, replace a model's observation or rerank old results.
+Report attempts with incomplete action receipts separately while retaining any
+independently verified signed persisted XP.
 
 ## Monster visibility observation
 

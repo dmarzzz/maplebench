@@ -512,6 +512,7 @@ def _verify_persisted_manifest(manifest, artifact_root):
     require(isinstance(request.get("input"), str)
             and same_json(parse_json(request["input"]), {"observation": result["initial"]}),
             "api_request: actual input must contain exactly the recorded initial observation")
+    _verify_readiness_policy(manifest, artifact_root, evidence, scenario)
     require(_integer(request.get("max_output_tokens"), 1)
             and request["max_output_tokens"] <= manifest["budgets"]["output_tokens"],
             "api_request: requested output limit exceeds the frozen budget")
@@ -582,6 +583,159 @@ def _verify_persisted_manifest(manifest, artifact_root):
     require(type(review.get("reviewed_at_ms")) is int
             and review["reviewed_at_ms"] >= result["timing"]["endedAtMs"],
             "video_review: review must follow the completed run")
+
+
+def _verify_readiness_policy(manifest, artifact_root, evidence, scenario):
+    """Enforce only a readiness policy frozen before this particular trial.
+
+    Historical scenarios keep their original eligibility. New scenarios bind the
+    pre-API receipt to saved capture identities and to the actual provider input;
+    a fresh final frame cannot substitute for the required sustained window.
+    """
+    if "readiness_policy" not in scenario:
+        return
+    from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
+
+    def require(condition, reason):
+        if not condition:
+            raise EvidenceError("readiness: " + reason)
+
+    expected_map = _object(_object(evidence.get("baseline")).get("character")).get("map_id")
+    require(_integer(expected_map), "persisted baseline must identify the expected map")
+    try:
+        policy = validate_policy(scenario["readiness_policy"], expected_map_id=expected_map)
+    except (ReadinessError, TypeError, ValueError, OverflowError) as error:
+        raise EvidenceError("readiness: frozen policy is missing, malformed, or differs from the baseline") from error
+    artifacts, result = manifest["artifacts"], manifest["result"]
+    receipt = read_json_artifact(artifact_root, artifacts, "readiness")
+    require(isinstance(receipt, dict) and same_json(receipt, result.get("readiness"))
+            and _hash(result.get("readinessSha256"))
+            and artifacts["readiness"]["sha256"] == result["readinessSha256"],
+            "result must bind the exact pre-API receipt bytes")
+    fields = {"schema_version", "run_id", "client_id", "capture_clock_id", "capture_clock_client_received_ms", "capture_ready_at_ms",
+              "policy", "wait_started_at_ms", "wait_started_run_ms", "qualified_at_ms", "qualified_run_ms",
+              "samples", "initial_observation_sha256", "dispatch"}
+    require(set(receipt) == fields and type(receipt.get("schema_version")) is int
+            and receipt["schema_version"] == 1 and same_json(receipt.get("policy"), policy),
+            "receipt schema or policy differs from the frozen scenario")
+    capture = read_json_artifact(artifact_root, artifacts, "capture")
+    ready = read_json_artifact(artifact_root, artifacts, "capture_ready")
+    clock = read_json_artifact(artifact_root, artifacts, "capture_clock")
+    controller = result["controller"]
+    require(isinstance(capture, dict) and isinstance(ready, dict) and isinstance(clock, dict)
+            and same_json(controller.get("readinessPolicy"), policy)
+            and receipt["run_id"] == controller["id"] == capture.get("run_id") == ready.get("runId")
+            and _text(receipt["client_id"]) and receipt["client_id"] == controller.get("client") == capture.get("client_id")
+            and _text(receipt["capture_clock_id"]) and receipt["capture_clock_id"] == clock.get("id")
+            and same_json(receipt["capture_ready_at_ms"], ready.get("serverReceivedAtMs")),
+            "receipt belongs to a different run, renderer, or capture handshake")
+    sync = _object(capture.get("clock"))
+    require(_number(receipt["capture_clock_client_received_ms"])
+            and same_json(receipt["capture_clock_client_received_ms"], sync.get("client_received_ms"))
+            and all(same_json(sync.get(key), clock.get(key)) for key in
+                    ("id", "client_sent_ms", "server_received_ms", "server_sent_ms"))
+            and all(_number(clock.get(key)) for key in ("client_sent_ms", "server_received_ms", "server_sent_ms"))
+            and clock["client_sent_ms"] <= receipt["capture_clock_client_received_ms"]
+            and clock["server_received_ms"] <= clock["server_sent_ms"],
+            "transit clock echo must match this capture's measured handshake")
+    lower = clock["server_sent_ms"] - receipt["capture_clock_client_received_ms"]
+    upper = clock["server_received_ms"] - clock["client_sent_ms"]
+    require(0 <= upper - lower <= CAPTURE_UNCERTAINTY_MS * 2,
+            "transit clock interval is inconsistent or too uncertain")
+    timing_fields = ("capture_ready_at_ms", "wait_started_at_ms", "wait_started_run_ms",
+                     "qualified_at_ms", "qualified_run_ms")
+    require(all(_number(receipt[key]) for key in timing_fields), "receipt timestamps must be finite numbers")
+    timeline, started = result["timeline"], result["timing"]["startedAtMs"]
+    require(same_json(timeline.get("readiness_started_ms"), receipt["wait_started_run_ms"])
+            and same_json(timeline.get("readiness_ended_ms"), receipt["qualified_run_ms"])
+            and started <= receipt["capture_ready_at_ms"] <= receipt["wait_started_at_ms"] <= receipt["qualified_at_ms"]
+            and 0 <= receipt["qualified_run_ms"] - receipt["wait_started_run_ms"] <= policy["timeout_ms"]
+            and receipt["qualified_at_ms"] - receipt["wait_started_at_ms"] <= policy["timeout_ms"] + SLACK_MS,
+            "qualification must follow capture readiness within the frozen timeout")
+    require(manifest["budgets"].get("run_ms") == (scenario["program_seconds"] + 63) * 1000,
+            "future run budget must include only the frozen ten-second readiness allowance")
+    for wall, elapsed in (("wait_started_at_ms", "wait_started_run_ms"), ("qualified_at_ms", "qualified_run_ms")):
+        require(abs(receipt[wall] - started - receipt[elapsed]) <= SLACK_MS,
+                "receipt wall and monotonic clocks disagree")
+    samples = receipt["samples"]
+    require(isinstance(samples, list) and policy["min_samples"] <= len(samples) <= 64,
+            "preserve the complete bounded qualifying sample window")
+    require(_integer(ready.get("renderedFrames"), 1) and _integer(capture.get("rendered_frames"), 1),
+            "capture must provide measured post-render frame counters")
+    sample_fields = {"rendered_frames", "server_received_at_ms", "run_elapsed_ms", "map_id", "alive",
+                     "monster_count", "age_ms", "render_age_ms", "observation_sha256",
+                     "frame_received_at_ms", "frame_received_run_ms", "client_sent_at_ms",
+                     "reported_age_ms", "reported_render_age_ms", "transit_upper_ms", "server_residence_ms"}
+
+    def sample(value, *, dispatch=False):
+        clock_key = "checked_at_ms" if dispatch else "server_received_at_ms"
+        expected_fields = (sample_fields - {"server_received_at_ms"}) | {clock_key}
+        require(isinstance(value, dict) and set(value) == expected_fields,
+                "sample has missing or unsupported fields")
+        require(_integer(value.get("rendered_frames"), 1)
+                and ready["renderedFrames"] <= value["rendered_frames"] <= capture["rendered_frames"]
+                and _number(value.get(clock_key)) and _number(value.get("run_elapsed_ms"))
+                and type(value.get("map_id")) is int and value["map_id"] == policy["expected_map_id"]
+                and value.get("alive") is True and _integer(value.get("monster_count"), policy["min_monsters"])
+                and all(_number(value.get(key)) and value[key] < 1500 for key in ("age_ms", "render_age_ms"))
+                and _hash(value.get("observation_sha256")),
+                "each sample must be a fresh living character on the expected populated map")
+        require(abs(value[clock_key] - started - value["run_elapsed_ms"]) <= SLACK_MS,
+                "sample wall and monotonic clocks disagree")
+        transit_fields = ("frame_received_at_ms", "frame_received_run_ms", "client_sent_at_ms",
+                          "reported_age_ms", "reported_render_age_ms", "transit_upper_ms", "server_residence_ms")
+        require(all(_number(value.get(key)) for key in transit_fields)
+                and receipt["capture_clock_client_received_ms"] <= value["client_sent_at_ms"]
+                and receipt["capture_ready_at_ms"] <= value["frame_received_at_ms"] <= value[clock_key]
+                and value["frame_received_run_ms"] <= value["run_elapsed_ms"]
+                and abs(value["frame_received_at_ms"] - started - value["frame_received_run_ms"]) <= SLACK_MS,
+                "transit measurements must follow the same capture and precede the sample")
+        transit = value["frame_received_at_ms"] - (value["client_sent_at_ms"] + lower)
+        require(transit >= 0 and abs(value["transit_upper_ms"] - transit) <= 0.000001,
+                "transit upper bound must be recomputed from the measured clock interval")
+        require(abs(value["server_residence_ms"] - value["run_elapsed_ms"] + value["frame_received_run_ms"]) <= 1,
+                "server residence must agree with the frame and sample monotonic times")
+        for adjusted, reported in (("age_ms", "reported_age_ms"), ("render_age_ms", "reported_render_age_ms")):
+            require(abs(value[adjusted] - value[reported] - transit - value["server_residence_ms"]) <= 0.000001,
+                    "freshness must include reported age, conservative transit, and server residence")
+
+    for value in samples:
+        sample(value)
+        require(receipt["wait_started_run_ms"] <= value["run_elapsed_ms"] <= receipt["qualified_run_ms"]
+                and receipt["wait_started_run_ms"] <= value["frame_received_run_ms"]
+                and receipt["wait_started_at_ms"] <= value["server_received_at_ms"] <= receipt["qualified_at_ms"],
+                "qualifying sample lies outside its recorded wait window")
+    for previous, current in zip(samples, samples[1:]):
+        require(current["rendered_frames"] > previous["rendered_frames"]
+                and current["run_elapsed_ms"] >= previous["run_elapsed_ms"]
+                and 0 <= current["frame_received_run_ms"] - previous["frame_received_run_ms"] < 1500
+                and current["server_received_at_ms"] >= previous["server_received_at_ms"],
+                "qualification needs distinct consecutive post-render samples without a stale gap")
+    first, last = samples[0], samples[-1]
+    require(last["frame_received_run_ms"] - first["frame_received_run_ms"] >= policy["min_span_ms"]
+            and last["run_elapsed_ms"] <= receipt["qualified_run_ms"]
+            and last["server_received_at_ms"] <= receipt["qualified_at_ms"],
+            "qualification must follow the last sample after the frozen sustained interval")
+    try:
+        initial_valid = observation_matches(result["initial"], policy)
+        initial_hash = observation_sha256(result["initial"])
+    except (ReadinessError, TypeError, ValueError, OverflowError) as error:
+        raise EvidenceError("readiness: invalid initial provider observation") from error
+    require(initial_valid and receipt["initial_observation_sha256"] == last["observation_sha256"] == initial_hash
+            and same_json(last["age_ms"], result["initial"].get("ageMs"))
+            and same_json(last["render_age_ms"], result["initial"].get("renderAgeMs"))
+            and last["monster_count"] == len(result["initial"]["monsters"]),
+            "last qualifying sample must bind the actual initial provider observation")
+    dispatch = receipt["dispatch"]
+    sample(dispatch, dispatch=True)
+    require(last["rendered_frames"] <= dispatch["rendered_frames"]
+            and last["frame_received_run_ms"] <= dispatch["frame_received_run_ms"]
+            and receipt["qualified_run_ms"] <= dispatch["run_elapsed_ms"] <= timeline["api_started_ms"]
+            and timeline["api_started_ms"] - receipt["wait_started_run_ms"] <= policy["timeout_ms"]
+            and all(last[key] + timeline["api_started_ms"] - last["run_elapsed_ms"] < 1500
+                    for key in ("age_ms", "render_age_ms"))
+            and receipt["qualified_at_ms"] <= dispatch["checked_at_ms"] <= started + timeline["api_started_ms"] + SLACK_MS,
+            "fresh dispatch recheck must follow qualification and precede the API request")
 
 
 def verify_capture_bundle(manifest, artifact_root):

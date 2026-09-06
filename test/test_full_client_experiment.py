@@ -54,7 +54,7 @@ class ExperimentTests(unittest.TestCase):
         runner = {"python": experiment.pin(Path(sys.executable).resolve()),
             "trial_script": experiment.pin(Path(experiment.trial.__file__).resolve()),
             "dependencies": [experiment.pin(Path(module.__file__).resolve())
-                             for module in (experiment, scoring, experiment.docker)],
+                             for module in (experiment, scoring, experiment.docker, experiment.readiness)],
             "state_root": str(self.attempts), "world_lock": str(self.root / "world.lock"),
             "queue_lock": str(self.root / "queue.lock")}
         budgets = {"total_seconds": 120, "operation_seconds": 30, "controller_seconds": 24,
@@ -62,14 +62,17 @@ class ExperimentTests(unittest.TestCase):
         values = []
         for index in range(fixtures):
             name = f"fixture{index}"
-            scenario = self.write(name + "-scenario.json", {"id": name, "trial_budgets": budgets})
+            scenario = self.write(name + "-scenario.json", {"id": name, "trial_budgets": budgets,
+                "readiness_policy": {"schema_version": 1, "expected_map_id": 240040511,
+                    "min_monsters": 1, "min_samples": 3, "min_span_ms": 1000, "timeout_ms": 10000}})
             baseline = self.write(name + "-baseline.sql", b"synthetic database baseline")
+            baseline_snapshot = self.write(name + "-baseline-snapshot.json", {"character": {"map_id": 240040511}})
             runtime = self.write(name + "-runtime.json", {"schema_version": 2,
                 "docker_image_id": "sha256:" + "a" * 64,
                 "docker_binding": {"schema_version": 1, "executable": {"path": "/usr/bin/docker", "sha256": "b" * 64},
                                    "launcher": None, "socket_path": "/var/run/docker.sock"}})
             backend = self.write(name + "-backend.py", b"raise RuntimeError('This fixture must never execute')\n")
-            configuration = self.write(name + "-backend.json", {"baseline": baseline, "scenario": scenario,
+            configuration = self.write(name + "-backend.json", {"baseline": baseline, "baseline_snapshot": baseline_snapshot, "scenario": scenario,
                 "runtime_manifest": runtime, "orchestrator": runner["trial_script"], "attempt_root": str(self.attempts),
                 "world_lock": runner["world_lock"], "queue_lock": runner["queue_lock"]})
             adapter = self.write(name + "-adapter.json", {"argv": [runner["python"]["path"], backend["path"],
@@ -122,6 +125,35 @@ class ExperimentTests(unittest.TestCase):
         for positions in plan["balance"]["position_counts"].values():
             self.assertTrue(all(counts == [1, 1, 1, 1] for counts in positions.values()))
         self.assertEqual(len({e["attempt_id"] for e in plan["entries"]}), 32)
+
+    def test_plan_refuses_missing_weakened_or_wrong_map_readiness_before_assigning_ids(self):
+        for change in (lambda s:s.pop("readiness_policy"),
+                       lambda s:s["readiness_policy"].update(min_monsters=0),
+                       lambda s:s["readiness_policy"].update(expected_map_id=100000000)):
+            config = self.config(models=["gpt-6-astra"])
+            fixture = config["fixtures"][0]
+            scenario = json.loads(Path(fixture["scenario"]["path"]).read_text())
+            change(scenario)
+            fixture["scenario"] = self.write("fixture0-scenario.json", scenario)
+            backend = json.loads((self.root / "fixture0-backend.json").read_text())
+            backend["scenario"] = fixture["scenario"]
+            self.write("fixture0-backend.json", backend)
+            ids = []
+            with self.assertRaisesRegex(experiment.ExperimentError, "invalid_readiness_policy"):
+                experiment.build_plan(config, id_factory=lambda: ids.append("called"))
+            self.assertEqual(ids, [])
+            self.assertEqual(list(self.attempts.iterdir()), [])
+
+    def test_readiness_module_and_baseline_snapshot_must_be_pinned(self):
+        config = self.config()
+        config["runner"]["dependencies"] = [ref for ref in config["runner"]["dependencies"]
+            if ref["path"] != str(Path(experiment.readiness.__file__).resolve())]
+        with self.assertRaisesRegex(experiment.ExperimentError, "runner_dependencies_missing"):
+            experiment.build_plan(config)
+        config = self.config()
+        (self.root / "fixture0-baseline-snapshot.json").write_text('{"character":{"map_id":0}}')
+        with self.assertRaises(experiment.ExperimentError):
+            experiment.build_plan(config)
 
     def test_five_repetitions_do_not_claim_exact_four_model_balance(self):
         plan = self.plan(models=list(experiment.MODELS), repetitions=5)

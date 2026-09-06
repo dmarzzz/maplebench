@@ -48,6 +48,7 @@ class RuntimeTests(unittest.TestCase):
         self.backend.context = {"attempt_id": self.run_id, "request": {"model": "gpt-6-astra"}}
         self.backend.state = {"schema_version": 1, "attempt_id": self.run_id, "intents": [], "events": [],
                               "session": {}, "artifacts": {}, "server_instance_id": "b" * 32}
+        self.backend.baseline = {"character":{"map_id":1}}
         self.backend.ownership = MagicMock()
         self.backend.quiet = MagicMock()
         self.backend.frozen = MagicMock()
@@ -57,6 +58,10 @@ class RuntimeTests(unittest.TestCase):
         self.host.admin.return_value = {"session": {"state": "waiting", "fresh": True, "pinned": True,
                                                     "artifactsSettled": True}, "bridge": {"run": None}}
         self.host.command.return_value = b"0\n"
+
+    def policy(self):
+        return {"schema_version":1,"expected_map_id":1,"min_monsters":1,
+                "min_samples":3,"min_span_ms":1000,"timeout_ms":10000}
 
     def tearDown(self):
         self.temp.cleanup()
@@ -269,7 +274,7 @@ class RuntimeTests(unittest.TestCase):
         from full_client_bridge import PROMPT
         prompt = PROMPT.format(program_seconds=22, action_limit=80, sdk_request_limit=100)
         self.backend.scenario = {"program_seconds": 22, "instructions_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-                                 "reasoning": {"effort": "low"}}
+                                 "reasoning": {"effort": "low"}, "readiness_policy":self.policy()}
         self.backend.admin = MagicMock(side_effect=runtime.RuntimeErrorCode("uncertain_transport"))
         with self.assertRaisesRegex(runtime.RuntimeErrorCode, "uncertain_transport"):
             self.backend.run_controller()
@@ -279,6 +284,36 @@ class RuntimeTests(unittest.TestCase):
             self.backend.run_controller()
         self.assertEqual(sum(call.args[0] == "start" for call in self.backend.admin.call_args_list), 1)
         self.assertTrue(self.backend.state["failure_disconnect_unconfirmed"])
+
+    def test_new_runtime_requires_frozen_readiness_policy_and_baseline_map(self):
+        from full_client_bridge import PROMPT
+        scenario={"id":"future-fixture","program_seconds":22,"reasoning":{"effort":"low"},
+            "instructions_sha256":hashlib.sha256(PROMPT.format(program_seconds=22,action_limit=80,sdk_request_limit=100).encode()).hexdigest(),
+            "trial_budgets":{"max_total_tokens":30000},"settlement_policy":dict(runtime.SETTLEMENT_POLICY),
+            "budgets":{"api_requests":1,"output_tokens":3000,"total_tokens":30000,"program_ms":22000,
+                       "run_ms":85000,"actions":80,"sdk_requests":100},"readiness_policy":self.policy()}
+        self.ref('baseline_snapshot',{'account_logged_in':0,'character':{'character_id':10,'account_id':20,'map_id':1}})
+        self.ref('runtime_manifest',{'schema_version':2,'docker_binding':self.binding,
+                                   'working_directory':str(self.root),'wz_path':str(self.root/'wz')})
+        self.ref('scenario',scenario)
+        self.backend.load_pins()
+        for altered,reason in [(dict(scenario,readiness_policy=None),'readiness_policy_required'),
+                (dict(scenario,readiness_policy=self.policy()|{'expected_map_id':2}),'invalid_readiness_policy'),
+                (dict(scenario,readiness_policy=self.policy()|{'min_samples':2}),'invalid_readiness_policy'),
+                (dict(scenario,budgets=scenario['budgets']|{'run_ms':75000}),'frozen_bridge_budgets_mismatch')]:
+            with self.subTest(reason=reason):
+                self.ref('scenario',altered)
+                with self.assertRaisesRegex(runtime.RuntimeErrorCode,reason): self.backend.load_pins()
+        self.host.command.assert_not_called(); self.host.admin.assert_not_called()
+
+    def test_runtime_forwards_the_validated_policy_in_single_start(self):
+        self.controller_fixture()
+        original=self.backend.admin
+        self.backend.admin=MagicMock(side_effect=original)
+        self.backend.run_controller()
+        starts=[call for call in self.backend.admin.call_args_list if call.args[0]=='start']
+        self.assertEqual(len(starts),1)
+        self.assertEqual(starts[0].kwargs['readiness_policy'],self.policy())
 
     def controller_fixture(self, terminal="completed"):
         from full_client_bridge import PROMPT
@@ -290,7 +325,7 @@ class RuntimeTests(unittest.TestCase):
         self.backend.scenario = {"program_seconds": 22, "reasoning": {"effort": "low"},
             "instructions_sha256": hashlib.sha256(PROMPT.format(program_seconds=22, action_limit=80,
                                                                   sdk_request_limit=100).encode()).hexdigest(),
-            "settlement_policy": dict(runtime.SETTLEMENT_POLICY)}
+            "settlement_policy": dict(runtime.SETTLEMENT_POLICY), "readiness_policy":self.policy()}
         self.backend.state["session"]["login_at_ms"] = 1000
         native = self.root / "native"
         native.mkdir()
@@ -661,7 +696,7 @@ class RuntimeTests(unittest.TestCase):
     def web_fixture(self):
         script = self.root / "repo/scripts/serve-full-client.py"
         client = self.root / "client"
-        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "maple_agent.py", "agent-sandbox.mjs")),
+        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
                     *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "waiting.html")),
                     *(client / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))]
         for path in required:
@@ -717,6 +752,14 @@ class RuntimeTests(unittest.TestCase):
             if Path(ref["path"]).name != "agent-sandbox.mjs"]
         with self.assertRaisesRegex(runtime.RuntimeErrorCode, "serving_sources_not_frozen"):
             self.backend.web_identity({"MainPID": "123", "User": "synthetic"})
+        self.host.proc.assert_not_called()
+
+    def test_readiness_helper_cannot_be_omitted_from_frozen_runtime(self):
+        self.web_fixture()
+        self.backend.manifest['extra_files']=[ref for ref in self.backend.manifest['extra_files']
+                                             if Path(ref['path']).name!='full_client_readiness.py']
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode,'serving_sources_not_frozen'):
+            self.backend.web_identity({'MainPID':'123','User':'synthetic'})
         self.host.proc.assert_not_called()
 
     def test_web_asset_link_inventory_cannot_switch_or_omit_frozen_files(self):

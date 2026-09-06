@@ -30,6 +30,7 @@ import zipfile
 from full_client_collect import collect, DATABASE
 from full_client_freeze import FreezeError, FREEZE_ERROR_CODES, verify_manifest
 from full_client_docker import DockerBindingError, configured_command, validate_binding
+from full_client_readiness import ReadinessError, observation_sha256, validate_policy
 from full_client_score import (SOURCE, JSON_LIMIT, EvidenceError, parse_json, read_artifact_bytes,
                                open_verified_artifact, same_json, verify_trial_bundle)
 from full_client_trial import (RELAY_ERROR_CODES, RUNTIME_ERROR_CODES, atomic_json,
@@ -300,12 +301,13 @@ class CosmicRuntime:
                 and same_json(self.scenario.get("reasoning"), {"effort": "low"}), "invalid_frozen_scenario")
         expected_budgets = {"api_requests": 1, "output_tokens": 3000,
                             "total_tokens": self.scenario["trial_budgets"]["max_total_tokens"],
-                            "program_ms": duration * 1000, "run_ms": (duration + 53) * 1000,
+                            "program_ms": duration * 1000, "run_ms": (duration + 63) * 1000,
                             "actions": 80 if duration == 22 else 240, "sdk_requests": 100 if duration == 22 else 600}
         require(same_json(self.scenario.get("budgets"), expected_budgets), "frozen_bridge_budgets_mismatch")
         require(same_json(self.scenario.get("settlement_policy"), SETTLEMENT_POLICY),
                 "invalid_settlement_policy")
         self.baseline = parse_json(ref_bytes(self.config["baseline_snapshot"]))
+        self.readiness_policy()
         self.manifest = parse_json(ref_bytes(self.config["runtime_manifest"]))
         self.docker_binding()
         absolute(self.manifest["working_directory"])
@@ -354,6 +356,15 @@ class CosmicRuntime:
                 "docker_binding_mismatch")
         return binding
 
+    def readiness_policy(self):
+        require(self.scenario.get('readiness_policy') is not None, 'readiness_policy_required')
+        expected=self.baseline.get('character',{}).get('map_id')
+        require(type(expected) is int, 'invalid_readiness_policy')
+        try:
+            return validate_policy(self.scenario['readiness_policy'], expected_map_id=expected)
+        except ReadinessError as error:
+            raise RuntimeErrorCode(str(error)) from None
+
     def online_identity(self):
         """Bounded process/UID/environment checks without scanning WZ/NX/JAR bytes."""
         web = self.unit("web")
@@ -371,7 +382,7 @@ class CosmicRuntime:
         controls = script.parent.parent / "ui/full-client"
         # The executor reads the JavaScript dispatcher at each container launch;
         # pin it alongside imported modules, not just the Docker image.
-        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "maple_agent.py", "agent-sandbox.mjs")),
+        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
                     controls / "controller.js", controls / "waiting.html",
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}
@@ -695,12 +706,14 @@ class CosmicRuntime:
                               sdk_request_limit=100 if duration == 22 else 600)
         require(self.scenario.get("instructions_sha256") == hashlib.sha256(prompt.encode()).hexdigest()
                 and self.scenario.get("reasoning") == {"effort": "low"}, "frozen_prompt_mismatch")
+        readiness_policy=self.readiness_policy()
         self.intent("run_controller")
         try:
             self.admin("start", model=spec["model"], duration_seconds=duration,
                        run_id=self.run_id, request_id=self.run_id, total_token_limit=budgets["max_total_tokens"],
                        docker_image_id=self.manifest["docker_image_id"],
                        docker_binding=self.docker_binding(),
+                       readiness_policy=readiness_policy,
                        trial_context={"scenario_fingerprint": spec["scenario_fingerprint"],
                                       "baseline_sha256": spec["baseline_sha256"]})
             terminal_seen = None
@@ -783,6 +796,14 @@ class CosmicRuntime:
                 and request["max_output_tokens"] == 3000
                 and same_json(request["text"], {"format": PROGRAM_FORMAT})
                 and request["metadata"].get("maplebench_run_id") == self.run_id, "actual_api_request_mismatch")
+        readiness=parse_json(read_artifact_bytes(self.directory,arts['readiness'],'readiness'))
+        require(same_json(readiness,result.get('readiness'))
+                and arts['readiness']['sha256']==result.get('readinessSha256')
+                and same_json(readiness.get('policy'),self.readiness_policy())
+                and same_json(result['controller'].get('readinessPolicy'),readiness['policy'])
+                and readiness.get('run_id')==self.run_id
+                and readiness.get('initial_observation_sha256')==observation_sha256(result['initial']),
+                'readiness_receipt_mismatch')
         require(all(same_json(response.get(k), result["api"].get(k)) for k in ("id", "status", "model", "usage"))
                 and response.get("metadata", {}).get("maplebench_run_id") == self.run_id,
                 "actual_api_response_mismatch")
@@ -804,7 +825,8 @@ class CosmicRuntime:
         names = {"result": "result.json", "api_request": "api-request-body.json",
                  "api_response": "api-response.json", "program": "program.js", "recording": "recording.json",
                  "capture": "capture.json", "capture_ready": "capture-ready.json",
-                 "capture_clock": "capture-clock.json", "capture_terminal": "capture-terminal.json"}
+                 "capture_clock": "capture-clock.json", "capture_terminal": "capture-terminal.json",
+                 "readiness":"readiness.json"}
         for key, filename in names.items():
             path = source / filename
             raw = self.read_stable(path, JSON_LIMIT)
@@ -1042,7 +1064,7 @@ class CosmicRuntime:
         if self.state.get("failure_cleanup_status") and not self.state.get("failure_evidence_preserved"):
             source = absolute(self.config["relay_output_root"]) / self.run_id
             for filename in ("controller.json", "failure.json", "api-request.json", "api-request-body.json",
-                             "api-response.json", "result.json", "recording.json", "capture.json", "cancel.json"):
+                             "api-response.json", "result.json", "recording.json", "capture.json", "readiness.json", "cancel.json"):
                 path = source / filename
                 if path.exists():
                     self.artifact("failure-" + filename, raw=self.read_stable(path, JSON_LIMIT))

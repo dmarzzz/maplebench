@@ -163,6 +163,7 @@ class SessionCoordinator:
                     client=self.owner,run_id=run_id,request_id=request_id,
                     total_token_limit=request.get('total_token_limit'),trial_context=request.get('trial_context'),
                     docker_image_id=request.get('docker_image_id'),docker_binding=request.get('docker_binding'),
+                    readiness_policy=request.get('readiness_policy'),
                     lease_fds=descriptors,private=True)
         raise ControlError('unknown_admin_operation')
 

@@ -14,7 +14,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from full_client_publish import (PROGRAM_FORMAT, main, validate_manifest, _measure_video_probe,
-                                _probe_video, _video_probe_limits, _verify_settlement_policy, _verify_docker_execution, JSON_LIMIT)
+                                _probe_video, _video_probe_limits, _verify_settlement_policy,
+                                _verify_docker_execution, _verify_readiness_policy, JSON_LIMIT)
 from full_client_score import EvidenceError, open_verified_artifact, verify_trial_bundle
 from full_client_capture import capture_receipt
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -256,7 +257,7 @@ POLICY = {"capture_tail_ms": 2000, "upload_after_program_ms": 5000,
           "disconnect_after_program_ms": 5000, "logout_after_disconnect_ms": 5000}
 
 
-def persisted_manifest(directory, *, program_seconds=22, span_ms=3900, outcome="program_complete"):
+def persisted_manifest(directory, *, program_seconds=22, span_ms=3900, outcome="program_complete", readiness=False):
     """Synthetic collector files; media probing is explicitly mocked in tests."""
     manifest = complete_manifest()
     manifest["schema_version"] = 2
@@ -266,11 +267,25 @@ def persisted_manifest(directory, *, program_seconds=22, span_ms=3900, outcome="
     manifest["timeline"].pop("client_observations_fresh")
     instructions = "Synthetic program-generation instructions; this is not an actual API run."
     reasoning = {"effort": "low"}
-    evidence, artifacts = bundle_fixture(directory, {"id": "fixture-scenario", "budgets": manifest["budgets"],
+    scenario = {"id": "fixture-scenario", "budgets": manifest["budgets"],
         "instructions_sha256": hashlib.sha256(instructions.encode()).hexdigest(), "reasoning": reasoning,
         "settlement_policy": copy.deepcopy(POLICY), "program_seconds": program_seconds,
-        "trial_budgets": {"controller_seconds": program_seconds + 2}})
-    delta = span_ms - 3900
+        "trial_budgets": {"controller_seconds": program_seconds + 2}}
+    setup_ms = 1100 if readiness else 0
+    if readiness:
+        manifest["budgets"]["run_ms"] = (program_seconds + 63) * 1000
+        scenario["readiness_policy"] = {"schema_version": 1, "expected_map_id": 100000000,
+            "min_monsters": 1, "min_samples": 3, "min_span_ms": 1000, "timeout_ms": 10000}
+    evidence, artifacts = bundle_fixture(directory, scenario)
+    delta = span_ms - 3900 + setup_ms
+    if readiness:
+        for row in (evidence["baseline"]["character"], evidence["initial"]["character"],
+                    evidence["final"]["character"]):
+            row["map_id"] = scenario["readiness_policy"]["expected_map_id"]
+        evidence["initial"]["evidence_sha256"] = write_artifact(directory, artifacts, "initial_db",
+            {key: value for key, value in evidence["initial"].items() if key != "evidence_sha256"})
+        for key in ("api_started_at_ms", "api_ended_at_ms", "controller_started_at_ms"):
+            evidence["session"][key] += setup_ms
     evidence["session"].update(controller_ended_at_ms=7000 + delta, upload_observed_at_ms=7300 + delta,
                                disconnect_requested_at_ms=7400 + delta, logged_out_at_ms=8000 + delta)
     evidence["session"]["save"]["committed_at_ms"] += delta
@@ -302,6 +317,8 @@ def persisted_manifest(directory, *, program_seconds=22, span_ms=3900, outcome="
     result["controller"]["id"] = evidence["run_id"]
     result["controller"]["client"] = "fixture-client"
     result["controller"].update(programSeconds=program_seconds, controllerSeconds=program_seconds + 2)
+    if readiness:
+        result["controller"]["readinessPolicy"] = copy.deepcopy(scenario["readiness_policy"])
     result["program"]["reason"] = outcome
     if outcome == "death":
         result["initial"]["character"]["exp"] = 1000
@@ -312,13 +329,20 @@ def persisted_manifest(directory, *, program_seconds=22, span_ms=3900, outcome="
         result["program"]["steps"] = [copy.deepcopy(action) for _ in range(manifest["budgets"]["actions"])]
         result["program"]["actions"] = manifest["budgets"]["actions"]
     result["timing"].update(startedAtMs=2200, endedAtMs=7100 + delta, elapsedMs=4900 + delta, apiLatencyMs=800)
-    manifest["timeline"].update(api_started_ms=0, api_ended_ms=800, program_started_ms=900, program_ended_ms=4800 + delta)
+    manifest["timeline"].update(api_started_ms=setup_ms, api_ended_ms=800 + setup_ms,
+                                program_started_ms=900 + setup_ms, program_ended_ms=4800 + delta)
+    if readiness:
+        manifest["timeline"].update(readiness_started_ms=0, readiness_ended_ms=1000)
     result["timeline"] = copy.deepcopy(manifest["timeline"])
     observations = [result["initial"], result["final"]] + [
         step["result"] if step["method"] == "observe" else step["result"]["observation"]
         for step in result["program"]["steps"] if step["method"] != "wait"]
     for observation in observations:
         observation["renderAgeMs"] = 10
+    if readiness:
+        for observation in observations:
+            observation["character"]["mapId"] = scenario["readiness_policy"]["expected_map_id"]
+            observation["monsters"] = [{"objectId": 1, "x": 50, "y": 100}]
     manifest["scenario"].update(fingerprint=evidence["scenario_fingerprint"],
                                  reset_fingerprint=evidence["baseline"]["sha256"])
     result["trialContext"] = {"scenario_fingerprint": evidence["scenario_fingerprint"],
@@ -353,6 +377,29 @@ def persisted_manifest(directory, *, program_seconds=22, span_ms=3900, outcome="
                "terminal_token": terminal["id"]}
     for name, value in (("capture", capture), ("capture_ready", ready), ("capture_clock", clock), ("capture_terminal", terminal)):
         write_artifact(directory, artifacts, name, value)
+    if readiness:
+        initial_hash = hashlib.sha256(json.dumps(result["initial"], sort_keys=True,
+            separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+        sample = {"map_id": scenario["readiness_policy"]["expected_map_id"], "alive": True,
+                  "monster_count": 1, "age_ms": 10, "render_age_ms": 10, "observation_sha256": initial_hash}
+        def transit_fields(elapsed):
+            # Synthetic clock interval [-10,+10] permits zero transit when the
+            # browser wall clock is ten milliseconds ahead of this server.
+            return {"frame_received_at_ms": 2200 + elapsed, "frame_received_run_ms": elapsed,
+                    "client_sent_at_ms": 2210 + elapsed, "reported_age_ms": 10,
+                    "reported_render_age_ms": 10, "transit_upper_ms": 0, "server_residence_ms": 0}
+        receipt = {"schema_version": 1, "run_id": evidence["run_id"], "client_id": "fixture-client",
+                   "capture_clock_id": clock["id"], "capture_clock_client_received_ms": 2210,
+                   "capture_ready_at_ms": ready["serverReceivedAtMs"],
+                   "policy": copy.deepcopy(scenario["readiness_policy"]), "wait_started_at_ms": 2200,
+                   "wait_started_run_ms": 0, "qualified_at_ms": 3200, "qualified_run_ms": 1000,
+                   "samples": [sample | transit_fields(elapsed) | {"rendered_frames": frames, "server_received_at_ms": 2200 + elapsed,
+                                         "run_elapsed_ms": elapsed} for frames, elapsed in ((1, 0), (15, 500), (30, 1000))],
+                   "initial_observation_sha256": initial_hash,
+                   "dispatch": sample | transit_fields(1050) | {"rendered_frames": 32, "checked_at_ms": 3250, "run_elapsed_ms": 1050}}
+        result["readiness"] = receipt
+        result["readinessSha256"] = write_artifact(directory, artifacts, "readiness", receipt)
+        write_artifact(directory, artifacts, "result", result)
     measured = capture_receipt(capture, {"id": evidence["run_id"], "client": "fixture-client", "startedAtMs": 2200},
                                ready, clock, terminal)
     manifest["video"].update(measured, capture_sha256=artifacts["capture"]["sha256"])
@@ -366,6 +413,192 @@ def persisted_manifest(directory, *, program_seconds=22, span_ms=3900, outcome="
 
 
 class PersistedPublicationTests(unittest.TestCase):
+    def test_future_readiness_policy_passes_only_with_bound_pre_api_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory, readiness=True)
+            before = copy.deepcopy(manifest)
+            with patch("full_client_publish._probe_video", return_value=PROBE | {"duration_ms": 6100}):
+                self.assertEqual(validate_manifest(manifest, directory), {"ready": True, "reasons": []})
+            self.assertEqual(manifest, before)
+
+    def test_future_readiness_recomputes_nonzero_transit_and_server_residence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory, readiness=True)
+            artifacts, result = manifest["artifacts"], manifest["result"]
+            receipt = result["readiness"]
+            receipt["samples"][1].update(client_sent_at_ms=2610, transit_upper_ms=100,
+                                         age_ms=110, render_age_ms=110)
+            receipt["samples"][-1].update(server_received_at_ms=3210, run_elapsed_ms=1010,
+                client_sent_at_ms=3110, transit_upper_ms=100, server_residence_ms=10,
+                age_ms=120, render_age_ms=120)
+            receipt.update(qualified_at_ms=3210, qualified_run_ms=1010)
+            result["timeline"]["readiness_ended_ms"] = 1010
+            manifest["timeline"] = copy.deepcopy(result["timeline"])
+            receipt["dispatch"].update(frame_received_at_ms=3240, frame_received_run_ms=1040,
+                client_sent_at_ms=3150, transit_upper_ms=100, server_residence_ms=10,
+                age_ms=120, render_age_ms=120)
+            result["initial"].update(ageMs=120, renderAgeMs=120)
+            digest = hashlib.sha256(json.dumps(result["initial"], sort_keys=True,
+                separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+            receipt["samples"][-1]["observation_sha256"] = digest
+            receipt["initial_observation_sha256"] = digest
+            receipt["dispatch"]["observation_sha256"] = digest
+            result["readinessSha256"] = write_artifact(directory, artifacts, "readiness", receipt)
+            write_artifact(directory, artifacts, "result", result)
+            request = json.loads((Path(directory) / artifacts["api_request"]["path"]).read_bytes())
+            request["input"] = json.dumps({"observation": result["initial"]})
+            write_artifact(directory, artifacts, "api_request", request)
+            with patch("full_client_publish._probe_video", return_value=PROBE | {"duration_ms": 6100}):
+                self.assertEqual(validate_manifest(manifest, directory), {"ready": True, "reasons": []})
+            # Omitting transit from apparently fresh age fields cannot pass,
+            # even after the altered artifact/result hashes are made consistent.
+            receipt["samples"][1].update(age_ms=10, render_age_ms=10)
+            result["readinessSha256"] = write_artifact(directory, artifacts, "readiness", receipt)
+            write_artifact(directory, artifacts, "result", result)
+            verdict = validate_manifest(manifest, directory)
+            self.assertFalse(verdict["ready"], verdict)
+            self.assertTrue(any("conservative transit" in reason for reason in verdict["reasons"]), verdict)
+
+    def test_future_readiness_rejects_missing_malformed_and_unbound_receipts(self):
+        changes = [
+            ("missing artifact", lambda m: m["artifacts"].pop("readiness")),
+            ("missing result receipt", lambda m: m["result"].pop("readiness")),
+            ("missing controller policy", lambda m: m["result"]["controller"].pop("readinessPolicy")),
+            ("wrong result hash", lambda m: m["result"].update(readinessSha256="a" * 64)),
+            ("wrong result receipt", lambda m: m["result"]["readiness"].update(run_id="another-run")),
+            ("missing timeline", lambda m: m["result"]["timeline"].pop("readiness_ended_ms")),
+        ]
+        for label, change in changes:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory, readiness=True)
+                change(manifest)
+                # Rebind result bytes; failure must come from readiness evidence.
+                manifest["timeline"] = copy.deepcopy(manifest["result"]["timeline"])
+                write_artifact(directory, manifest["artifacts"], "result", manifest["result"])
+                verdict = validate_manifest(manifest, directory)
+                self.assertFalse(verdict["ready"], verdict)
+                self.assertTrue(any("readiness" in reason for reason in verdict["reasons"]), verdict)
+
+    def test_future_readiness_checks_measurements_even_when_every_file_hash_matches(self):
+        changes = [
+            ("wrong run", lambda r: r.update(run_id="different-run")),
+            ("wrong client", lambda r: r.update(client_id="different-renderer")),
+            ("wrong clock", lambda r: r.update(capture_clock_id="f" * 32)),
+            ("wrong ready receipt", lambda r: r.update(capture_ready_at_ms=2201)),
+            ("wrong clock echo", lambda r: r.update(capture_clock_client_received_ms=2211)),
+            ("unknown receipt field", lambda r: r.update(certified=True)),
+            ("wrong policy", lambda r: r["policy"].update(min_monsters=0)),
+            ("too few samples", lambda r: r["samples"].pop(1)),
+            ("short sustained interval", lambda r: r["samples"][0].update(run_elapsed_ms=1, server_received_at_ms=2201,
+                frame_received_run_ms=1, frame_received_at_ms=2201, client_sent_at_ms=2211)),
+            ("repeated rendered frame", lambda r: r["samples"][1].update(rendered_frames=1)),
+            ("frame beyond capture", lambda r: r["samples"][1].update(rendered_frames=121)),
+            ("counter boolean", lambda r: r["samples"][1].update(rendered_frames=True)),
+            ("wrong map", lambda r: r["samples"][1].update(map_id=200000000)),
+            ("not alive", lambda r: r["samples"][1].update(alive=False)),
+            ("boolean monster count", lambda r: r["samples"][1].update(monster_count=True)),
+            ("no monsters", lambda r: r["samples"][1].update(monster_count=0)),
+            ("stale observation", lambda r: r["samples"][1].update(age_ms=1500)),
+            ("stale rendering", lambda r: r["samples"][1].update(render_age_ms=1500)),
+            ("negative freshness", lambda r: r["samples"][1].update(age_ms=-1)),
+            ("reversed monotonic sample", lambda r: r["samples"][1].update(run_elapsed_ms=1100)),
+            ("wrong observation digest", lambda r: r["samples"][-1].update(observation_sha256="a" * 64)),
+            ("wrong initial digest", lambda r: r.update(initial_observation_sha256="b" * 64)),
+            ("dispatch before qualification", lambda r: r["dispatch"].update(run_elapsed_ms=900, checked_at_ms=3100)),
+            ("dispatch after API", lambda r: r["dispatch"].update(run_elapsed_ms=1101, checked_at_ms=3301)),
+            ("dispatch no monsters", lambda r: r["dispatch"].update(monster_count=0)),
+            ("dispatch stale", lambda r: r["dispatch"].update(age_ms=1500)),
+            ("dispatch counter regressed", lambda r: r["dispatch"].update(rendered_frames=29)),
+            ("missing transit evidence", lambda r: r["samples"][1].pop("client_sent_at_ms")),
+            ("invented zero transit", lambda r: r["samples"][1].update(client_sent_at_ms=2610)),
+            ("negative transit bound", lambda r: r["samples"][1].update(client_sent_at_ms=2800)),
+            ("send before clock echo", lambda r: r["samples"][1].update(client_sent_at_ms=2200)),
+            ("residence absent from ages", lambda r: r["samples"][1].update(server_residence_ms=10)),
+            ("boolean reported age", lambda r: r["samples"][1].update(reported_age_ms=True)),
+            ("dispatch transit hidden", lambda r: r["dispatch"].update(client_sent_at_ms=3160)),
+        ]
+        for label, change in changes:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory, readiness=True)
+                change(manifest["result"]["readiness"])
+                manifest["result"]["readinessSha256"] = write_artifact(
+                    directory, manifest["artifacts"], "readiness", manifest["result"]["readiness"])
+                write_artifact(directory, manifest["artifacts"], "result", manifest["result"])
+                verdict = validate_manifest(manifest, directory)
+                self.assertFalse(verdict["ready"], verdict)
+                self.assertTrue(any("readiness" in reason for reason in verdict["reasons"]), verdict)
+
+    def test_future_readiness_policy_is_fixed_and_baseline_bound(self):
+        policies = [None, [], True,
+            {"schema_version": 1, "expected_map_id": 100000000, "min_monsters": 0,
+             "min_samples": 3, "min_span_ms": 1000, "timeout_ms": 10000},
+            {"schema_version": 1, "expected_map_id": 200000000, "min_monsters": 1,
+             "min_samples": 3, "min_span_ms": 1000, "timeout_ms": 10000},
+            {"schema_version": 1, "expected_map_id": 100000000, "min_monsters": 1,
+             "min_samples": 2, "min_span_ms": 1000, "timeout_ms": 10000},
+            {"schema_version": 1, "expected_map_id": 100000000, "min_monsters": 1,
+             "min_samples": 3, "min_span_ms": 999, "timeout_ms": 10000},
+            {"schema_version": 1, "expected_map_id": 100000000, "min_monsters": 1,
+             "min_samples": 3, "min_span_ms": 1000, "timeout_ms": 10001}]
+        for policy in policies:
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory, readiness=True)
+                evidence = json.loads((Path(directory) / manifest["artifacts"]["persistence"]["path"]).read_bytes())
+                scenario = json.loads((Path(directory) / manifest["artifacts"]["scenario"]["path"]).read_bytes())
+                scenario["readiness_policy"] = policy
+                with self.assertRaisesRegex(EvidenceError, "readiness: frozen policy"):
+                    _verify_readiness_policy(manifest, directory, evidence, scenario)
+
+    def test_future_readiness_rejects_stale_sample_gaps_timeout_and_delayed_initial_payload(self):
+        for failure in ("sample_gap", "qualification_timeout", "dispatch_timeout", "stale_initial"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory, readiness=True)
+                artifacts, result = manifest["artifacts"], manifest["result"]
+                evidence = json.loads((Path(directory) / artifacts["persistence"]["path"]).read_bytes())
+                scenario = json.loads((Path(directory) / artifacts["scenario"]["path"]).read_bytes())
+                receipt = result["readiness"]
+                if failure in ("sample_gap", "qualification_timeout"):
+                    times = (0, 1500, 2000) if failure == "sample_gap" else (9001, 9501, 10001)
+                    for sample, elapsed in zip(receipt["samples"], times):
+                        sample.update(run_elapsed_ms=elapsed, server_received_at_ms=2200 + elapsed,
+                                      frame_received_run_ms=elapsed, frame_received_at_ms=2200 + elapsed,
+                                      client_sent_at_ms=2210 + elapsed)
+                    receipt.update(qualified_run_ms=times[-1], qualified_at_ms=2200 + times[-1])
+                    result["timeline"]["readiness_ended_ms"] = times[-1]
+                    receipt["dispatch"].update(run_elapsed_ms=times[-1] + 50, checked_at_ms=2250 + times[-1],
+                        frame_received_run_ms=times[-1] + 50, frame_received_at_ms=2250 + times[-1],
+                        client_sent_at_ms=2260 + times[-1])
+                    result["timeline"]["api_started_ms"] = times[-1] + 100
+                elif failure == "dispatch_timeout":
+                    receipt["dispatch"].update(run_elapsed_ms=10001, checked_at_ms=12201,
+                        frame_received_run_ms=10001, frame_received_at_ms=12201, client_sent_at_ms=12211)
+                    result["timeline"]["api_started_ms"] = 10001
+                else:
+                    result["initial"]["ageMs"] = 1450
+                    receipt["samples"][-1]["age_ms"] = 1450
+                    receipt["samples"][-1]["reported_age_ms"] = 1450
+                    digest = hashlib.sha256(json.dumps(result["initial"], sort_keys=True,
+                        separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+                    receipt["samples"][-1]["observation_sha256"] = digest
+                    receipt["initial_observation_sha256"] = digest
+                result["readinessSha256"] = write_artifact(directory, artifacts, "readiness", receipt)
+                with self.assertRaisesRegex(EvidenceError, "readiness:"):
+                    _verify_readiness_policy(manifest, directory, evidence, scenario)
+
+    def test_readiness_gate_preserves_historical_policy_absence(self):
+        # No newly imposed requirement or inferred acceptance is added to a
+        # historical scenario that did not freeze this prerequisite.
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory)
+            artifacts = manifest["artifacts"]
+            evidence = json.loads((Path(directory) / artifacts["persistence"]["path"]).read_bytes())
+            scenario = json.loads((Path(directory) / artifacts["scenario"]["path"]).read_bytes())
+            before = copy.deepcopy(manifest)
+            self.assertIsNone(_verify_readiness_policy(manifest, directory, evidence, scenario))
+            self.assertEqual(manifest, before)
+            with patch("full_client_publish._probe_video", return_value=PROBE):
+                self.assertEqual(validate_manifest(manifest, directory), {"ready": True, "reasons": []})
+
     def test_actual_timeline_shape_needs_no_synthetic_freshness_or_interruption_flags(self):
         with tempfile.TemporaryDirectory() as directory:
             manifest = persisted_manifest(directory)

@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import hashlib
+from contextlib import contextmanager
 import os
 import sys
 import tempfile
@@ -11,7 +13,7 @@ from unittest import mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from full_client_docker_fixture import local_binding
-from full_client_bridge import FullClientBridge, write_json
+from full_client_bridge import FullClientBridge, ControlError, PROMPT, write_json
 from maple_agent import validate_rpc, model_decision
 
 class FullClientTests(unittest.TestCase):
@@ -25,12 +27,272 @@ class FullClientTests(unittest.TestCase):
     def message(self,keys,duration):
         return {'type':'rpc','id':1,'method':'pressKeys','args':[keys,duration]}
 
+    def policy(self):
+        return {'schema_version':1,'expected_map_id':1,'min_monsters':1,
+                'min_samples':3,'min_span_ms':1000,'timeout_ms':10000}
+
+    @contextmanager
+    def mock_readiness(self, bridge):
+        # These tests isolate Docker/cancellation; real frame gating is covered below.
+        receipt={'wait_started_run_ms':0,'qualified_run_ms':0,'policy':self.policy()}
+        with mock.patch.object(bridge,'_wait_for_readiness',return_value=(self.observation(),receipt)), \
+             mock.patch.object(bridge,'_readiness_dispatch',return_value={}):
+            yield
+
     def test_keyboard_is_opt_in_and_bounded(self):
         with self.assertRaises(ValueError): validate_rpc(self.message(['LEFT'],100),{})
         for keys,ms in [(['LEFT','RIGHT'],100),(['ADMIN'],100),(['LEFT'],1501),(['JUMP'],True),(['LEFT','LEFT'],30)]:
             with self.assertRaises(ValueError): validate_rpc(self.message(keys,ms),{'adapter':'full-client'})
         _,action=validate_rpc(self.message(['RIGHT','JUMP'],250),{'adapter':'full-client'})
         self.assertEqual(action['type'],'press_keys')
+
+    def readiness_window(self, folder, events):
+        """Drive actual POST handling and condition wakeups without sleeping."""
+        bridge=FullClientBridge(folder)
+        run={'id':'a'*32,'client':'test','status':'requesting','readinessPolicy':self.policy(),
+             'captureReadyAtMs':1700000100000,'captureClockAccepted':'b'*32}
+        bridge.run=run; bridge.client='test'
+        bridge.capture_clock={'id':'b'*32,'client_sent_ms':1700000100000,
+                              'server_received_ms':1700000100000,'server_sent_ms':1700000100000}
+        bridge.capture_clock_received_ms=1700000100000
+        clock=[100.0]; events=iter(events)
+        observed=self.observation(); observed['monsters']=[{'objectId':1,'x':2,'y':3}]
+        def post_frame(delay,counter,changes=None):
+            clock[0]+=delay
+            observation=json.loads(json.dumps(observed))
+            if changes:
+                observation.update(changes)
+            bridge.frame(self.frame(observation=observation,captureState='recording',clientSentAtMs=round(1700000000000+clock[0]*1000),
+                capture={'runId':run['id'],'started':True,'renderedFrames':counter,'interrupted':False}))
+        def wake(_):
+            try: event=next(events)
+            except StopIteration: clock[0]+=10; return
+            if event=='cancel':
+                bridge.cancel(run['id'])
+            else:
+                post_frame(*event)
+        return bridge,run,clock,post_frame,wake
+
+    def test_readiness_uses_distinct_postrender_frames_and_binds_exact_initial(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge,run,clock,post,wake=self.readiness_window(folder,[(0,1),(.4,1),(.1,2),(.5,3)])
+            with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                 mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]), \
+                 mock.patch.object(bridge.lock,'wait',side_effect=wake):
+                initial,receipt=bridge._wait_for_readiness(run,100)
+                self.assertEqual([sample['rendered_frames'] for sample in receipt['samples']],[1,2,3])
+                self.assertEqual(receipt['qualified_run_ms'],1000)
+                self.assertEqual(receipt['samples'][-1]['observation_sha256'],receipt['initial_observation_sha256'])
+                from full_client_readiness import observation_sha256
+                self.assertEqual(receipt['initial_observation_sha256'],observation_sha256(initial))
+                before=json.loads(json.dumps(initial))
+                post(.1,4,{'monsters':[{'objectId':2,'x':10,'y':20}]})
+                dispatch=bridge._readiness_dispatch(run,receipt)
+                self.assertEqual(dispatch['rendered_frames'],4)
+                self.assertEqual(initial,before)
+                self.assertNotEqual(dispatch['observation_sha256'],receipt['initial_observation_sha256'])
+
+    def test_empty_wrong_map_dead_and_render_stale_frames_cannot_qualify(self):
+        from full_client_readiness import observation_matches
+        base=self.observation(); base.update(ageMs=0,renderAgeMs=0,monsters=[{'objectId':1,'x':0,'y':0}])
+        invalid=[base|{'monsters':[]},base|{'character':base['character']|{'mapId':2}},
+                 base|{'character':base['character']|{'alive':False}},
+                 base|{'character':base['character']|{'hp':0}},base|{'renderAgeMs':1500},base|{'ageMs':-1},
+                 base|{'character':base['character']|{'hp':float('inf')}},base|{'ageMs':10**1000}]
+        for value in invalid:
+            self.assertFalse(observation_matches(value,self.policy()))
+        with tempfile.TemporaryDirectory() as folder:
+            bridge,run,clock,post,wake=self.readiness_window(folder,[(0,1),(.5,2),(.1,3,{'monsters':[]}),
+                (.5,4),(.5,5),(.5,6)])
+            with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                 mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]), \
+                 mock.patch.object(bridge.lock,'wait',side_effect=wake):
+                _,receipt=bridge._wait_for_readiness(run,100)
+            self.assertEqual([sample['rendered_frames'] for sample in receipt['samples']],[4,5,6])
+            self.assertEqual(receipt['qualified_run_ms'],2100)
+
+    def test_readiness_timeout_cancel_and_frame_counter_regression_fail_closed(self):
+        for events,reason in [([(0,1),(.5,1),(.5,1)],'readiness_timeout'),
+                ([(0,1),(.5,2),(.5,1)],'readiness_state_changed'),
+                ([(0,1),'cancel'],'run_cancelled')]:
+            with self.subTest(reason=reason),tempfile.TemporaryDirectory() as folder:
+                bridge,run,clock,post,wake=self.readiness_window(folder,events)
+                # Cancellation journals require the same claimed run directory.
+                (bridge.output/run['id']).mkdir()
+                with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                     mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]), \
+                     mock.patch.object(bridge.lock,'wait',side_effect=wake),self.assertRaisesRegex(ControlError,reason):
+                    bridge._wait_for_readiness(run,100)
+
+    def test_dispatch_rejects_lost_then_recovered_state_and_aged_initial(self):
+        for change in ('empty','stale_initial','client','clock'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as folder:
+                bridge,run,clock,post,wake=self.readiness_window(folder,[(0,1),(.5,2),(.5,3)])
+                with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                     mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]), \
+                     mock.patch.object(bridge.lock,'wait',side_effect=wake):
+                    _,receipt=bridge._wait_for_readiness(run,100)
+                    if change=='empty':
+                        post(.1,4,{'monsters':[]}); post(.1,5)
+                    elif change=='stale_initial': post(1.5,4)
+                    elif change=='client': bridge.client='other'
+                    else: bridge.run['captureClockAccepted']='c'*32
+                    with self.assertRaisesRegex(ControlError,'readiness_state_changed'):
+                        bridge._readiness_dispatch(run,receipt)
+
+    def test_rounded_arrival_gap_and_dispatch_age_match_publication_boundaries(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge,run,clock,post,wake=self.readiness_window(folder,[(0,1),(.5,2),(1.4996,3),(.5,4),(.5,5)])
+            with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                 mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]), \
+                 mock.patch.object(bridge.lock,'wait',side_effect=wake):
+                _,receipt=bridge._wait_for_readiness(run,100)
+            self.assertEqual([sample['rendered_frames'] for sample in receipt['samples']],[3,4,5])
+        with tempfile.TemporaryDirectory() as folder:
+            bridge,run,clock,post,wake=self.readiness_window(folder,[(0,1),(.5,2),(.5,3)])
+            with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                 mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]), \
+                 mock.patch.object(bridge.lock,'wait',side_effect=wake):
+                _,receipt=bridge._wait_for_readiness(run,100)
+                post(.5,4);post(.5,5);clock[0]+=.4996
+                with self.assertRaisesRegex(ControlError,'readiness_state_changed'):
+                    bridge._readiness_dispatch(run,receipt)
+
+    def test_trial_frame_ages_include_conservative_transit_without_equal_clocks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge,run,clock,post,wake=self.readiness_window(folder,[])
+            # Server is 1000ms ahead. The handshake bounds offset to[990,1010].
+            bridge.capture_clock={'id':'b'*32,'client_sent_ms':1700000098990,
+                'server_received_ms':1700000100000,'server_sent_ms':1700000100010}
+            bridge.capture_clock_received_ms=1700000099020
+            observed=self.observation(); observed['monsters']=[{'objectId':1,'x':0,'y':0}]
+            with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                 mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]):
+                clock[0]=102
+                body=self.frame(observation=observed,ageMs=50,renderAgeMs=10,clientSentAtMs=1700000100900,
+                    captureState='recording',capture={'runId':run['id'],'started':True,'renderedFrames':5,'interrupted':False})
+                bridge.frame(body)
+                self.assertEqual(bridge.frame_transit['transit_upper_ms'],110)
+                self.assertEqual(bridge._snapshot()['ageMs'],160)
+                self.assertEqual(bridge._snapshot()['renderAgeMs'],120)
+                bridge.frame(body|{'clientSentAtMs':1700000099500})
+                self.assertFalse(bridge.fresh())  # Reported50ms + transit1510ms is stale.
+                bridge.capture_clock_received_ms=None
+                bridge.frame(body)
+                self.assertFalse(bridge.fresh())  # No age-only fallback for trial.
+
+    def test_dispatch_does_not_count_initial_server_residence_twice(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge,run,clock,post,wake=self.readiness_window(folder,[(0,1),(.5,2),(.5,3)])
+            snapshot=bridge._snapshot; delayed=[False]
+            def delayed_snapshot():
+                if bridge.readiness and bridge.readiness.get('counter')==3 and not delayed[0]:
+                    delayed[0]=True;clock[0]+=.2
+                return snapshot()
+            with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                 mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]), \
+                 mock.patch.object(bridge.lock,'wait',side_effect=wake), \
+                 mock.patch.object(bridge,'_snapshot',side_effect=delayed_snapshot):
+                _,receipt=bridge._wait_for_readiness(run,100)
+                self.assertAlmostEqual(receipt['samples'][-1]['server_residence_ms'],200)
+                post(.5,4);post(.5,5);clock[0]+=.15
+                dispatch=bridge._readiness_dispatch(run,receipt)
+                self.assertLess(receipt['samples'][-1]['age_ms']+dispatch['run_elapsed_ms']
+                                -receipt['samples'][-1]['run_elapsed_ms'],1500)
+
+    def test_trial_clock_ack_requires_bound_client_receive_echo(self):
+        for echo,accepted in [(None,False),(1700000101000,False),(1700000100000,True)]:
+            with self.subTest(echo=echo),tempfile.TemporaryDirectory() as folder:
+                bridge,run,clock,post,wake=self.readiness_window(folder,[])
+                (bridge.output/run['id']).mkdir()
+                bridge.run.pop('captureClockAccepted');bridge.capture_clock_received_ms=None
+                with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                     mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]):
+                    bridge.frame(self.frame(clientSentAtMs=1700000100000,captureClockAck='b'*32,captureClockReceivedAtMs=echo))
+                self.assertEqual(bool(bridge.run.get('captureClockAccepted')),accepted)
+                if accepted:
+                    saved=json.loads((bridge.output/run['id']/'capture-clock.json').read_text())
+                    self.assertEqual(set(saved),{'id','client_sent_ms','server_received_ms','server_sent_ms'})
+
+    def test_readiness_policy_is_exact_and_required_before_claim(self):
+        from full_client_readiness import validate_policy
+        for value in [None,{},self.policy()|{'min_samples':True},self.policy()|{'timeout_ms':10001},
+                      self.policy()|{'expected_map_id':1.0},self.policy()|{'extra':1}]:
+            with self.subTest(value=value),self.assertRaisesRegex(ValueError,'invalid_readiness_policy'):
+                validate_policy(value)
+        with tempfile.TemporaryDirectory() as folder:
+            key=Path(folder)/'unused-test-key'; key.touch(mode=0o600)
+            bridge=FullClientBridge(Path(folder)/'runs',key); bridge.frame(self.frame())
+            options={'run_id':'a'*32,'request_id':'a'*32,
+                'trial_context':{'scenario_fingerprint':'b'*64,'baseline_sha256':'c'*64},
+                'docker_image_id':'sha256:'+'d'*64,'docker_binding':local_binding(self,folder)}
+            with mock.patch('full_client_bridge.threading.Thread') as worker:
+                for policy,reason in [(None,'readiness_policy_required'),(self.policy()|{'min_monsters':0},'invalid_readiness_policy')]:
+                    with self.assertRaisesRegex(ControlError,reason):
+                        bridge.start('api','gpt-6-astra',**options,readiness_policy=policy)
+                worker.assert_not_called()
+            self.assertFalse((bridge.output/'requests').exists())
+
+    def test_trial_readiness_receipt_is_saved_before_api_and_failures_spend_nothing(self):
+        from full_client_readiness import observation_sha256
+        for behavior in ('success','empty','lost_before_dispatch','slow_persistence'):
+            with self.subTest(behavior=behavior),tempfile.TemporaryDirectory() as folder:
+                events=[(0,1),(.5,2),(.5,3)] if behavior!='empty' else [(0,1,{'monsters':[]})]
+                bridge,_,clock,post,wake=self.readiness_window(folder,events)
+                bridge.run={'status':'idle'}
+                key=Path(folder)/'unused-test-key'; key.touch(mode=0o600); bridge.key_file=key
+                with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                     mock.patch('full_client_bridge.time.time',side_effect=lambda:1700000000+clock[0]):
+                    bridge.frame(self.frame())
+                    with mock.patch('full_client_bridge.threading.Thread'),tempfile.TemporaryFile() as world,tempfile.TemporaryFile() as queue:
+                        run=bridge.start('api','gpt-6-astra',run_id='a'*32,request_id='a'*32,
+                            trial_context={'scenario_fingerprint':'c'*64,'baseline_sha256':'d'*64},
+                            docker_image_id='sha256:'+'e'*64,docker_binding=local_binding(self,folder),
+                            readiness_policy=self.policy(),lease_fds=(world.fileno(),queue.fileno()),private=True)
+                    bridge.run.update(captureClockAccepted='b'*32,captureReadyAtMs=1700000100000)
+                    bridge.capture_clock={'id':'b'*32,'client_sent_ms':1700000100000,
+                        'server_received_ms':1700000100000,'server_sent_ms':1700000100000}
+                    bridge.capture_clock_received_ms=1700000100000
+                    run=dict(bridge.run)  # The worker receives the private claimed run, including owner.
+                    def save(path,value):
+                        write_json(path,value)
+                        if behavior=='lost_before_dispatch' and Path(path).name=='api-request-body.json':
+                            post(.1,4,{'monsters':[]})
+                        if behavior=='slow_persistence' and Path(path).name=='api-request.json' and value['status']=='requesting':
+                            post(2,4)
+                    def provider(url,payload,*args):
+                        receipt=json.loads((bridge.output/run['id']/'readiness.json').read_text())
+                        intent=json.loads((bridge.output/run['id']/'api-request.json').read_text())
+                        self.assertEqual(receipt,intent['readiness'])
+                        self.assertEqual(receipt['initial_observation_sha256'],observation_sha256(json.loads(payload['input'])['observation']))
+                        self.assertEqual(intent['readinessSha256'],hashlib.sha256((bridge.output/run['id']/'readiness.json').read_bytes()).hexdigest())
+                        return {'id':'response','model':'gpt-6-astra','status':'completed','metadata':payload['metadata'],
+                            'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps({'note':'test','code':'return;'})}]}]}
+                    with mock.patch.object(bridge.lock,'wait',side_effect=wake),mock.patch.object(bridge,'_wait_for_capture'), \
+                         mock.patch('full_client_bridge.write_json',side_effect=save), \
+                         mock.patch('full_client_bridge.bounded_request',side_effect=provider) as api, \
+                         mock.patch('full_client_bridge.execute_program',return_value={'reason':'program_complete','actions':0,'steps':[]}) as execute:
+                        bridge._run(run)
+                    if behavior=='success':
+                        api.assert_called_once(); execute.assert_called_once()
+                        result=json.loads((bridge.output/run['id']/'result.json').read_text())
+                        self.assertEqual(result['readinessSha256'],hashlib.sha256((bridge.output/run['id']/'readiness.json').read_bytes()).hexdigest())
+                        self.assertEqual(result['timeline']['readiness_ended_ms'],1000)
+                        self.assertGreaterEqual(result['timeline']['api_started_ms'],result['readiness']['dispatch']['run_elapsed_ms'])
+                    else:
+                        api.assert_not_called(); execute.assert_not_called()
+                        failure=json.loads((bridge.output/run['id']/'failure.json').read_text())
+                        self.assertEqual(failure['apiOutcome'],'not_started')
+                        self.assertIsNone(failure['timeline']['api_started_ms'])
+                        self.assertEqual(bridge.run['reason'],'readiness_timeout' if behavior=='empty' else 'readiness_state_changed')
+                        bridge.frame(self.frame(releaseAck=run['id']))
+
+    def test_prompt_requires_body_without_implicitly_invoking_model_functions(self):
+        prompt=PROMPT.format(program_seconds=22,action_limit=80,sdk_request_limit=100)
+        self.assertIn('already wraps and invokes your code',prompt)
+        self.assertIn('top-level await',prompt)
+        self.assertIn('const state = await sdk.observe();',prompt)
+        self.assertIn('explicitly await its call',prompt)
 
     def test_input_requires_fresh_state_and_ack(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -336,7 +598,7 @@ class FullClientTests(unittest.TestCase):
                 'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps({'note':'test','code':code})}]}]}
             with mock.patch('full_client_bridge.bounded_request',return_value=response) as transport, \
                  mock.patch.object(bridge,'request',return_value=self.observation()), \
-                 mock.patch.object(bridge,'_wait_for_capture'), \
+                 mock.patch.object(bridge,'_wait_for_capture'), self.mock_readiness(bridge), \
                  mock.patch('full_client_bridge.execute_program',return_value={'reason':'program_complete','actions':0,'steps':[]}) as execute:
                 bridge._run(run)
             transport.assert_called_once()
@@ -455,13 +717,13 @@ class FullClientTests(unittest.TestCase):
                 run=bridge.start('api','gpt-6-astra',run_id='d'*32,request_id='d'*32,
                     total_token_limit=100000,trial_context=context,docker_image_id=image_id,
                     docker_binding=local_binding(self,folder),private=True,
-                    lease_fds=(world.fileno(),queue.fileno()))
+                    readiness_policy=self.policy(),lease_fds=(world.fileno(),queue.fileno()))
             response={'id':'test-response','model':'gpt-6-astra','status':'completed',
                 'metadata':{'maplebench_run_id':'d'*32},
                 'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps({'note':'test','code':'return;'})}]}]}
             with mock.patch.object(bridge,'request',return_value=self.observation()), \
                  mock.patch('full_client_bridge.bounded_request',return_value=response), \
-                 mock.patch.object(bridge,'_wait_for_capture'), \
+                 mock.patch.object(bridge,'_wait_for_capture'), self.mock_readiness(bridge), \
                  mock.patch('full_client_bridge.execute_program',return_value={'reason':'program_complete','actions':0,'steps':[]}) as execute:
                 bridge._run(run)
             self.assertEqual(execute.call_args.kwargs['docker_image'],image_id)
@@ -486,7 +748,7 @@ class FullClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'docker_binding_required'):
                     bridge.start('api','gpt-6-astra',**options)
                 thread.assert_not_called()
-                options.update(docker_binding=binding,lease_fds=(world.fileno(),queue.fileno()))
+                options.update(readiness_policy=self.policy(),docker_binding=binding,lease_fds=(world.fileno(),queue.fileno()))
                 public=bridge.start('api','gpt-6-astra',**options)
                 for descriptor in bridge.leases[public['id']]: self.addCleanup(os.close,descriptor)
                 self.assertNotIn('dockerBinding',public)
@@ -498,6 +760,8 @@ class FullClientTests(unittest.TestCase):
                 alternative=Path(folder)/'alternative'; alternative.mkdir()
                 with self.assertRaisesRegex(ValueError,'run_intent_conflict'):
                     bridge.start('api','gpt-6-astra',**(options|{'docker_binding':local_binding(self,alternative)}))
+                with self.assertRaisesRegex(ValueError,'run_intent_conflict'):
+                    bridge.start('api','gpt-6-astra',**(options|{'readiness_policy':self.policy()|{'expected_map_id':2}}))
                 self.assertEqual(thread.call_count,1)
 
     def test_binding_change_after_capture_wait_rejects_api_without_spending(self):
@@ -509,9 +773,9 @@ class FullClientTests(unittest.TestCase):
                 run=bridge.start('api','gpt-6-astra',run_id='e'*32,request_id='e'*32,
                     trial_context={'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64},
                     docker_image_id='sha256:'+'c'*64,docker_binding=binding,private=True,
-                    lease_fds=(world.fileno(),queue.fileno()))
+                    readiness_policy=self.policy(),lease_fds=(world.fileno(),queue.fileno()))
             def changed(*_): Path(binding['executable']['path']).write_bytes(b'changed while recording prepared')
-            with mock.patch.object(bridge,'_wait_for_capture',side_effect=changed), \
+            with mock.patch.object(bridge,'_wait_for_capture',side_effect=changed), self.mock_readiness(bridge), \
                  mock.patch.object(bridge,'request',return_value=self.observation()), \
                  mock.patch('full_client_bridge.bounded_request') as provider:
                 bridge._run(run)
@@ -606,7 +870,7 @@ class FullClientTests(unittest.TestCase):
                 run=bridge.start('api','gpt-6-astra',run_id='d'*32,request_id='d'*32,
                     trial_context={'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64},
                     docker_binding=local_binding(self,folder),docker_image_id='sha256:'+'c'*64,private=True,
-                    lease_fds=(world.fileno(),queue.fileno()))
+                    readiness_policy=self.policy(),lease_fds=(world.fileno(),queue.fileno()))
             from full_client_bridge import ControlError
             with mock.patch.object(bridge,'_wait_for_capture',side_effect=ControlError('recorder_not_ready')), \
                  mock.patch('full_client_bridge.bounded_request') as provider:
@@ -716,12 +980,12 @@ class FullClientTests(unittest.TestCase):
                 run=bridge.start('api','gpt-6-astra',run_id='f'*32,request_id='f'*32,
                     trial_context={'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64},
                     docker_binding=local_binding(self,folder),docker_image_id='sha256:'+'c'*64,private=True,
-                    lease_fds=(world.fileno(),queue.fileno()))
+                    readiness_policy=self.policy(),lease_fds=(world.fileno(),queue.fileno()))
                 retained=list(bridge.leases[run['id']])
                 duplicate=bridge.start('api','gpt-6-astra',run_id='f'*32,request_id='f'*32,
                     trial_context={'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64},
                     docker_binding=local_binding(self,folder),docker_image_id='sha256:'+'c'*64,private=True,
-                    lease_fds=(world.fileno(),queue.fileno()))
+                    readiness_policy=self.policy(),lease_fds=(world.fileno(),queue.fileno()))
                 self.assertEqual(duplicate['id'],run['id'])
                 self.assertEqual(bridge.leases[run['id']],retained)
             entered=threading.Event(); finish=threading.Event()
@@ -732,7 +996,7 @@ class FullClientTests(unittest.TestCase):
                 entered.set()
                 if not finish.wait(2): raise TimeoutError()
                 return response
-            with mock.patch('full_client_bridge.bounded_request',side_effect=provider), \
+            with mock.patch('full_client_bridge.bounded_request',side_effect=provider), self.mock_readiness(bridge), \
                  mock.patch.object(bridge,'_wait_for_capture'), \
                  mock.patch('full_client_bridge.execute_program') as execute:
                 worker=threading.Thread(target=bridge._run,args=(run,)); worker.start()

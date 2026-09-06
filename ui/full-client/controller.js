@@ -315,7 +315,7 @@
       };
       item.recorder.onerror=()=>{ item.errors++; notice.textContent='Recording failed; capture stopped.'; stopRecording(); };
       capture=item; item.recorder.start(1000);
-      item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},120000);
+      item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},item.autoRunId&&run.readinessPolicy?125000:120000);
       notice.textContent='Recording the actual canvas and controller/telemetry header.'; renderHeader();
     } catch {
       cancelAnimationFrame(item.animation); item.stream?.getTracks().forEach(track=>track.stop());
@@ -401,6 +401,7 @@
       const response=await fetch('/control/frame',{method:'POST',headers:{'Content-Type':'application/json'},signal:pollAbort.signal,
         body:JSON.stringify({client:clientId,observation,ageMs:Date.now()-(observation.capturedAt||0),renderAgeMs:Date.now()-(Module.MapleBenchRenderedAt||0),renderedHud:Module.MapleBenchHud||null,ack,
           page:'game',sessionAck,releaseAck,clientSentAtMs,captureClockAck:capture?.clock?.id,
+          captureClockReceivedAtMs:capture?.clock?.client_received_ms,
           capture:capture?{runId:capture.autoRunId,started:capture.recorderStarted,renderedFrames:capture.frames,
             interrupted:capture.hidden||capture.errors>0||capture.relayLost||capture.stopping}:null,
           captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle'})});

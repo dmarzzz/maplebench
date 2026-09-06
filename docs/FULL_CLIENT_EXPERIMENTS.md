@@ -12,6 +12,65 @@ native persistence evidence and explicit recovery. It never submits to the older
 server-bot batch queue or starts/stops the normal worker. Operators must arrange
 the existing runtime's prerequisites before execution.
 
+## Scene readiness and the next protocol version
+
+Matching frozen inputs proves the same declared baseline, source, assets and
+budgets. It does not prove that the first model observation contained a populated
+scene or that monster positions, spawn timing and combat RNG matched. Historical
+inputs exposed a readiness gap: a fresh character/capture could qualify before
+monsters appeared in the observation. This does not establish the cause of every
+zero-XP or no-op result. Preserve those results and their original groups; do not
+repair programs, replace observations, rerank runs or add retrospective checks to
+their frozen scenarios.
+
+The next scenario version adds `readiness_policy` with the following exact
+contract. The shared validator is `scripts/full_client_readiness.py`; collection
+and request gating live in the bridge/runtime, with independent publication
+checks in `scripts/full_client_publish.py`. Automated coverage exercises readiness
+failure and publication checks; a separate live acceptance is still required.
+
+| Policy field | Required value |
+| --- | --- |
+| `schema_version` | `1` |
+| `expected_map_id` | The persisted baseline character's map ID |
+| `min_monsters` | `1` |
+| `min_samples` | `3` |
+| `min_span_ms` | `1000` |
+| `timeout_ms` | `10000` |
+
+Before the single provider request, capture must be ready and at least three
+distinct, increasing post-render frame counters must span at least one second.
+Every qualifying observation must show a living character with positive HP on
+the expected map, at least one monster, and observation/render ages below
+1,500 ms. Invalid state or a gap of at least 1,500 ms resets the window; a
+regressing capture counter fails it. The last qualifying snapshot becomes the
+exact provider input. Its freshness and the latest scene are checked again at
+dispatch within the ten-second deadline. Failure prevents the API request; it
+does not authorize a retry or substituted observation. This establishes a minimum
+populated scene, not identical monster positions or guaranteed target reachability.
+
+Freshness includes the browser-reported age, a conservative network-delay bound
+from the existing capture-clock handshake, and time spent on the server. The
+readiness receipt retains those measurements so publication can recompute the
+effective ages. Missing or inconsistent clock evidence cannot qualify a future
+trial. The historical capture-clock artifact format remains unchanged.
+
+The collected `readiness.json` must bind the run, renderer, capture clock, sample
+window, dispatch check and initial-observation hash to the result and actual API
+input. Future scenarios freeze `budgets.run_ms=(program_seconds+63)*1000`: 85 seconds
+for a 22-second program, or 123 seconds for a 60-second program. This adds only
+the ten-second readiness allowance to the prior run envelope. The one-request
+cap, 50-second API timeout, output/token/action limits and active program duration
+remain unchanged. This envelope is separate from lifecycle and aggregate-plan
+wall reservations.
+
+Freeze the revised prompt as a new scenario/prompt version with its actual
+`instructions_sha256`. It explicitly requests an async function **body**: the
+harness already wraps and invokes it, so use top-level `await sdk.observe()` and
+explicitly await any helper call. Returning only an outer function declaration
+does not execute that function. The harness must not repair such output or hide
+a resulting no-op. Historical prompt hashes and results remain unchanged.
+
 ## Private plan
 
 The `plan` command reads a private JSON configuration with exactly these fields:
@@ -56,7 +115,8 @@ The runner object has exactly:
   "dependencies": [
     {"path": "/protected/scripts/full_client_experiment.py", "sha256": "..."},
     {"path": "/protected/scripts/full_client_score.py", "sha256": "..."},
-    {"path": "/protected/scripts/full_client_docker.py", "sha256": "..."}
+    {"path": "/protected/scripts/full_client_docker.py", "sha256": "..."},
+    {"path": "/protected/scripts/full_client_readiness.py", "sha256": "..."}
   ],
   "state_root": "/private/existing-attempts",
   "world_lock": "/private/existing-world.lock",
@@ -76,6 +136,11 @@ backend's SQL restore limit. Oversized inputs are rejected from their file size
 before reading contents or submitting a trial. The coordinator does not broaden
 what the runtime can consume. Model inputs, configuration and source files are
 never copied into a public report.
+
+Before assigning IDs, plan creation validates the readiness policy against the
+backend's hash-bound baseline snapshot and requires the readiness module among
+the pinned runner dependencies. A missing, weakened or wrong-map policy is
+rejected before a plan can submit a trial.
 
 Plan creation assigns every 32-hex attempt ID before execution and records each
 exact spec and SHA-256 of its canonical JSON bytes (sorted keys, compact JSON,
@@ -196,6 +261,9 @@ serialized, capped validation workflow.
 Before using the coordinator for a live experiment, freeze a separately approved
 finite plan, verify existing runtime prerequisites, exercise one full declared
 execution and explicit-stop/resume path, inspect its recordings, and independently
-validate its publication evidence. The existing 22/60-second protocol is unchanged.
+validate its publication evidence. The next readiness/prompt version additionally
+needs a saved pre-API qualifying window and a timeout case with zero provider
+requests. Historical 22/60-second protocols and evidence remain unchanged; the
+new contract needs its own frozen release and acceptance before live use.
 A ten-minute fixed-clock protocol, native XP cutoff ledger, other classes,
 replanning and party objectives remain separate work.

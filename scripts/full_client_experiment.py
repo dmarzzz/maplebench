@@ -28,6 +28,7 @@ import uuid
 import full_client_trial as trial
 import full_client_score as scoring
 import full_client_docker as docker
+import full_client_readiness as readiness
 
 MODELS = ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
 SHA = re.compile(r"[a-f0-9]{64}\Z")
@@ -192,7 +193,7 @@ def validate_runner(value):
         reference(value[key])
     require(value["trial_script"]["path"] == str(Path(trial.__file__).resolve()), "runner_import_mismatch")
     required = {str(Path(__file__).resolve()), str(Path(scoring.__file__).resolve()),
-                str(Path(docker.__file__).resolve())}
+                str(Path(docker.__file__).resolve()), str(Path(readiness.__file__).resolve())}
     deps = value["dependencies"]
     require(isinstance(deps, list) and 2 <= len(deps) <= 32, "invalid_runner_dependencies")
     for ref in deps:
@@ -236,6 +237,15 @@ def fixture_inputs(fixture, runner):
             and config.get("world_lock") == runner["world_lock"]
             and config.get("queue_lock") == runner["queue_lock"]
             and scoring.same_json(config.get("orchestrator"), runner["trial_script"]), "backend_fixture_mismatch")
+    reference(config.get("baseline_snapshot"))
+    baseline_snapshot = decode(read_ref(config["baseline_snapshot"], private=True))
+    require(isinstance(baseline_snapshot.get("character"), dict), "invalid_readiness_policy")
+    expected_map = baseline_snapshot["character"].get("map_id")
+    require(type(expected_map) is int, "invalid_readiness_policy")
+    try:
+        readiness.validate_policy(scenario.get("readiness_policy"), expected_map_id=expected_map)
+    except readiness.ReadinessError as error:
+        raise ExperimentError("invalid_readiness_policy") from error
     try:
         fingerprint = trial.CommandAdapter(argv, adapter["dependencies"]).fingerprint
     except (trial.TrialError, OSError, ValueError) as error:

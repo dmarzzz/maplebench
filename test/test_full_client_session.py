@@ -83,6 +83,7 @@ class SessionTests(unittest.TestCase):
         request={'op':'start','run_id':'a'*32,'request_id':'a'*32,'model':'gpt-6-astra',
             'duration_seconds':60,'total_token_limit':20000,'docker_image_id':'sha256:'+'b'*64,
             'docker_binding':{'synthetic':'forwarding-only'},
+            'readiness_policy':{'synthetic':'forwarding-only'},
             'trial_context':{'scenario_fingerprint':'c'*64,'baseline_sha256':'d'*64}}
         with mock.patch('full_client_session.validate_guard_descriptors'), self.assertRaisesRegex(ValueError,'not_connected'):
             self.coordinator.dispatch(request,(10,11))
@@ -97,7 +98,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(start.call_args.args,('api','gpt-6-astra',60))
         self.assertEqual(start.call_args.kwargs,{'client':'renderer','run_id':'a'*32,'request_id':'a'*32,
             'total_token_limit':20000,'trial_context':request['trial_context'],'docker_image_id':request['docker_image_id'],
-            'docker_binding':request['docker_binding'],'lease_fds':(10,11),'private':True})
+            'docker_binding':request['docker_binding'],'readiness_policy':request['readiness_policy'],'lease_fds':(10,11),'private':True})
 
     def test_stale_waiting_browser_is_not_ready_for_connect(self):
         self.frame(); requested=self.coordinator.dispatch({'op':'prepare_wait'})

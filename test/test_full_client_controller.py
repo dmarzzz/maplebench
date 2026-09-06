@@ -6,6 +6,39 @@ import unittest
 
 
 class ControllerTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'),'Node is required for browser timing regressions')
+    def test_trial_capture_deadline_and_clock_receive_echo_use_actual_browser_state(self):
+        source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
+        timer=next(line.strip() for line in source.splitlines() if 'item.maxTimer=setTimeout' in line)
+        poll=source[source.index('  const poll=async()=>{'):source.index('  const startRun=async')]
+        fixture="""
+const assert=require('node:assert/strict');
+let limit,stopCalls=0;
+const run={readinessPolicy:{schema_version:1}}, item={autoRunId:'trial',errors:0};
+const stopRecording=()=>{stopCalls++;};
+const setTimeout=(fn,ms)=>{limit=ms;return{fn};},clearTimeout=()=>{};
+"""
+        checks=timer+"""
+assert.equal(limit,125000);item.maxTimer.fn();assert.equal(item.errors,1);assert.equal(stopCalls,1);
+item.autoRunId=null;
+"""+timer+"""
+assert.equal(limit,120000);item.autoRunId='demo';delete run.readinessPolicy;
+"""+timer+"""
+assert.equal(limit,120000);
+let closed=false,pollAbort,acknowledgement=null,sessionAck=null,releaseAck=null,relayConnected=true,disconnectedAt=null;
+const clientId='renderer',performance={now:()=>100},observe=()=>({ready:true,capturedAt:Date.now()}),
+ Module={MapleBenchRenderedAt:Date.now(),MapleBenchHud:null},renderHeader=()=>{},releaseAll=()=>{};
+let capture={clock:{id:'clock',client_received_ms:123456},autoRunId:'trial',recorderStarted:true,frames:17},saving=false,pendingUpload=null;
+let sent;
+const fetch=async(url,options)=>{sent=JSON.parse(options.body);closed=true;return{ok:false};};
+"""+poll+"""
+poll().then(()=>{assert.equal(sent.captureClockAck,'clock');assert.equal(sent.captureClockReceivedAtMs,123456);})
+ .catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+checks],
+                              capture_output=True,text=True,timeout=5)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     def run_dispatch(self, checks):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
         dispatch=source[source.index('  const commandDeadline = '):source.index('  const poll=async()=>{')]

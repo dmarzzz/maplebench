@@ -379,6 +379,17 @@ class DockerIsolationTest(unittest.TestCase):
         self.assertEqual(result['actions'], 1)
         self.assertEqual(calls[-1][1], {'type': 'basic_attack', 'targetId': 42})
 
+    def test_async_body_and_explicit_invocation_execute_but_declaration_is_not_repaired(self):
+        for code,expected in [('await sdk.observe();',1),
+                ('async function run() { await sdk.observe(); }\nawait run();',1),
+                ('async function run() { await sdk.observe(); }',0)]:
+            with self.subTest(code=code):
+                result,calls=self.execute(code)
+                self.assertEqual(result['reason'],'program_complete',result)
+                self.assertEqual(len(calls),expected)
+                self.assertEqual(len(result['steps']),expected)
+                self.assertEqual(result['actions'],0)
+
     def test_frozen_local_sudo_binding_executes_existing_image_under_hostile_routing(self):
         if not sys.platform.startswith('linux') or not Path('/usr/bin/sudo').is_file():
             self.skipTest('Requires the vetted Linux sudo Docker runner')

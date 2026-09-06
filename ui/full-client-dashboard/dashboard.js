@@ -94,7 +94,7 @@
     const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
     const expectsRenderer=['running','requesting'].includes(row.status)&&['login','run_controller'].includes(row.phase);
     $('live-description').textContent=row.failure_code?`${failedPhase}: ${row.failure_code.replaceAll('_',' ')}.${row.api_response_saved?' The API response was saved; this attempt has no verified persisted score.':''}`
-      :row.status==='completed'?'The latest saved run completed. Every starting-state group appears below.'
+      :row.status==='completed'?'The latest saved run completed. Every group of frozen inputs appears below.'
       :`${phase}${expectsRenderer&&row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
     const current=phases.findIndex(([key])=>key===row.phase);$('phases').replaceChildren();
     for(const [index,[key,label]]of phases.entries()){const node=el('li',label),state=row.phase_states?.[key];if(state==='failed'){node.textContent=`${label}: failed`;node.className='phase-failed';}else if(row.status==='completed'||state==='returned')node.className='done';else if(index===current)node.className='current';$('phases').append(node);}
@@ -112,7 +112,7 @@
     for(const [index,{group,rows}] of groups.entries()){
       const block=el('article'),heading=el('div'),title=el('h3',`${index===0?'Latest group':'Earlier group'} · ${group.models.length} ${group.models.length===1?'model':'models'}`);
       block.className='result-group';heading.className='group-heading';heading.append(title,el('span',`${rows.length} ${rows.length===1?'attempt':'attempts'} · ${group.id.slice(0,10)}`));block.append(heading);
-      block.append(el('p',group.ready?'Matching baseline, scenario, budgets and runtime. One or more runs per model; no ranking established.':'Separate starting state. Its result is visible here; another model is needed for a within-group comparison.'));
+      block.append(el('p',group.ready?'Matching baseline, scenario, budgets and runtime. Live scene equality is unverified; no ranking established.':'Separate frozen inputs. Its result is visible here; another model is needed for a within-group comparison.'));
       const noOps=rows.filter(row=>row.no_op===true),incomplete=rows.filter(row=>row.action_verification==='receipts_incomplete');
       if(noOps.length){const note=el('p',`${noOps.map(row=>row.requested_model).join(' and ')} executed no input actions. Their zero XP remains in the results.`);note.className='group-notice';block.append(note);}
       if(incomplete.length){const note=el('p',`${incomplete.map(row=>row.requested_model).join(' and ')} has incomplete action evidence. Persisted XP and publication status are shown separately.`);note.className='group-notice';block.append(note);}
