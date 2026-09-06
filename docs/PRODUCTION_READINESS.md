@@ -33,6 +33,10 @@ and party objectives remain a design; they are not claimed as running benchmarks
 
 ## Components
 
+- [Finite experiments](FULL_CLIENT_EXPERIMENTS.md): a frozen complete attempt set,
+  per-fixture model order, aggregate budgets, explicit resume without replay, and
+  reports that retain missing, failed, zero and negative outcomes. This new
+  coordinator requires separate runtime acceptance before unattended use.
 - [Durable runner](FULL_CLIENT_RUNNER.md): operation journal, existing locks,
   bounded command supervisor, conservative API accounting, and explicit recovery.
 - [Linux runtime backend](FULL_CLIENT_RUNTIME.md): stopped-server baseline
@@ -124,15 +128,35 @@ pin. Its separate Astra acceptance completed with 29 acknowledged inputs,
 +9,500 persisted net XP, ordinary committed logout, reviewed recording and a
 passing full publication validation. The original four-model comparison is
 unchanged. This early-finishing program did not exercise the live deadline-tail
-boundary; focused tests cover that boundary. The runtime assumes a trusted host: installed
-third-party Python package bytes and Docker endpoint configuration are not fully
-bound by the manifest. No alternate Docker endpoint was observed in the private
-deployment check; that observation is not a general guarantee against host drift.
+boundary; focused tests cover that boundary.
+
+The next source revision introduces a frozen local Docker execution binding and
+an explicit finite experiment coordinator. These changes require a new manifest
+and separate release acceptance; they do not retroactively change the deployed
+`9dd7d98` contract or any historical result. The deployment check found no
+alternate Docker endpoint in those runs. Installed third-party Python package
+bytes and all import roots remain a trusted-host assumption; the new Docker
+binding does not close that separate reproducibility gap.
 
 Shared-host capacity is still an operational release gate. Normal-service
 restoration retains the original heap/cgroup settings and refuses when available
 memory is below the reviewed admission threshold. A passing short trial does not
 reserve capacity for continuous operation or demonstrate unattended recovery.
+
+The original normal server and queue worker were restored after the separate
+acceptance. Restoration exposed a false readiness timeout: `journalctl` returned
+success with empty output while failing to map a journal file under an inherited
+address-space limit. The server itself had started correctly. Recovery verified
+the exact existing process, its own startup log and listening sockets, preserved
+the failed restoration journal, and started only the original worker after
+closing the existing locks. The old queue worker then restarted that healthy
+server on its first empty-queue iteration. The source fix preserves an active
+world when there is no batch override to remove, starts a stopped normal service,
+and keeps restart/reload for actual batch cleanup. This source change still
+needs deployment; the observed restart remains in the operational evidence.
+A successful command exit or HTTP response alone is
+insufficient readiness evidence. An uncertain start must be reconciled against
+the existing instance before another start is considered.
 
 Real integration exposed two launch/evidence issues that synthetic phases did
 not reveal: systemd requires an unquoted scalar WorkingDirectory, and Chrome
@@ -141,3 +165,11 @@ must check the actual loaded command and working directory. Recording duration
 must come from bounded inspection of the encoded media, with incomplete or
 corrupt recordings rejected. A successful gameplay program remains an invalid
 benchmark attempt if any subsequent evidence check fails.
+
+The subsequent source hardening passed 355 focused Python tests in 30.116 seconds
+on one capped runtime job, including a real local Docker invocation and actual
+stdlib child-process timeout/parent-death checks. These checks do not spend model
+API credits, reset a live database, or replace release acceptance. The source
+changes and finite experiment coordinator have not yet been deployed. After
+aligning plan admission with the backend's actual file-size limits, all 23
+experiment tests passed again in 1.481 seconds.

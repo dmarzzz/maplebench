@@ -26,7 +26,11 @@ recordings. See [scenarios](docs/SCENARIOS.md) and [replay provenance](docs/REPL
 The [production readiness criteria](docs/PRODUCTION_READINESS.md) track durable
 isolated attempts, native save receipts, exact recording review and verified
 publication evidence. Repeated trials, balanced model order and longer operational
-acceptance remain necessary before a dependable public ranking.
+acceptance remain necessary before a dependable public ranking. The new
+[finite experiment coordinator](docs/FULL_CLIENT_EXPERIMENTS.md) implements
+predeclared repeated plans, explicit resume without API replay, and complete-plan
+reports. It is awaiting separate deployment acceptance; it has not generated
+additional benchmark results.
 
 MapleBench is an experimental benchmark for evaluating coding agents in a persistent MapleStory-like game environment, beginning with simple XP optimization and progressing toward multi-agent party-quest coordination.
 
