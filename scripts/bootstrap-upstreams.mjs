@@ -183,10 +183,30 @@ function installCosmicOverlay(cosmicDir) {
   const xpReplacement = `${xpAnchor}\n            server.bots.MapleBenchEventSink.recordXpGain(this, total);`;
   replaceOnce(characterPath, xpAnchor, xpReplacement, 'authoritative XP event hook');
 
+  // Bind receipts to the real transaction, never a client acknowledgement or
+  // the account's offline flag. The anchor is specific to saveCharToDB and must
+  // not instrument character creation or an unrelated transaction.
+  const saveAnchor = `                if (storage != null && usedStorage) {
+                    storage.saveToDB(con);
+                    usedStorage = false;
+                }
+
+                con.commit();`;
+  replaceOnce(characterPath, saveAnchor,
+    `${saveAnchor}\n                server.bots.MapleBenchPersistence.committed(getId(), getAccountID());`,
+    'positive character-save receipt');
+  const saveFailureAnchor = '            log.error("Error saving chr {}, level: {}, job: {}", name, level, job.getId(), e);';
+  replaceOnce(characterPath, saveFailureAnchor,
+    `${saveFailureAnchor}\n            server.bots.MapleBenchPersistence.failed(getId(), getAccountID());`,
+    'failed character-save receipt');
+
   const serverPath = join(cosmicDir, 'src/main/java/net/server/Server.java');
   const mainAnchor = '        Server.getInstance().init();';
   const mainReplacement = `${mainAnchor}\n        server.bots.MapleBenchControlServer.startFromEnvironment();`;
   replaceOnce(serverPath, mainAnchor, mainReplacement, 'control-plane startup hook');
+  replaceOnce(serverPath, mainAnchor,
+    `        server.bots.MapleBenchPersistence.initializeFromEnvironment();\n${mainAnchor}`,
+    'persistence journal startup');
 }
 
 const patchOnly = process.argv.includes('--patch-only');

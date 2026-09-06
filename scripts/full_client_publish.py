@@ -1,68 +1,51 @@
-"""Fail-closed ranked-publication gate for full-client evidence manifests.
+"""Verify full-client publication evidence without publishing or changing state.
 
-This is a pure manifest validator, not a publisher or a score calculator. It does
-not change the existing gallery schema/pipeline. Use a trusted evidence builder:
-hashes, server origin, API receipts, capture integrity, and visual review are
-attestations here, not independently authenticated by this tool. ``ready`` means
-the manifest satisfies this evidence contract, not that its claims are proven.
+Schema 1 remains a structural legacy contract and never returns ranked-ready.
+Schema 2 requires actual contained artifact files, recomputed persisted net XP,
+normal-reset/session/native-save evidence, a complete provider request/response,
+exact executed program bytes, and the complete post-render recording with a
+matching review. The validator independently hashes files and probes video with
+ffprobe. Integration runs always remain ineligible.
 
-Schema v1 (all fields required for ranked eligibility):
-  schema_version: 1; run_kind: "ranked" ("integration" always fails the gate)
-  result: the bridge's result.json object, including controller, program,
-    initial/final ready client observations, api, programSha256, observedXpDelta,
-    and timing {startedAtMs, endedAtMs, elapsedMs, apiLatencyMs}.
-    controller: {id, adapter:"full-client", mode:"api", status:"completed",
-      model, returnedModel}; api: {id, model, status:"completed", usage:
-      {input_tokens, output_tokens, total_tokens}}. Extra metadata is retained
-    by the builder but not emitted by this gate. Client XP is diagnostic only.
-  budgets: {api_requests, output_tokens, total_tokens, program_ms, run_ms, actions}
-    Positive integer limits, except actions may be zero. V1 records one API
-    request; multiple-request runs require a future schema with every receipt.
-  timeline: {status:"completed", api_started_ms, api_ended_ms,
-    program_started_ms, program_ended_ms, client_observations_fresh:true,
-    interrupted:false}. Offsets are monotonic milliseconds from run start.
-  scenario: {id, fingerprint, reset_fingerprint}
-  score: {source:"cosmic-server-events", run_id, scenario_fingerprint,
-    reset_fingerprint, evidence_sha256, score_sha256, metrics:{name:number,...}}
-    Hashes identify the complete server event evidence and scored artifact;
-    neither score nor authoritative metrics may be copied from client telemetry.
-  video: {path, sha256, status:"completed", start_ms, end_ms, duration_ms,
-    interrupted:false, reviewed:true, overlay:{controller_id, mode:"api", model}}
-    The video covers the entire program interval. API-planning footage is
-    optional. The review attests that the overlay identifies the actual model.
+The trusted collector and native server remain the provenance boundary. Matching
+hashes, JSON receipts, and a visual-review record establish consistency; they do
+not cryptographically authenticate a dishonest collector or replace human review.
+The artifact directory must remain immutable during verification. No credentials,
+database contents, event payloads, or private paths are emitted in verdicts.
 
-All fingerprints/digests are lowercase 64-character SHA-256 hex strings. Video
-path is a relative .mp4 artifact reference, never an absolute path or URL. This
-validator does not read artifact files or decode video; the trusted builder must
-verify the referenced bytes before supplying their hashes/review attestations.
-Millisecond comparisons permit 100 ms of clock rounding/frame-boundary slack.
-The clean ``program_complete`` requirement is a conservative prototype-only
-transport contract, not a policy of publishing only winners. Zero XP is valid.
-A future ranked trial runner must distinguish legitimate death/time/action-budget
-outcomes from infrastructure interruption and accept fully evidenced outcomes.
-
-Persisted-character scoring is deliberately unsupported in v1. A future
-``cosmic_persisted_character`` contract must require verified logout/save,
-unchanged level, numeric initial/final server stats, baseline parity, and net_xp
-semantics including death penalties. It must not relabel client telemetry.
-
-CLI: python3 scripts/full_client_publish.py MANIFEST.json
-Prints only JSON {ready, reasons}; exits 0 if eligible, 1 if ineligible, 2 for
-unreadable/invalid JSON. Integration evidence remains useful without being ranked.
+See docs/FULL_CLIENT_TRIALS.md for versioned record and artifact shapes.
+CLI: python3 scripts/full_client_publish.py MANIFEST.json --artifact-root BUNDLE
+Exit 0 means the complete evidence contract passed; 1 means missing/inconsistent
+required evidence; 2 means unreadable or invalid manifest JSON. This tool never
+uploads anything or changes repository visibility.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import os
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
+import sys
+
+from full_client_score import (EvidenceError, SOURCE, JSON_LIMIT, parse_json,
+                               open_verified_artifact, read_artifact_bytes, read_json_artifact,
+                               same_json, verified_artifact, verify_trial_bundle)
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 KEYS = frozenset({"LEFT", "RIGHT", "UP", "DOWN", "JUMP", "ATTACK", "BRANDISH",
                   "COMBO", "BOOSTER", "MAPLE_WARRIOR", "HP_POTION", "MP_POTION"})
 SLACK_MS = 100
+CAPTURE_TAIL_MS = 2000
+CAPTURE_UNCERTAINTY_MS = 250
+PROGRAM_FORMAT = {"type": "json_schema", "name": "maple_program", "strict": True,
+                  "schema": {"type": "object", "additionalProperties": False,
+                             "properties": {"note": {"type": "string"}, "code": {"type": "string"}},
+                             "required": ["note", "code"]}}
 
 
 def _object(value):
@@ -81,21 +64,22 @@ def _number(value, minimum=0):
 
 
 def _integer(value, minimum=0):
-    return type(value) is int and value >= minimum
+    return type(value) is int and minimum <= value <= 2**53 - 1
 
 
 def _hash(value):
     return isinstance(value, str) and SHA256.fullmatch(value) is not None
 
 
-def _video_path(value):
+def _video_path(value, version=1):
     if not _text(value) or any(c in value for c in (":", "\\", "\x00")):
         return False
     path = PurePosixPath(value)
-    return not path.is_absolute() and ".." not in path.parts and path.suffix == ".mp4"
+    return (not path.is_absolute() and ".." not in path.parts
+            and path.suffix in ((".mp4", ".webm") if version == 2 else (".mp4",)))
 
 
-def validate_manifest(manifest):
+def _validate_structure(manifest):
     """Return all actionable blockers without mutating or trusting client scores."""
     reasons = []
 
@@ -107,13 +91,16 @@ def validate_manifest(manifest):
     if not isinstance(manifest, dict):
         return {"ready": False, "reasons": ["manifest: expected a JSON object."]}
     m = manifest
-    require(type(m.get("schema_version")) is int and m["schema_version"] == 1,
-            "schema_version: use the supported manifest version 1.")
+    version = m.get("schema_version")
+    require(type(version) is int and version in (1, 2),
+            "schema_version: use supported manifest version 1 or 2.")
     require(m.get("run_kind") == "ranked",
             "run_kind: integration/manual smoke runs are ineligible for ranked publication; "
             "collect a reproducible scored benchmark run.")
     result = _object(m.get("result"))
     source = result.get("source")
+    if version == 2:
+        require(source == "full-client-trial", "result.source: require a collected full-client-trial result.")
     require(not isinstance(source, str) or not any(marker in source.lower() for marker in ("integration", "unscored")),
             "result.source: an unscored integration result cannot be relabeled as a ranked benchmark.")
     controller = _object(result.get("controller"))
@@ -135,14 +122,17 @@ def validate_manifest(manifest):
     require(_text(controller.get("returnedModel")) and controller.get("returnedModel") == controller.get("model"),
             "result.controller.returnedModel: record and match the API-returned model.")
     require(_hash(result.get("programSha256")), "result.programSha256: hash the executed program.")
-    require(program.get("reason") == "program_complete" and program.get("error") in (None, ""),
+    outcomes = ("program_complete", "death", "time_limit", "action_limit") if version == 2 else ("program_complete",)
+    require(program.get("reason") in outcomes and program.get("error") in (None, ""),
             "result.program: require clean program_complete, not timeout, interruption, or failure.")
 
     def observation(value):
         obs = _object(value)
         char = _object(obs.get("character"))
         return (obs.get("ready") is True and bool(char)
-                and ("ageMs" not in obs or (_number(obs["ageMs"]) and obs["ageMs"] < 1500)))
+                and ("ageMs" not in obs or (_number(obs["ageMs"]) and obs["ageMs"] < 1500))
+                and (version != 2 or all(_number(obs.get(key)) and obs[key] < 1500
+                                         for key in ("ageMs", "renderAgeMs"))))
 
     for name in ("initial", "final"):
         require(observation(result.get(name)), f"result.{name}: record a ready, fresh client observation.")
@@ -156,6 +146,7 @@ def validate_manifest(manifest):
     steps = program.get("steps")
     require(isinstance(steps, list), "result.program.steps: preserve the complete SDK receipt list.")
     action_count = 0
+    held_ms = 0
     for index, raw in enumerate(steps if isinstance(steps, list) else []):
         step = _object(raw)
         receipt = _object(step.get("result"))
@@ -179,12 +170,21 @@ def validate_manifest(manifest):
                               and not ({"LEFT", "RIGHT"} <= set(keys) or {"UP", "DOWN"} <= set(keys))
                               and _integer(duration, 30) and duration <= 1500)
             require(valid_args, f"{prefix}: preserve valid bounded key-hold arguments.")
+            if valid_args:
+                held_ms += args[1]
             require(observation(receipt.get("observation")), f"{prefix}: input receipt needs a fresh observation.")
         elif method == "observe":
+            require(step.get("args") == [], f"{prefix}: observe takes no arguments.")
             require(observation(receipt), f"{prefix}: observation was stale, missing, or not ready.")
         else:
-            require(_number(receipt.get("waitedMs")) and receipt["waitedMs"] <= 3000,
+            args = step.get("args")
+            valid_wait = (isinstance(args, list) and len(args) == 1 and _integer(args[0], 1) and args[0] <= 3000
+                          and _number(receipt.get("waitedMs")) and receipt["waitedMs"] <= args[0])
+            require(valid_wait and (receipt["waitedMs"] == args[0]
+                    or version == 2 and program.get("reason") == "time_limit" and index == len(steps) - 1),
                     f"{prefix}: preserve a valid completed wait receipt.")
+            if valid_wait:
+                held_ms += receipt["waitedMs"]
     require(_integer(program.get("actions")) and program.get("actions") == action_count,
             "result.program.actions: count must match the complete input receipt list.")
 
@@ -199,6 +199,12 @@ def validate_manifest(manifest):
     for key in ("api_requests", "output_tokens", "total_tokens", "program_ms", "run_ms", "actions"):
         require(_integer(budgets.get(key), 0 if key == "actions" else 1),
                 f"budgets.{key}: supply the explicit integer run limit.")
+    if version == 2:
+        require(type(budgets.get("api_requests")) is int and budgets["api_requests"] == 1,
+                "budgets.api_requests: version 2 binds exactly one provider request per trial.")
+        require(_integer(budgets.get("sdk_requests"), 1)
+                and isinstance(steps, list) and len(steps) <= budgets["sdk_requests"],
+                "budgets.sdk_requests: preserve and enforce the frozen SDK request limit.")
     for key in ("output_tokens", "total_tokens"):
         if _integer(usage.get(key)) and _integer(budgets.get(key)):
             require(usage[key] <= budgets[key], f"budgets.{key}: recorded API usage exceeded the limit.")
@@ -224,6 +230,8 @@ def validate_manifest(manifest):
     if valid_offsets:
         a, b, c, d = (timeline[key] for key in offsets)
         require(a <= b <= c < d, "timeline: API/program intervals are reversed, overlapping, or empty.")
+        require(held_ms <= d - c + SLACK_MS,
+                "timeline: acknowledged sequential key holds and waits exceed program duration.")
         if valid_timing:
             require(d <= timing["elapsedMs"] + SLACK_MS and abs(b - a - timing["apiLatencyMs"]) <= SLACK_MS,
                     "timeline: offsets disagree with recorded elapsed time or API latency.")
@@ -234,21 +242,22 @@ def validate_manifest(manifest):
             "scenario: record the reproducible scenario ID and SHA-256 fingerprint.")
     require(_hash(scenario.get("reset_fingerprint")),
             "scenario.reset_fingerprint: supply verified initial reset parity, not an uncontrolled integration state.")
-    require(score.get("source") == "cosmic-server-events",
+    require(score.get("source") == (SOURCE if version == 2 else "cosmic-server-events"),
             "score.source: supply server-authoritative cosmic-server-events scoring; client XP is ineligible.")
     require(_text(score.get("run_id")) and score.get("run_id") == controller.get("id"),
             "score.run_id: bind server scoring evidence to this controller run.")
-    for key, target in (("scenario_fingerprint", "fingerprint"), ("reset_fingerprint", "reset_fingerprint")):
+    for key, target in (("scenario_fingerprint", "fingerprint"),
+                        ("baseline_sha256" if version == 2 else "reset_fingerprint", "reset_fingerprint")):
         require(_hash(score.get(key)) and score.get(key) == scenario.get(target),
                 f"score.{key}: server evidence must match the declared scenario/reset.")
-    for key in ("evidence_sha256", "score_sha256"):
+    for key in (("evidence_sha256",) if version == 2 else ("evidence_sha256", "score_sha256")):
         require(_hash(score.get(key)), f"score.{key}: hash the authoritative evidence/scored artifact.")
     metrics = score.get("metrics")
     require(isinstance(metrics, dict) and bool(metrics)
             and all(_text(k) and _number(v, -math.inf) for k, v in metrics.items()),
             "score.metrics: supply finite numeric server metrics; do not promote observedXpDelta.")
 
-    require(_video_path(video.get("path")) and _hash(video.get("sha256")),
+    require(_video_path(video.get("path"), version) and _hash(video.get("sha256")),
             "video: supply a relative .mp4 artifact path and its SHA-256 digest.")
     require(video.get("status") == "completed" and video.get("interrupted") is False,
             "video: require a completed, uninterrupted capture, not a partial or failed recording.")
@@ -257,7 +266,8 @@ def validate_manifest(manifest):
             and overlay.get("mode") == controller.get("mode") == "api"
             and overlay.get("model") == controller.get("model") == api.get("model") and _text(overlay.get("model")),
             "video.overlay: reviewed overlay must identify this run's actual API controller/model.")
-    valid_video_times = all(_number(video.get(key)) for key in ("start_ms", "end_ms", "duration_ms"))
+    valid_video_times = (all(_number(video.get(key)) for key in ("end_ms", "duration_ms"))
+                         and _number(video.get("start_ms"), -CAPTURE_UNCERTAINTY_MS if version == 2 else 0))
     require(valid_video_times, "video: record capture offsets and measured duration in milliseconds.")
     if valid_video_times:
         start, end, duration = (video[key] for key in ("start_ms", "end_ms", "duration_ms"))
@@ -268,22 +278,264 @@ def validate_manifest(manifest):
                     and end + SLACK_MS >= timeline["program_ended_ms"],
                     "video: capture must cover the complete program, not only a selected excerpt.")
         if valid_timing:
-            require(end <= timing["elapsedMs"] + SLACK_MS, "video: capture end lies outside the recorded run timeline.")
+            require(end <= timing["elapsedMs"] + (CAPTURE_TAIL_MS if version == 2 else SLACK_MS),
+                    "video: capture end lies outside the bounded recording tail.")
     return {"ready": not reasons, "reasons": reasons}
+
+
+def _probe_video(path, expected_sha256):
+    """Inspect the actual video stream under a bounded, read-only subprocess."""
+    try:
+        if os.name != "posix":
+            raise EvidenceError("video: safe descriptor-based probing is unavailable on this host")
+        reference = {"path": path.name, "sha256": expected_sha256}
+        with open_verified_artifact(path.parent, reference, "video", 1024**3) as stream:
+            fd = stream.fileno()
+            descriptor_path = ("/proc/self/fd/" if sys.platform.startswith("linux") else "/dev/fd/") + str(fd)
+            try:
+                process = subprocess.run(
+                    ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+                     "-show_entries", "stream=width,height,nb_read_frames,duration:format=duration",
+                     "-of", "json", descriptor_path], stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+                    check=False, pass_fds=(fd,))
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise EvidenceError("video: ffprobe unavailable or timed out") from error
+        if process.returncode != 0 or len(process.stdout) > JSON_LIMIT:
+            raise EvidenceError("video: actual recording could not be probed")
+        probe = parse_json(process.stdout)
+        stream = probe["streams"][0]
+        duration = float(probe.get("format", {}).get("duration", stream.get("duration"))) * 1000
+        width, height, frames = (int(stream[key]) for key in ("width", "height", "nb_read_frames"))
+        if not _number(duration, 1) or min(width, height, frames) <= 0:
+            raise EvidenceError("video: require a nonempty measurable video stream")
+        return {"width": width, "height": height, "frames": frames, "duration_ms": duration}
+    except EvidenceError:
+        raise
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, KeyError, IndexError) as error:
+        raise EvidenceError("video: ffprobe unavailable, timed out, or rejected the recording") from error
+
+
+def _verify_persisted_manifest(manifest, artifact_root):
+    def require(condition, reason):
+        if not condition:
+            raise EvidenceError(reason)
+
+    artifacts = manifest.get("artifacts")
+    require(isinstance(artifacts, dict), "artifacts: provide a complete private evidence bundle")
+    evidence = read_json_artifact(artifact_root, artifacts, "persistence")
+    score = verify_trial_bundle(evidence, artifact_root, artifacts)
+    require(same_json(score, manifest["score"])
+            and same_json(score, read_json_artifact(artifact_root, artifacts, "score")),
+            "score: supplied score differs from recomputed verified persistence score")
+    result = manifest["result"]
+    require(same_json(read_json_artifact(artifact_root, artifacts, "result"), result),
+            "artifacts.result: complete result artifact differs from manifest")
+    scenario = read_json_artifact(artifact_root, artifacts, "scenario")
+    require(isinstance(scenario, dict) and scenario.get("id") == manifest["scenario"]["id"],
+            "artifacts.scenario: frozen scenario ID differs from manifest")
+    require(same_json(scenario.get("budgets"), manifest["budgets"]),
+            "budgets: limits must match the scenario frozen before the trial")
+    require(same_json(result.get("timeline"), manifest["timeline"]),
+            "timeline: preserve the timeline recorded in the result artifact")
+    session = evidence["session"]
+    started = result["timing"]["startedAtMs"]
+    for offset, timestamp in (("api_started_ms", "api_started_at_ms"), ("api_ended_ms", "api_ended_at_ms"),
+                              ("program_started_ms", "controller_started_at_ms"),
+                              ("program_ended_ms", "controller_ended_at_ms")):
+        require(abs(started + manifest["timeline"][offset] - session[timestamp]) <= SLACK_MS,
+                "timeline: controller result and persisted session clocks disagree")
+    require(session["login_at_ms"] <= started
+            and result["timing"]["endedAtMs"] <= session["disconnect_requested_at_ms"],
+            "timeline: result must lie inside the ordinary connected session")
+
+    request = read_json_artifact(artifact_root, artifacts, "api_request")
+    response = read_json_artifact(artifact_root, artifacts, "api_response")
+    model = result["controller"]["model"]
+    run_id = result["controller"]["id"]
+    require(isinstance(request, dict) and request.get("model") == model
+            and _object(request.get("metadata")).get("maplebench_run_id") == run_id,
+            "api_request: bind the actual model request to this run")
+    require(set(request) == {"model", "store", "reasoning", "instructions", "input",
+                             "max_output_tokens", "text", "metadata"},
+            "api_request: require the complete supported program-request body")
+    require(request.get("store") is False
+            and same_json(request.get("text"), {"format": PROGRAM_FORMAT}),
+            "api_request: require store false and the exact strict program-output schema")
+    require(same_json(request.get("reasoning"), scenario.get("reasoning"))
+            and isinstance(request.get("reasoning"), dict)
+            and set(request["reasoning"]) == {"effort"}
+            and request["reasoning"]["effort"] in ("low", "medium", "high", "xhigh", "max", "ultra"),
+            "api_request: reasoning effort must match the frozen scenario")
+    instructions = request.get("instructions")
+    require(isinstance(instructions, str) and 0 < len(instructions) <= 32000
+            and _hash(scenario.get("instructions_sha256"))
+            and hashlib.sha256(instructions.encode("utf-8")).hexdigest() == scenario["instructions_sha256"],
+            "api_request: formatted instructions differ from the frozen scenario")
+    require(isinstance(request.get("input"), str)
+            and same_json(parse_json(request["input"]), {"observation": result["initial"]}),
+            "api_request: actual input must contain exactly the recorded initial observation")
+    require(_integer(request.get("max_output_tokens"), 1)
+            and request["max_output_tokens"] <= manifest["budgets"]["output_tokens"],
+            "api_request: requested output limit exceeds the frozen budget")
+    require(isinstance(response, dict), "api_response: require the full provider response")
+    require(all(same_json(response.get(key), result["api"].get(key)) for key in ("id", "status", "model", "usage")),
+            "api_response: provider metadata differs from recorded result")
+    require(_object(response.get("metadata")).get("maplebench_run_id") == run_id,
+            "api_response: response metadata does not identify this run")
+    output = response.get("output")
+    require(isinstance(output, list), "api_response: preserve provider output, not only token metadata")
+    text_parts = []
+    for item in output:
+        require(isinstance(item, dict), "api_response: invalid output envelope")
+        if item.get("type") == "message":
+            content = item.get("content")
+            require(isinstance(content, list), "api_response: missing output content")
+            for part in content:
+                require(isinstance(part, dict), "api_response: invalid content envelope")
+                if part.get("type") == "output_text":
+                    require(isinstance(part.get("text"), str), "api_response: invalid program text")
+                    text_parts.append(part["text"])
+    choice = parse_json("".join(text_parts))
+    require(isinstance(choice, dict) and set(choice) == {"note", "code"}
+            and isinstance(choice.get("note"), str) and len(choice["note"]) <= 2000
+            and isinstance(choice.get("code"), str) and 0 < len(choice["code"]) <= 12000,
+            "api_response: missing bounded generated program")
+    program_bytes = read_artifact_bytes(artifact_root, artifacts.get("program"), "program", 64 * 1024)
+    require(program_bytes == choice["code"].encode("utf-8")
+            and artifacts["program"]["sha256"] == result["programSha256"],
+            "program: executed bytes differ from provider output or recorded hash")
+
+    # Every terminal outcome is publishable when it is evidenced; low XP and
+    # death are not infrastructure failures and must not be filtered away.
+    reason = result["program"]["reason"]
+    if reason == "death":
+        require(evidence["final"]["character"]["hp"] == 0
+                and result["final"]["character"].get("alive") is False,
+                "outcome: death requires persisted zero HP and a dead final client observation")
+    if reason == "action_limit":
+        require(result["program"]["actions"] == manifest["budgets"]["actions"],
+                "outcome: action_limit requires exhaustion of the frozen action budget")
+    if reason == "time_limit":
+        duration = manifest["timeline"]["program_ended_ms"] - manifest["timeline"]["program_started_ms"]
+        require(abs(duration - manifest["budgets"]["program_ms"]) <= SLACK_MS,
+                "outcome: time_limit requires exhaustion of the frozen program budget")
+
+    verify_capture_bundle(manifest, artifact_root)
+
+    video = manifest["video"]
+    video_path = verified_artifact(artifact_root, artifacts.get("video"), "video", 1024**3)
+    require(artifacts["video"] == {"path": video["path"], "sha256": video["sha256"]},
+            "video: manifest does not reference the verified recording")
+    measured = _probe_video(video_path, video["sha256"])
+    probe = read_json_artifact(artifact_root, artifacts, "video_probe")
+    require(isinstance(probe, dict) and probe.get("video_sha256") == video["sha256"]
+            and all(probe.get(key) == measured[key] for key in ("width", "height", "frames"))
+            and _number(probe.get("duration_ms"))
+            and abs(probe["duration_ms"] - measured["duration_ms"]) <= SLACK_MS
+            and abs(video["duration_ms"] - measured["duration_ms"]) <= SLACK_MS,
+            "video_probe: saved probe and manifest disagree with actual recording")
+    review = read_json_artifact(artifact_root, artifacts, "video_review")
+    require(isinstance(review, dict) and review.get("video_sha256") == video["sha256"]
+            and review.get("run_id") == run_id and review.get("overlay") == video["overlay"]
+            and review.get("reviewed") is True and review.get("post_render_capture") is True,
+            "video_review: require review of this exact recording, model overlay, and post-render capture")
+    require(type(review.get("reviewed_at_ms")) is int
+            and review["reviewed_at_ms"] >= result["timing"]["endedAtMs"],
+            "video_review: review must follow the completed run")
+
+
+def verify_capture_bundle(manifest, artifact_root):
+    """Recompute measured capture timing and conservative full-run coverage.
+
+    Browser telemetry is collector evidence, not a visual review. Server-issued
+    clock/ready/terminal artifacts bind causal order without equating host clocks.
+    """
+    from full_client_capture import capture_receipt
+    def require(condition, reason):
+        if not condition:
+            raise EvidenceError(reason)
+    artifacts, result, video = manifest["artifacts"], manifest["result"], manifest["video"]
+    capture = read_json_artifact(artifact_root, artifacts, "capture")
+    ready = read_json_artifact(artifact_root, artifacts, "capture_ready")
+    clock = read_json_artifact(artifact_root, artifacts, "capture_clock")
+    terminal = read_json_artifact(artifact_root, artifacts, "capture_terminal")
+    recording = read_json_artifact(artifact_root, artifacts, "recording")
+    run_id, started = result["controller"]["id"], result["timing"]["startedAtMs"]
+    require(isinstance(recording, dict) and recording.get("capture_sha256") == artifacts["capture"]["sha256"]
+            and recording.get("sha256") == video["sha256"]
+            and same_json({key: value for key, value in recording.items() if key != "reviewed"},
+                          {key: value for key, value in video.items() if key != "reviewed"}),
+            "capture: recording and capture hashes or measured metadata differ")
+    require(isinstance(ready, dict) and set(ready) == {"runId", "serverReceivedAtMs", "renderedFrames"}
+            and ready["runId"] == run_id and _integer(ready["renderedFrames"], 1)
+            and _number(ready["serverReceivedAtMs"]), "capture: invalid server first-frame receipt")
+    require(isinstance(clock, dict) and set(clock) == {"id", "client_sent_ms", "server_received_ms", "server_sent_ms"}
+            and _text(clock["id"]) and all(_number(clock[key]) for key in set(clock) - {"id"})
+            and started <= clock["server_received_ms"] <= clock["server_sent_ms"],
+            "capture: invalid issued clock sample")
+    require(isinstance(terminal, dict) and set(terminal) == {"id", "serverIssuedAtMs"}
+            and _text(terminal["id"]) and _number(terminal["serverIssuedAtMs"]),
+            "capture: invalid terminal server receipt")
+    require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
+    try:
+        measured = capture_receipt(capture, {"id": run_id, "client": result["controller"]["client"],
+                                             "startedAtMs": started}, ready, clock, terminal)
+    except (ValueError, TypeError, KeyError, OverflowError) as error:
+        raise EvidenceError("capture: raw measurements failed validation") from error
+    require(all(same_json(video.get(key), value) for key, value in measured.items()),
+            "capture: recording fields differ from recomputed raw measurements")
+    require(measured["interrupted"] is False and measured["post_render_capture"] is True
+            and measured["rendered_frames"] >= ready["renderedFrames"]
+            and _number(measured.get("timing_uncertainty_ms"))
+            and measured["timing_uncertainty_ms"] <= CAPTURE_UNCERTAINTY_MS,
+            "capture: require continuous post-render frames with bounded measured clock uncertainty")
+    lower, upper = measured["clock_offset_ms"]["lower"], measured["clock_offset_ms"]["upper"]
+    api_start = started + result["timeline"]["api_started_ms"]
+    program_end = started + result["timeline"]["program_ended_ms"]
+    ended = result["timing"]["endedAtMs"]
+    require(started <= ready["serverReceivedAtMs"] <= api_start
+            and capture["first_frame_wall_ms"] + upper <= api_start + SLACK_MS,
+            "capture: recording must begin before the API planning interval")
+    require(ended <= terminal["serverIssuedAtMs"]
+            and capture["last_frame_wall_ms"] + lower >= program_end - SLACK_MS
+            and capture["end_wall_ms"] + lower >= terminal["serverIssuedAtMs"] - SLACK_MS
+            and capture["end_wall_ms"] + upper <= ended + CAPTURE_TAIL_MS,
+            "capture: terminal receipt and conservative bounds must cover the program with a bounded tail")
+    return measured
+
+
+def validate_manifest(manifest, artifact_root=None):
+    """A ranked-ready verdict requires schema 2 and verified artifact bytes."""
+    verdict = _validate_structure(manifest)
+    if not verdict["ready"]:
+        return verdict
+    if manifest["schema_version"] != 2:
+        return {"ready": False, "reasons": ["schema_version: v1 attestations are structural only; "
+                "use version 2 with verified persisted-trial artifacts for ranked publication."]}
+    if artifact_root is None:
+        return {"ready": False, "reasons": ["artifacts: supply the private artifact root for byte verification."]}
+    try:
+        _verify_persisted_manifest(manifest, artifact_root)
+    except EvidenceError as error:
+        return {"ready": False, "reasons": [str(error)]}
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return {"ready": False, "reasons": ["artifacts: incomplete, unreadable, or inconsistent evidence bundle."]}
+    return {"ready": True, "reasons": []}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Validate a full-client ranked-publication evidence manifest.")
     parser.add_argument("manifest", type=Path)
+    parser.add_argument("--artifact-root", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.manifest.stat().st_size > 16 * 1024 * 1024:
             raise ValueError("oversized manifest")
-        manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+        manifest = parse_json(args.manifest.read_bytes())
     except (OSError, ValueError, UnicodeError, RecursionError):
         print(json.dumps({"ready": False, "reasons": ["manifest: provide readable valid JSON (at most 16 MiB)."]}))
         return 2
-    verdict = validate_manifest(manifest)
+    verdict = validate_manifest(manifest, args.artifact_root)
     print(json.dumps(verdict, allow_nan=False))
     return 0 if verdict["ready"] else 1
 

@@ -72,7 +72,7 @@
   const wordmark = element('span', 'mb-wordmark', brand, 'MAPLE');
   element('b', '', wordmark, 'BENCH');
   element('span', 'mb-engine', brand, 'JOURNEY × COSMIC');
-  const captureStatus = element('span', 'mb-capture', title, 'LIVE');
+  const captureStatus = element('span', 'mb-capture', title, 'WAITING');
   const controller = element('div', 'mb-controller', header);
   const status = element('div', 'mb-status', header);
   const telemetry = element('div', 'mb-telemetry', header);
@@ -92,6 +92,7 @@
   element('summary', '', details, 'Controls & models');
   const manualGroup = element('div', 'mb-controls', details);
   const modelGroup = element('div', 'mb-controls mb-models', details);
+  element('div', 'mb-notice', details, 'Start a 22-second model run or the 60-second Astra demo. Each makes one API request and stops automatically.');
   const notice = element('div', 'mb-notice', footer); notice.setAttribute('role', 'status');
   const resize = () => {
     const scale = Math.min(stage.clientWidth / game.width, stage.clientHeight / game.height);
@@ -110,11 +111,12 @@
   const namesByCode = Object.fromEntries(Object.entries(keyNames).map(([name, code]) => [code, name]));
   const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87};
   const held = new Map(), physical = new Set(), manualButtons = [], runButtons = [];
+  const cancelledRuns = new Set();
   let run = {status:'idle',mode:'manual',model:null}, baseline = null, baselineScope = 'session';
   let starting = false, relayConnected = false, disconnectedAt = null, closed = false;
-  let acknowledgement = null, activeCommand = null, lastRunId = null, recordedRunId = null;
-  let capture = null, saving = false, pollTimer, pollAbort;
-  const activeRun = () => ['requesting','running'].includes(run.status);
+  let acknowledgement = null, activeCommand = null, lastRunId = null, recordedRunId = null, releaseAck = null;
+  let capture = null, saving = false, pendingUpload = null, pollTimer, pollAbort;
+  const activeRun = () => ['requesting','running'].includes(run.status) || run.workerActive === true || run.leaseReleasePending === true;
   const busy = () => starting || activeRun() || Boolean(activeCommand);
   const observe = () => Module.MapleBenchObservation || {ready:false};
   const fresh = observation => observation.ready && Number.isFinite(observation.capturedAt)
@@ -161,7 +163,7 @@
   }, true);
   window.addEventListener('blur', () => { releaseAll(true); renderHeader(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { releaseAll(true); if (capture?.autoRunId) stopRecording(); }
+    if (document.hidden) { releaseAll(true); if(capture) capture.hidden=true; if (capture?.autoRunId) stopRecording(); }
   });
 
   const format = value => Number.isFinite(value) ? value.toLocaleString('en-US') : '—';
@@ -172,13 +174,13 @@
     if (!baseline && available) setBaseline(activeRun() ? 'run' : 'session');
     const model = run.mode === 'api' ? (run.model || 'model unavailable') : null;
     const mode = activeRun() ? (run.mode === 'api' ? `OpenAI API · ${model}` : 'Scripted SDK · no evaluated model')
-      : 'Manual controls · no active model';
+      : held.size || physical.size ? 'Manual controls · no active model' : 'Idle · no active model';
     let state = !relayConnected ? 'Relay disconnected · inputs released'
       : !available ? 'Waiting for fresh client state'
       : run.status === 'requesting' ? (run.mode === 'api' ? 'Awaiting API program · game remains live' : 'Preparing SDK program')
-      : run.status === 'running' ? 'Program running'
+      : run.status === 'running' ? `Program running · ${run.actions || 0} actions${run.programStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.programStartedAtMs)/1000))} / ${run.programSeconds || 22}s` : ''}`
       : run.id ? `Last ${model || 'scripted SDK'} run: ${run.status}${run.actions != null ? ` · ${run.actions} actions` : ''}${run.reason ? ` · ${run.reason}` : ''}`
-      : 'Ready · manual input';
+      : 'Ready · open Controls & models to start one short run';
     if (available && character.alive === false) state += ' · CHARACTER DEAD';
     const delta = available && baseline && character.level === baseline.level
       && Number.isFinite(character.exp) && Number.isFinite(baseline.exp) ? character.exp - baseline.exp : null;
@@ -198,10 +200,30 @@
     hpVital.style.color = data.alive === false ? ink.danger : ink.green;
     hpFill.style.width = `${data.hpFraction*100}%`; mpFill.style.width = `${data.mpFraction*100}%`;
     captureStatus.dataset.recording = String(Boolean(capture) || saving);
-    captureStatus.textContent = capture ? `● REC ${((performance.now()-capture.startedAt)/1000).toFixed(1)}s` : saving ? 'SAVING' : 'LIVE';
+    captureStatus.textContent = capture ? `● REC ${((performance.now()-capture.startedAt)/1000).toFixed(1)}s`
+      : saving ? 'SAVING' : !relayConnected || data.stale ? 'WAITING'
+      : activeRun() ? 'RUNNING' : held.size || physical.size ? 'MANUAL' : 'IDLE';
     manualButtons.forEach(node => { node.disabled = busy(); });
-    runButtons.forEach(node => { node.disabled = busy() || !relayConnected || !fresh(observe()) || saving || Boolean(capture?.autoRunId) || Boolean(capture?.stopping); });
-    recordButton.disabled = Boolean(capture) || saving; stopButton.disabled = !capture || capture.stopping;
+    runButtons.forEach(node => { node.disabled = busy() || !relayConnected || !fresh(observe()) || saving || Boolean(pendingUpload) || Boolean(capture); });
+    recordButton.disabled = Boolean(capture) || saving || Boolean(pendingUpload); stopButton.disabled = !capture || capture.stopping;
+    retryButton.disabled = !pendingUpload || saving;
+  }
+  async function uploadRecording() {
+    if (!pendingUpload || saving) return;
+    const item = pendingUpload;
+    saving = true; renderHeader();
+    try {
+      const response = await fetch('/demo-recording', {method:'POST',
+        headers:{'Content-Type':'video/webm','X-MapleBench-Client':clientId,
+          ...(item.runId ? {'X-MapleBench-Run':item.runId,'X-MapleBench-Capture':btoa(JSON.stringify(item.metadata))} : {})},
+        body:item.blob, signal:AbortSignal.timeout(65000)});
+      if (!response.ok) throw Error('Upload rejected');
+      const receipt = await response.json();
+      if (receipt.status !== 'saved' || receipt.runId !== item.runId) throw Error('Upload receipt mismatch');
+      pendingUpload = null;
+      notice.textContent = item.runId ? `Saved recording for run ${item.runId}.` : 'Saved full-client-demo.webm on the runner.';
+    } catch { notice.textContent = 'Recording upload failed. Use Retry save before starting another run.'; }
+    finally { saving = false; renderHeader(); }
   }
   const fitText = (ctx, text, x, y, width) => {
     let value = String(text);
@@ -209,12 +231,15 @@
     ctx.fillText(value === text ? value : value.slice(0,-1)+'…', x,y);
   };
   function startRecording(autoRunId = null) {
-    if (capture) { if (autoRunId) capture.autoRunId = autoRunId; return; }
-    if (saving || closed) return;
+    if (capture) return;
+    if (saving || pendingUpload || closed) return;
     const output = document.createElement('canvas'), headerHeight = 120;
     output.width = game.width; output.height = game.height + headerHeight;
     const ctx = output.getContext('2d');
-    const item = {autoRunId,startedAt:performance.now(),chunks:[],stopping:false,animation:null,stream:null,recorder:null,finishTimer:null};
+    const item = {autoRunId,startedAt:performance.now(),startedWall:Date.now(),recorderStarted:false,
+      frames:0,firstFrameWall:null,lastFrameWall:null,lastFrameAt:null,maxGap:0,hidden:document.hidden,
+      errors:0,relayLost:false,clock:null,clockVerified:false,terminalToken:null,
+      chunks:[],bytes:0,stopping:false,animation:null,stream:null,recorder:null,finishTimer:null,maxTimer:null};
     const draw = () => {
       const data = view();
       const width=output.width, alert=data.stale || !relayConnected || data.alive===false;
@@ -253,28 +278,44 @@
     item.draw = draw;
     // Capture while the client's just-drawn WebGL buffer is valid. A separate
     // browser RAF can read an older/discarded compositor frame.
-    const animate = () => { if (!item.stopping) draw(); };
+    const animate = () => {
+      if(item.stopping) return;
+      draw();
+      if(item.recorderStarted) {
+        const now=performance.now(),wall=Date.now();
+        item.maxGap=Math.max(item.maxGap,now-(item.lastFrameAt ?? item.startedAt));
+        item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.lastFrameAt=now; item.frames++;
+      }
+    };
     item.onRendered = animate;
     try {
       const mimeType = ['video/webm;codecs=vp8','video/webm'].find(type => MediaRecorder.isTypeSupported(type));
       if (!mimeType) throw Error('WebM capture is unavailable');
       draw(); item.stream=output.captureStream(30);
       item.recorder=new MediaRecorder(item.stream,{mimeType,videoBitsPerSecond:5000000});
-      item.recorder.ondataavailable=event=>{ if(event.data.size) item.chunks.push(event.data); };
+      item.recorder.onstart=()=>{item.recorderStarted=true;item.startedAt=performance.now();item.startedWall=Date.now();};
+      item.recorder.ondataavailable=event=>{
+        if(event.data.size) { item.chunks.push(event.data); item.bytes+=event.data.size; }
+        if(item.bytes>96*1024*1024 && !item.stopping) { item.errors++; stopRecording(); }
+      };
       item.recorder.onstop=async()=>{
-        cancelAnimationFrame(item.animation); clearTimeout(item.finishTimer);
+        cancelAnimationFrame(item.animation); clearTimeout(item.finishTimer); clearTimeout(item.maxTimer);
         item.stream.getTracks().forEach(track=>track.stop());
         if (capture === item) capture=null;
-        saving=true; renderHeader();
-        try {
-          const response=await fetch('/demo-recording',{method:'POST',headers:item.autoRunId?{'X-MapleBench-Run':item.autoRunId}:{},body:new Blob(item.chunks,{type:'video/webm'}),signal:AbortSignal.timeout(30000)});
-          if (!response.ok) throw Error();
-          notice.textContent='Saved full-client-demo.webm on the runner.';
-        } catch { notice.textContent='Recording could not be saved on the runner.'; }
-        finally { saving=false; renderHeader(); }
+        const endAt=item.stoppedAt ?? performance.now(),endWall=item.stoppedWall ?? Date.now();
+        item.maxGap=Math.max(item.maxGap,endAt-(item.lastFrameAt ?? item.startedAt));
+        pendingUpload={runId:item.autoRunId,blob:new Blob(item.chunks,{type:'video/webm'}),metadata:{
+          schema_version:1,run_id:item.autoRunId,client_id:clientId,start_wall_ms:item.startedWall,end_wall_ms:endWall,
+          duration_ms:Math.max(1,endAt-item.startedAt),first_frame_wall_ms:item.firstFrameWall,last_frame_wall_ms:item.lastFrameWall,
+          rendered_frames:item.frames,max_frame_gap_ms:item.maxGap,hidden:item.hidden,errors:item.errors,relay_lost:item.relayLost,
+          interrupted:item.hidden||item.errors>0||item.relayLost||item.frames===0||item.maxGap>1000,
+          clock:item.clockVerified?item.clock:null,terminal_token:item.terminalToken}};
+        item.chunks=[];
+        await uploadRecording();
       };
-      item.recorder.onerror=()=>{ notice.textContent='Recording failed; capture stopped.'; stopRecording(); };
-      capture=item; item.recorder.start(1000); animate();
+      item.recorder.onerror=()=>{ item.errors++; notice.textContent='Recording failed; capture stopped.'; stopRecording(); };
+      capture=item; item.recorder.start(1000);
+      item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},120000);
       notice.textContent='Recording the actual canvas and controller/telemetry header.'; renderHeader();
     } catch {
       cancelAnimationFrame(item.animation); item.stream?.getTracks().forEach(track=>track.stop());
@@ -284,12 +325,13 @@
   }
   Module.MapleBenchOnRendered = () => {
     if (!capture || capture.stopping) return;
-    try { capture.onRendered(); } catch { notice.textContent='Frame capture failed'; stopRecording(); }
+    try { capture.onRendered(); } catch { capture.errors++; notice.textContent='Frame capture failed'; stopRecording(); }
   };
   function stopRecording() {
     const item=capture;
     if(!item||item.stopping) return;
-    item.stopping=true; clearTimeout(item.finishTimer); cancelAnimationFrame(item.animation);
+    item.stoppedAt=performance.now();item.stoppedWall=Date.now();
+    item.stopping=true; clearTimeout(item.finishTimer); clearTimeout(item.maxTimer); cancelAnimationFrame(item.animation);
     if(item.recorder.state!=='inactive') item.recorder.stop();
     else { item.stream.getTracks().forEach(track=>track.stop()); capture=null; }
     renderHeader();
@@ -297,15 +339,22 @@
   const recordButton = button('Record',()=>startRecording(),tools);
   recordButton.classList.add('mb-record');
   const stopButton = button('Stop & save',stopRecording,tools);
+  const retryButton = button('Retry save',uploadRecording,tools);
 
-  const clientId=crypto.randomUUID();
+  const storageKey='maplebench.full-client.tab';
+  let clientId=sessionStorage.getItem(storageKey);
+  if(!clientId || !/^[A-Za-z0-9_-]{1,64}$/.test(clientId)) {
+    clientId=crypto.randomUUID(); sessionStorage.setItem(storageKey,clientId);
+  }
+  const sessionAck=new URLSearchParams(location.search).get('transition');
   const updateRun = next => {
     run=next;
     if(run.id && lastRunId!==run.id && activeRun()) { lastRunId=run.id; setBaseline('run'); details.open=false; }
     if(activeRun() && run.id && recordedRunId!==run.id && !saving) {
       recordedRunId=run.id; startRecording(run.id);
     }
-    if(['completed','failed'].includes(run.status) && capture?.autoRunId===run.id && !capture.finishTimer) {
+    if(run.captureTerminal && capture?.autoRunId===run.id) capture.terminalToken=run.captureTerminal.id;
+    if(['completed','failed'].includes(run.status) && !run.workerActive && capture?.autoRunId===run.id && !capture.finishTimer) {
       capture.finishTimer=setTimeout(stopRecording,600);
     }
     renderHeader();
@@ -316,7 +365,11 @@
     const keys=Array.isArray(command.keys)?command.keys.map(name=>keyNames[name]):[];
     let ok=false;
     try {
-      if(!keys.length||keys.length>3||new Set(keys).size!==keys.length||keys.some(code=>!code)
+      if(document.hidden || !fresh(observe()) || !relayConnected
+        || cancelledRuns.has(command.runId)
+        || !capture?.recorderStarted || !capture.frames || capture.autoRunId!==command.runId || capture.stopping
+        || (command.runId && command.runId!==run.id)
+        || !keys.length||keys.length>3||new Set(keys).size!==keys.length||keys.some(code=>!code)
         ||!Number.isInteger(command.durationMs)||command.durationMs<30||command.durationMs>1500) throw Error('Invalid input');
       releaseAll(false); game.focus();
       for(const code of keys) { key(code,'keydown'); held.set(code,setTimeout(()=>release(code),command.durationMs)); }
@@ -332,28 +385,46 @@
     if(closed) return;
     pollAbort=new AbortController(); const timeout=setTimeout(()=>pollAbort.abort(),2000);
     try {
-      const observation=observe(), ack=acknowledgement;
+      const observation=observe(), ack=acknowledgement, clientSentAtMs=Date.now();
       const response=await fetch('/control/frame',{method:'POST',headers:{'Content-Type':'application/json'},signal:pollAbort.signal,
-        body:JSON.stringify({client:clientId,observation,ageMs:Date.now()-(observation.capturedAt||0),renderAgeMs:Date.now()-(Module.MapleBenchRenderedAt||0),renderedHud:Module.MapleBenchHud||null,ack})});
+        body:JSON.stringify({client:clientId,observation,ageMs:Date.now()-(observation.capturedAt||0),renderAgeMs:Date.now()-(Module.MapleBenchRenderedAt||0),renderedHud:Module.MapleBenchHud||null,ack,
+          page:'game',sessionAck,releaseAck,clientSentAtMs,captureClockAck:capture?.clock?.id,
+          capture:capture?{runId:capture.autoRunId,started:capture.recorderStarted,renderedFrames:capture.frames,
+            interrupted:capture.hidden||capture.errors>0||capture.relayLost||capture.stopping}:null,
+          captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle'})});
       if(!response.ok) throw Error('Relay unavailable');
-      const state=await response.json();
+      const state=await response.json(),clientReceivedAtMs=Date.now();
       if(acknowledgement===ack) acknowledgement=null;
       relayConnected=true; disconnectedAt=null; updateRun(state.run);
-      if(state.command) executeInput(state.command).catch(()=>{});
+      if(capture?.autoRunId===run.id && !run.captureClockAccepted && state.clock?.client_sent_ms===clientSentAtMs) {
+        capture.clock={...state.clock,client_received_ms:clientReceivedAtMs};
+      }
+      if(capture?.clock && run.captureClockAccepted===capture.clock.id) capture.clockVerified=true;
+      if(state.releaseKeys?.runId) { cancelledRuns.add(state.releaseKeys.runId); releaseAll(true); releaseAck=state.releaseKeys.runId; }
+      if(document.hidden || !fresh(observe())) releaseAll(true);
+      if(state.command && !state.releaseKeys) executeInput(state.command).catch(()=>{});
+      if(state.session?.desiredPage==='waiting' && !busy() && capture) stopRecording();
+      const navigation=state.navigation;
+      if(navigation && navigation.page==='waiting' && /^[a-f0-9]{32}$/.test(navigation.id)
+          && navigation.url==='/control/wait?transition='+navigation.id
+          && !busy() && !capture && !saving && !pendingUpload) {
+        closed=true; releaseAll(true); location.assign(navigation.url);
+      }
     } catch {
       relayConnected=false; disconnectedAt ??= Date.now(); releaseAll(true);
+      if(capture) capture.relayLost=true;
       if(capture?.autoRunId && Date.now()-disconnectedAt>3000) stopRecording();
       renderHeader();
     } finally { clearTimeout(timeout); if(!closed) pollTimer=setTimeout(poll,100); }
   };
-  const startRun=async(mode,model=null)=>{
+  const startRun=async(mode,model=null,durationSeconds=22)=>{
     // Let the previous run's terminal frame finish and upload before a new run
     // can inherit its capture or be stopped by its pending completion timer.
-    if(busy() || saving || capture?.autoRunId || capture?.stopping) return;
+    if(busy() || saving || pendingUpload || capture) return;
     starting=true; releaseAll(true); renderHeader();
     try {
       const response=await fetch('/control/start',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({mode,model}),signal:AbortSignal.timeout(5000)});
+        body:JSON.stringify({mode,model,durationSeconds,client:clientId}),signal:AbortSignal.timeout(5000)});
       if(!response.ok) throw Error();
       updateRun(await response.json()); notice.textContent='';
     } catch { notice.textContent='Start was not confirmed; checking the relay for the current run.'; }
@@ -362,6 +433,7 @@
   button('Run SDK script',()=>startRun('script'),modelGroup,runButtons);
   for(const [name,model] of [['Astra','gpt-6-astra'],['Sol','gpt-5.6-sol'],['Terra','gpt-5.6-terra'],['Luna','gpt-5.6-luna']])
     button(name+' API',()=>startRun('api',model),modelGroup,runButtons);
+  button('Astra · 60s demo',()=>startRun('api','gpt-6-astra',60),modelGroup,runButtons);
   window.addEventListener('pagehide',()=>{ closed=true;clearTimeout(pollTimer);pollAbort?.abort();releaseAll(true);stopRecording(); });
   resize(); renderHeader(); poll();
 })();

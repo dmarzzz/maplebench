@@ -7,24 +7,38 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
       - run: npm ci
       - run: node scripts/check-tracked-files.mjs
       - run: npm test
       - run: python3 -m unittest discover -s test -p 'test_*.py'
+      - name: Verify native save receipts without game assets or a server
+        env:
+          MAVEN_OPTS: -Xmx768m -XX:ActiveProcessorCount=2
+        run: timeout 300s mvn -B -q -f test/persistence/pom.xml test
       - name: Verify isolated program execution
         run: |
           docker pull node:22.19.0-bookworm-slim
           MAPLEBENCH_TEST_DOCKER=1 python3 -m unittest discover -s test -p 'test_maple_agent.py'
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:

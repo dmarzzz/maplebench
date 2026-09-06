@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MapleBench · Waiting</title>
+<style>
+  :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#10120f;color:#eef3dc}
+  body{margin:0;min-height:100vh;display:grid;place-items:center}
+  main{max-width:38rem;margin:2rem;border-top:3px solid #b59af4;padding:2rem 0}
+  h1{margin:0 0 1rem;font-size:2rem;letter-spacing:-.04em}h1 span{color:#c3f45b}
+  p{line-height:1.6;color:#a8b29b}#status{color:#c3f45b}
+</style>
+<main>
+  <h1>MAPLE<span>BENCH</span></h1>
+  <p id="status" role="status">Connecting to the trial coordinator…</p>
+  <p>This browser is waiting between trials. The game client is closed so the server can save the character. Keep this tab open; the coordinator will reconnect it when the next trial is ready.</p>
+</main>
+<script>
+(() => {
+  const label=document.getElementById('status');
+  const storageKey='maplebench.full-client.tab';
+  let client=sessionStorage.getItem(storageKey);
+  if(!client || !/^[A-Za-z0-9_-]{1,64}$/.test(client)) {
+    client=crypto.randomUUID(); sessionStorage.setItem(storageKey,client);
+  }
+  const sessionAck=new URLSearchParams(location.search).get('transition');
+  let closed=false,timer,abort,releaseAck=null;
+  const poll=async()=>{
+    if(closed) return;
+    abort=new AbortController(); const timeout=setTimeout(()=>abort.abort(),2000);
+    try {
+      const response=await fetch('/control/frame',{method:'POST',headers:{'Content-Type':'application/json'},signal:abort.signal,
+        body:JSON.stringify({client,page:'waiting',captureState:'idle',sessionAck,releaseAck,
+          observation:{ready:false},ageMs:0,renderAgeMs:0,ack:null})});
+      if(!response.ok) throw Error('Coordinator unavailable');
+      const state=await response.json();
+      if(state.releaseKeys?.runId) releaseAck=state.releaseKeys.runId;
+      label.textContent='Waiting for the trial coordinator · game client closed';
+      const navigation=state.navigation;
+      const target=navigation?.page==='game'?'/web/index.html':navigation?.page==='waiting'?'/control/wait':null;
+      if(target && /^[a-f0-9]{32}$/.test(navigation.id)
+          && navigation.url===target+'?transition='+navigation.id) {
+        closed=true; label.textContent=navigation.page==='game'?'Connecting the game client…':'Confirming waiting session…';
+        location.assign(navigation.url);
+      }
+    } catch { label.textContent='Coordinator disconnected · waiting safely'; }
+    finally { clearTimeout(timeout); if(!closed) timer=setTimeout(poll,200); }
+  };
+  window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);abort?.abort();});
+  poll();
+})();
+</script>
+</html>

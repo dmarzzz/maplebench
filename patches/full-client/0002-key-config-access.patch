@@ -1,0 +1,14 @@
+diff --git a/src/client/IO/UI.cpp b/src/client/IO/UI.cpp
+--- a/src/client/IO/UI.cpp
++++ b/src/client/IO/UI.cpp
+@@ -270,4 +270,10 @@ namespace jrc
+                 // default hotkey behavior for opening the Party UI.
+                 state->send_key(KeyType::MENU, KeyAction::PARTY, true, false);
+             }
++            else if (pressed && keycode == GLFW_KEY_BACKSLASH)
++            {
++                // Keep key configuration reachable when the server omits its
++                // binding, so players can repair bindings through the normal UI.
++                state->send_key(KeyType::MENU, KeyAction::KEYCONFIG, true, false);
++            }
+         }

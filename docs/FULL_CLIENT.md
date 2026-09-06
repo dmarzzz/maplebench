@@ -50,7 +50,10 @@ manual toolbar remains useful for integration checks. **Run SDK script** runs a
 deterministic smoke program. The four named API buttons request a program from
 the selected OpenAI model, then execute it through the same SDK. Each run makes
 at most one API request with 3000 output tokens and executes for at most 22
-seconds. The game continues during API latency. The live and recorded overlays identify manual,
+seconds. **Astra · 60s demo** allows one program up to 60 seconds, 240 keyboard
+actions, and 600 total SDK requests. The ordinary buttons retain 80 actions and
+100 requests. Runs stop automatically; there is no recurring batch behind these
+controls. The game continues during API latency. The live and recorded overlays identify manual,
 scripted, and API control, current keys, HP/MP and diagnostic XP change. API
 recordings include the exact requested model; the runner rejects a different
 returned model. Recording includes API planning time and retains the native HUD.
@@ -60,6 +63,12 @@ combinations, and unacknowledged input. An action is acknowledged after its key
 hold ends. Expired undelivered commands are discarded. All key holds have local
 release timers. The renderer must remain open and active for this prototype.
 
+The header shows IDLE between runs and displays action count and elapsed program
+time while a program runs. An accepted key hold proves delivery, not a physical
+effect: verify the character's binding types as described in the
+[client key-config repair guide](../patches/full-client/README.md) if Jump or
+Attack is acknowledged but ineffective.
+
 ## Evidence and current limits
 
 The integration smoke program completed 26 keyboard actions and gained 14,000
@@ -67,6 +76,13 @@ client-reported XP. A subsequent `gpt-6-astra` API program completed 25 actions
 and gained 4,750 client-reported XP; the level 180 Hero survived both runs.
 Recordings show the actual client canvas, with controller labels. These were
 sequential integration tests with different starting states, not a comparison.
+
+A later 60-second-limit Astra program completed 77 keyboard actions and gained
+27,500 client-reported XP after malformed Jump/Attack bindings were repaired
+through native key configuration. The character survived; the uploaded recording
+hash matched its manifest, and normal logout persisted the corrected bindings
+and final XP. This still lacks a frozen baseline and is an unranked integration
+run, not a standardized benchmark score.
 
 This is not yet connected to the durable four-model batch queue or its scoring
 pipeline. `result.json` records initial/final client state, API response metadata,
@@ -95,6 +111,10 @@ level transitions later needs the pinned server experience table. Measure the
 whole connection-to-logout session and report API/controller/settlement durations
 separately. Identical database baselines do not imply deterministic combat RNG.
 Kills and damage remain unknown without additional authoritative evidence.
+
+The offline [persistence scorer](FULL_CLIENT_TRIALS.md) now validates the proposed
+reset/session/save evidence and calculates net XP. The live collector and durable
+trial lifecycle still need implementation; this does not score existing demos.
 
 The publication validator in `scripts/full_client_publish.py` is a fail-closed
 check of supplied evidence and hashes, not an independent proof of API/server

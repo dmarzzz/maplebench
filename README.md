@@ -1,6 +1,6 @@
 # MapleBench
 
-**Status: active prototype.** A full Journey WASM client now runs on Cosmic,
+**Status: full-client integration working; production hardening in progress.** A full Journey WASM client now runs on Cosmic,
 with normal movement, monster contact, skill attacks, and hit effects. A
 sandboxed `sdk.observe()` / `sdk.pressKeys()` program has controlled it through
 the OpenAI API. Live and recorded overlays identify the controller/model and
@@ -15,6 +15,12 @@ reuse the existing runner without transferring its assets or credentials.
 The earlier four-model server-bot batches and replay renderer remain available.
 Their scores and rendering provenance are separate from the new full-client
 recordings. See [scenarios](docs/SCENARIOS.md) and [replay provenance](docs/REPLAY.md).
+
+The [production readiness criteria](docs/PRODUCTION_READINESS.md) track the next
+release: durable isolated attempts, real save-commit receipts, byte-verified
+publication evidence, and a complete reset-to-logout trial. The
+[durable runner](docs/FULL_CLIENT_RUNNER.md) and evidence verifier are implemented;
+live end-to-end acceptance remains a separate gate.
 
 MapleBench is an experimental benchmark for evaluating coding agents in a persistent MapleStory-like game environment, beginning with simple XP optimization and progressing toward multi-agent party-quest coordination.
 
