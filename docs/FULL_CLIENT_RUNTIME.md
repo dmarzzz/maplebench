@@ -1,11 +1,13 @@
 # Private Cosmic trial backend
 
 `scripts/full_client_runtime.py` implements the existing durable runner's real
-phase interface. It has no live defaults. Its offline tests validate refusal and
-recovery behavior with mocked host operations; this backend remains **unverified
-for live production trials** until an actual end-to-end trial succeeds with the
-pinned native persistence JAR, ordinary browser login/logout, and saved evidence.
-No existing integration recording becomes ranked by deploying this code.
+phase interface. It has no live defaults. Offline tests validate refusal and
+recovery behavior with mocked host operations. Actual bounded trials now also
+verify the pinned native JAR, ordinary login/logout, persisted scoring and saved
+evidence; see the [acceptance record](FULL_CLIENT_ACCEPTANCE.md). This establishes
+controlled operation, with unattended availability and broader statistical
+validation still outstanding. Deploying this code does not rank an integration
+recording.
 
 The runner/backend execute as root on Linux. Existing Cosmic and web services
 must declare existing nonroot users. The backend does not provision services,

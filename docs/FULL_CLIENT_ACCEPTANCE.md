@@ -10,7 +10,7 @@ These are preliminary results with one attempt per model. They establish that th
 multi-model flow works; they do not establish a statistically meaningful ranking.
 The local dashboard shows the recordings and retains failed attempts separately.
 
-## Completed trials
+## Original four-model comparison
 
 | Exact requested and returned model | Attempt | Actions | Persisted net XP | Alive at logout | API tokens |
 | --- | --- | ---: | ---: | --- | ---: |
@@ -91,10 +91,9 @@ The subsequent executor fix separates attempted requests from acknowledged
 actions, preserves uncertain endpoint outcomes as failures, and avoids dispatch
 of a key hold that cannot fit before the active deadline. The bridge checks
 receipt consistency; the browser rejects delayed command responses and cannot
-acknowledge a hold that finishes after its deadline. Release `9dd7d98` now serves
-these changes. Its separate acceptance scenario has been frozen, but no API
-attempt has started: the desktop is locked and visible browser verification is
-pending. The historical Terra attempt remains blocked.
+acknowledge a hold that finishes after its deadline. Release `9dd7d98` serves
+these changes and completed the separate acceptance trial below. The historical
+Terra attempt remains blocked.
 
 The new runner's read-only preflight passed after applying the required two-CPU
 affinity to its command wrapper. An earlier unrestricted-affinity invocation
@@ -106,12 +105,48 @@ This release also makes the executed SDK dispatcher a mandatory frozen input.
 The earlier four-trial inventory omitted that file; its historical verdicts
 remain preserved, with this additional reproducibility limitation recorded.
 The new source passed 50 focused runtime tests after the preceding 355-test
-suite. Tests and successful deployment do not replace the pending live trial.
+suite. The live trial supplies additional evidence for the ordinary successful
+path; its early completion did not exercise the final-action timeout boundary.
 
 A reported monster-visibility anomaly has no identified run or timestamp yet.
 Its cause remains unconfirmed and no score was changed. Investigation requires
 entity-lifecycle evidence; persisted XP alone does not establish a particular
 monster death. See the [class/task design](CLASS_BENCHMARK_DESIGN.md).
+
+## Separate release acceptance
+
+Release `9dd7d98` completed actual Astra API attempt
+`aad11d7ace5c4070a72568e2cf40e62c`. The requested, returned and recorded overlay
+model was exactly `gpt-6-astra`. Its single API request used 1,482 tokens
+(893 input, 589 output). The exact returned program executed unchanged and
+finished normally with 29 attempted inputs, 29 acknowledged inputs and no SDK
+errors. API time was 10.877 seconds; controller time was 20.601 seconds.
+
+Persisted EXP increased from 73,250 to 82,750: **+9,500 net XP**. The character
+remained level 180 and was alive at ordinary logout with HP 10,803. The native
+journal recorded exactly one matching save commit; offline state, unchanged
+keymap, settlement deadlines and clean cleanup were independently checked.
+All 25 original artifact references matched their saved bytes.
+
+The recording contains 15,483,861 bytes at 800×720. Its capture duration is
+32.260 seconds; encoded-media probing measured 32.272 seconds. Visual review
+sampled the start, active combat and terminal frame in the inline player, and
+live Chrome inspection observed movement, combat and the correct model label.
+The video hash is
+`6154604e38266e70bc79a1479e1e6e7401395c87c7ecf3bf08c33c68a1d24f15`.
+The full publication validator from `9dd7d98` passed with no reasons for refusal.
+The reviewed manifest and verdict were added separately; original evidence was
+not rewritten and nothing was externally published.
+
+This trial retains the original baseline, prompt and budgets but uses a new
+scenario/runtime fingerprint for the changed controller and dispatcher pin:
+
+- Scenario: `5a66ada67e1c5620c920c9bcc8945951f2c12bbc93319317f3ec8d3dcaf0a9b8`.
+- Runtime inventory: `25f1d40f658e18b4537fe60c0539dc51afe9443267ddd9ab96d7a062019a0453`.
+
+It remains a separate, unranked release acceptance. The dashboard keeps its
+group separate from the original four-model comparison; it does not replace
+any earlier attempt or establish that Astra improved relative to another model.
 
 ## Limits before a public ranking
 

@@ -119,13 +119,20 @@ Repeated trials, balanced order, uncertainty reporting and longer operational
 acceptance are still required. A publication failure cannot be repaired by
 rewriting the original controller result.
 
-Release `9dd7d98` has deployed the deadline/receipt fixes and mandatory SDK
-dispatcher pin. Its separately frozen acceptance run remains unstarted until
-the existing desktop browser can be visibly verified. The original four-model
-comparison is unchanged. The runtime currently assumes a trusted host: installed
+Release `9dd7d98` deployed the deadline/receipt fixes and mandatory SDK dispatcher
+pin. Its separate Astra acceptance completed with 29 acknowledged inputs,
++9,500 persisted net XP, ordinary committed logout, reviewed recording and a
+passing full publication validation. The original four-model comparison is
+unchanged. This early-finishing program did not exercise the live deadline-tail
+boundary; focused tests cover that boundary. The runtime assumes a trusted host: installed
 third-party Python package bytes and Docker endpoint configuration are not fully
 bound by the manifest. No alternate Docker endpoint was observed in the private
 deployment check; that observation is not a general guarantee against host drift.
+
+Shared-host capacity is still an operational release gate. Normal-service
+restoration retains the original heap/cgroup settings and refuses when available
+memory is below the reviewed admission threshold. A passing short trial does not
+reserve capacity for continuous operation or demonstrate unattended recovery.
 
 Real integration exposed two launch/evidence issues that synthetic phases did
 not reveal: systemd requires an unquoted scalar WorkingDirectory, and Chrome

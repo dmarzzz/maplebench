@@ -10,6 +10,12 @@ one attempt per model is preliminary and does not establish a ranking. See the
 [results dashboard](docs/FULL_CLIENT_DASHBOARD.md) and
 [full-client control](docs/FULL_CLIENT.md).
 
+A separate acceptance of the updated controller completed with 29 acknowledged
+Astra actions and +9,500 persisted net XP; its exact recording and full evidence
+validation passed. Its versioned scenario remains separate from the original
+four-model comparison. Class/task coverage is described in the
+[benchmark design](docs/CLASS_BENCHMARK_DESIGN.md).
+
 Moving to another computer? See [the laptop handoff](docs/LAPTOP_HANDOFF.md) to
 reuse the existing runner without transferring its assets or credentials.
 

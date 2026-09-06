@@ -2,11 +2,12 @@
 
 `scripts/full_client_trial.py` coordinates one full-client trial through a
 trusted host adapter. It supplies exclusive locks, a durable phase journal,
-bounded operations, conservative API accounting, and explicit recovery. It does
-not contain database credentials, choose a baseline, start a default world, or
-provide a complete live browser lifecycle adapter. Synthetic tests establish
-runner behavior only. A working demo and an offline score do not establish a
-production-verified ranked trial path.
+bounded operations, conservative API accounting, and explicit recovery. The
+[Cosmic backend](FULL_CLIENT_RUNTIME.md) supplies the actual browser/database
+lifecycle using private operator configuration. Synthetic tests establish runner
+behavior; the [acceptance record](FULL_CLIENT_ACCEPTANCE.md) separately documents
+actual persisted trials and exact recording validation. These results remain
+unranked pending balanced repetitions and broader operational acceptance.
 
 ## Invocation and private configuration
 
