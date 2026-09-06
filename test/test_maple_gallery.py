@@ -203,6 +203,31 @@ class GalleryServerTest(unittest.TestCase):
         connection.close()
         return result
 
+    def test_full_client_dashboard_exposes_only_projection_assets_and_named_recordings(self):
+        dashboard = self.root / 'full-client-benchmark'
+        dashboard.mkdir()
+        for name in ('index.html', 'results.json', 'dashboard.js', 'style.css',
+                     'journal.json', 'backend-state.json', 'api-response.json', 'baseline.sql'):
+            (dashboard / name).write_text('{}')
+        recordings = dashboard / 'recordings'
+        recordings.mkdir()
+        video = recordings / ('a' * 32 + '.webm')
+        video.write_bytes(b'0123456789')
+        for name, content_type in (('index.html', 'text/html'), ('results.json', 'application/json'),
+                                   ('dashboard.js', 'text/javascript'), ('style.css', 'text/css')):
+            status, headers, _ = self.request('/full-client-benchmark/' + name)
+            self.assertEqual(status, 200)
+            self.assertTrue(headers['Content-Type'].startswith(content_type))
+        for name in ('journal.json', 'backend-state.json', 'api-response.json', 'baseline.sql'):
+            self.assertEqual(self.request('/full-client-benchmark/' + name)[0], 404)
+        url = '/full-client-benchmark/recordings/' + video.name
+        status, headers, body = self.request(url, headers={'Range': 'bytes=3-6'})
+        self.assertEqual((status, headers['Content-Type'], body), (206, 'video/webm', b'3456'))
+        video.unlink()
+        video.symlink_to(dashboard / 'baseline.sql')
+        self.assertEqual(self.request(url)[0], 404)
+        self.assertEqual(self.request('/full-client-benchmark/recordings/../baseline.sql')[0], 404)
+
     def test_public_navigation_and_byte_ranges_work(self):
         status, _, body = self.request('/')
         self.assertEqual(status, 200)

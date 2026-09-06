@@ -15,9 +15,11 @@ TRIAL_FILES = {'score.json', 'controller.json', 'scenario.json', 'provenance.jso
                'steps.jsonl', 'steps.json', 'decisions.json', 'episode.jsonl',
                'observations.json', 'observations.jsonl', 'prompt.txt'}
 VIDEO_FILES = {'henesys-overlay.mp4', 'henesys-first.mp4', 'poster.jpg', 'poster.png'}
+DASHBOARD_FILES = {'index.html', 'results.json', 'dashboard.js', 'style.css'}
 CONTENT_TYPES = {'.html': 'text/html; charset=utf-8', '.json': 'application/json; charset=utf-8',
                  '.jsonl': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8',
-                 '.mp4': 'video/mp4', '.jpg': 'image/jpeg', '.png': 'image/png'}
+                 '.mp4': 'video/mp4', '.webm': 'video/webm', '.jpg': 'image/jpeg', '.png': 'image/png',
+                 '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}
 
 
 def authorized_file(root, request_path):
@@ -32,7 +34,13 @@ def authorized_file(root, request_path):
         parts = decoded[1:].split('/')
         if any(not part or part.startswith(('.', '_')) for part in parts):
             return None
-        if len(parts) == 2:
+        if parts[0] == 'full-client-benchmark':
+            # This directory contains only a sanitized exported projection and
+            # explicitly copied recordings, never the private attempt tree.
+            allowed = ((len(parts) == 2 and parts[1] in DASHBOARD_FILES)
+                       or (len(parts) == 3 and parts[1] == 'recordings'
+                           and re.fullmatch(r'[a-f0-9]{32}\.(?:webm|mp4)', parts[2])))
+        elif len(parts) == 2:
             allowed = parts[-1] in BATCH_FILES
         elif len(parts) == 5:
             allowed = (parts[1] == 'trials' and re.fullmatch(r'attempt-\d+', parts[3])
