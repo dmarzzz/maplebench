@@ -36,6 +36,47 @@ PHASES = ("restore_baseline", "start_server", "login", "run_controller",
           "disconnect", "collect_final", "cleanup")
 STATUS_FIELDS = ("ready", "queue_idle", "server_stopped", "account_offline",
                  "controller_idle", "ownership_conflict")
+# Reviewed literal RuntimeErrorCode values from the trusted Cosmic backend.
+# Never infer safety from a spelling pattern or load this list from adapter
+# output/configuration: an unknown future code deliberately remains opaque.
+MAX_ERROR_JSON = 512
+RUNTIME_ERROR_CODES = frozenset("""
+account_state_unavailable actual_api_request_mismatch actual_api_response_mismatch
+admin_operation_failed admin_request_limit admin_response_limit
+artifact_changed_during_collection artifact_size_limit artifact_symlink
+attempt_directory_mismatch backend_owner_mismatch backend_state_missing
+baseline_identity_mismatch bridge_budget_mismatch capture_metadata_hash_mismatch
+cleanup_requires_stopped_offline cleanup_without_owner_requires_ready
+client_asset_directory_required client_asset_inventory_mismatch client_asset_target_not_frozen
+controller_host_clock_mismatch controller_model_or_source_mismatch controller_run_failed
+controller_run_identity_lost controller_trial_context_mismatch distinct_inherited_locks_required
+distinct_locks_required dropin_owner_missing dropin_owner_path_mismatch dropin_ownership_lost
+executed_program_mismatch existing_service_required existing_trial_environment existing_trial_owner
+fresh_reset_required fresh_server_start_failed frozen_bridge_budgets_mismatch
+frozen_prompt_mismatch frozen_spec_mismatch guard_ancestry_mismatch guard_identity_mismatch
+host_command_failed host_output_limit inherited_lock_description_mismatch
+inherited_lock_descriptions_missing invalid_backend_request invalid_character_identity
+invalid_config_path invalid_database invalid_frozen_hash invalid_frozen_scenario invalid_game_ports
+invalid_inherited_lock_description invalid_lock_file invalid_mysql_command invalid_provider_program
+invalid_queue_status invalid_services invalid_systemd_working_directory invalid_timeout java_executable_required
+legacy_bot_adapter_must_be_disabled linux_root_runner_required lock_paths_mismatch
+mysql_defaults_not_private native_logout_commit_missing_or_ambiguous native_persistence_class_missing
+native_root_service_traversal_required native_save_failure_or_identity_mismatch
+native_startup_or_save_failed nonroot_service_user_required normal_committed_logout_required
+operation_already_attempted operation_deadline orchestrator_identity_mismatch ordinary_login_required
+private_admin_socket_required queue_database_missing queued_or_active_trials_exist
+recording_upload_receipt_missing restore_requires_stopped_offline restored_baseline_mismatch
+run_artifacts_missing run_id_must_be_32_hex runtime_dropin_root_required runtime_operation_failed
+scenario_trial_budgets_mismatch served_client_build_paths_mismatch server_instance_ownership_lost
+server_jar_command_mismatch server_native_environment_mismatch server_not_ready_for_ordinary_login
+server_process_missing server_uid_mismatch service_working_directory_mismatch serving_sources_not_frozen
+symlink_config_path symlink_dropin_directory transactional_score_tables_required
+unexpected_client_asset_entry unknown_operation unowned_controller_cleanup_refused
+unowned_server_cleanup_refused unprivileged_services_required unsupported_program_duration
+unsupported_runtime_config waiting_browser_required web_entrypoint_mismatch web_interpreter_mismatch
+web_process_missing web_process_predates_frozen_sources web_runtime_paths_mismatch web_uid_mismatch
+world_helper_or_worker_active world_or_queue_lock_not_owned
+""".split())
 
 
 class TrialError(RuntimeError):
@@ -66,6 +107,20 @@ def decode(raw):
                           parse_constant=lambda _: (_ for _ in ()).throw(TrialError("nonfinite_json")))
     except (UnicodeError, ValueError, RecursionError) as error:
         raise TrialError("invalid_json") from error
+
+
+def adapter_failure_code(raw):
+    """Preserve only the exact bounded backend error protocol, never its text."""
+    if len(raw) > MAX_ERROR_JSON:
+        return "adapter_failed"
+    try:
+        value = decode(raw)
+    except (TrialError, TypeError):
+        return "adapter_failed"
+    if (isinstance(value, dict) and set(value) == {"error"}
+            and isinstance(value["error"], str) and value["error"] in RUNTIME_ERROR_CODES):
+        return value["error"]
+    return "adapter_failed"
 
 
 def encode(value):
@@ -300,7 +355,8 @@ class CommandAdapter:
                     raise TrialError("guard_cleanup_pending") from error
                 finally:
                     child.stdout.close()
-            require(child.returncode == 0, "adapter_failed")
+            if child.returncode != 0:
+                raise TrialError(adapter_failure_code(output))
             response = decode(output)
             require(isinstance(response, dict), "invalid_adapter_response")
             return response

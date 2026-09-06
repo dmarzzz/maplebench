@@ -3,6 +3,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -457,7 +459,7 @@ class RuntimeTests(unittest.TestCase):
         before = self.offline_unit | {"User": "synthetic", "Environment": "MAPLEBENCH_ENABLED=true",
                                       "InvocationID": "old"}
         after = before | {"ActiveState": "active", "MainPID": "123", "InvocationID": "new"}
-        self.host.unit.side_effect = [before, before, after]
+        self.host.unit.side_effect = [before, before, before | {"WorkingDirectory": str(self.root)}, after]
         self.backend.state["reset"] = {"verified": True}
         self.backend.context["request"]["budgets"] = {"total_seconds": 120}
         self.backend.config["java"] = {"path": "/usr/bin/java"}
@@ -472,9 +474,31 @@ class RuntimeTests(unittest.TestCase):
         self.assertGreater(Path(self.backend.state["dropin"]).name, "seed.conf")
         self.assertIn('Environment="MAPLEBENCH_ENABLED=false"', dropin)
         self.assertNotIn("MAPLEBENCH_ENABLED=true", dropin)
+        self.assertIn("WorkingDirectory=" + str(self.root) + "\nExecStart=\nExecStart=", dropin)
+        self.assertNotIn('WorkingDirectory="', dropin)
         self.assertEqual(self.backend.state["native_environment"]["MAPLEBENCH_ENABLED"], "false")
         self.assertTrue(set(runtime.ENV_NAMES) <= set(self.backend.state["native_environment"]))
         self.assertEqual(before["Environment"], "MAPLEBENCH_ENABLED=true")
+        if shutil.which("systemd-analyze"):
+            # Ask the actual parser to read the generated directives, without
+            # loading a unit into the service manager or starting any process.
+            unit = self.root / "maplebench-parser-check.service"
+            unit.write_text(dropin)
+            parsed = subprocess.run(["systemd-analyze", "--man=no", "verify", str(unit)],
+                                    capture_output=True, timeout=20)
+            self.assertEqual(parsed.returncode, 0, parsed.stderr.decode())
+            unit.write_text(dropin.replace("WorkingDirectory=" + str(self.root),
+                                           'WorkingDirectory="' + str(self.root) + '"'))
+            rejected = subprocess.run(["systemd-analyze", "--man=no", "verify", str(unit)],
+                                      capture_output=True, timeout=20)
+            self.assertNotEqual(rejected.returncode, 0)
+
+    def test_working_directory_is_a_literal_scalar_not_an_exec_argument(self):
+        directory = str(self.root / "directory with spaces")
+        self.assertEqual(runtime.systemd_working_directory(directory), directory)
+        for suffix in (' ', '\\bad', '"bad', '\tbad'):
+            with self.subTest(suffix=suffix), self.assertRaises(runtime.RuntimeErrorCode):
+                runtime.systemd_working_directory(str(self.root) + suffix)
 
     def test_running_trial_rejects_enabled_legacy_bot_adapter(self):
         self.backend.config["java"] = {"path": "/usr/bin/java"}

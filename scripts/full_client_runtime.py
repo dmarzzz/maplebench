@@ -64,6 +64,16 @@ def absolute(value):
     return path
 
 
+def systemd_working_directory(value):
+    # This directive consumes a scalar path, unlike ExecStart's quoted words.
+    # Quoting it makes the leading quote part of the path; systemd rejects the
+    # directive and stops parsing the remaining drop-in, including ExecStart.
+    absolute(value)
+    require(value == value.strip() and not any(ord(c) < 32 or c in '\\"' for c in value),
+            "invalid_systemd_working_directory")
+    return value
+
+
 def ref_bytes(ref, maximum=JSON_LIMIT):
     path = absolute(ref["path"])
     require(SHA.fullmatch(ref.get("sha256", "")) is not None, "invalid_frozen_hash")
@@ -556,7 +566,7 @@ class CosmicRuntime:
             return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '$$') + '"'
         launch = [self.config["java"]["path"], "-Xmx1536m", "-XX:ActiveProcessorCount=2",
                   "-Dwz-path=" + self.manifest["wz_path"], "-jar", self.manifest["server_jar"]["path"]]
-        text += "WorkingDirectory=" + quote(self.manifest["working_directory"]) + "\nExecStart=\nExecStart=" + " ".join(quote(x) for x in launch) + "\n"
+        text += "WorkingDirectory=" + systemd_working_directory(self.manifest["working_directory"]) + "\nExecStart=\nExecStart=" + " ".join(quote(x) for x in launch) + "\n"
         self.state.update(service_user=user.pw_name, native_directory=str(native), dropin=str(dropin),
                           dropin_sha256=hashlib.sha256(text.encode()).hexdigest(), native_environment=env,
                           previous_invocation_id=before.get("InvocationID"))
@@ -568,6 +578,8 @@ class CosmicRuntime:
         dropin_dir.mkdir(mode=0o755, exist_ok=True)
         save_bytes(dropin, text.encode())
         self.host.command([self.config["systemctl"], "daemon-reload"])
+        require(self.unit("cosmic").get("WorkingDirectory") == self.manifest["working_directory"],
+                "service_working_directory_mismatch")
         self.state["server_start_requested_at_ms"] = self.host.now()
         self.persist()
         self.host.command([self.config["systemctl"], "start", self.config["services"]["cosmic"]])

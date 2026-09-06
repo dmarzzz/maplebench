@@ -15,7 +15,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from full_client_trial import CommandAdapter, PHASES, TrialError, TrialRunner, main, publish_attempt, validate_spec
+from full_client_trial import (CommandAdapter, PHASES, TrialError, TrialRunner, adapter_failure_code,
+                               main, publish_attempt, validate_spec)
 
 
 def spec():
@@ -523,6 +524,42 @@ print(json.dumps({'valid':valid,'names':sorted(context['lock_fds']),
                 perform.assert_not_called()
         self.assertFalse((self.base / "attempts").exists())
 
+    def test_cli_and_private_journal_preserve_known_backend_failure_without_raw_output(self):
+        backend = backend_script(self.base, "runtime-error.py", """import json,sys
+request=json.load(sys.stdin)
+operation=request['operation']
+if operation=='status':
+    print(json.dumps({'ready':True,'queue_idle':True,'server_stopped':True,
+        'account_offline':True,'controller_idle':True,'ownership_conflict':False}))
+elif operation=='start_server':
+    sys.stderr.write('/private/runtime/private-credential-marker')
+    print(json.dumps({'error':'server_jar_command_mismatch'}))
+    sys.exit(1)
+else:
+    print(json.dumps({'attempt_id':request['context']['attempt_id']}))
+""")
+        config, request = self.base / "adapter.json", self.base / "request.json"
+        config.write_text(json.dumps({"argv": [sys.executable, str(backend)], "dependencies": []}))
+        request.write_text(json.dumps(spec()))
+        config.chmod(0o600)
+        request.chmod(0o600)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = main(["--adapter-config", str(config), "--state-root", str(self.base / "attempts"),
+                           "--world-lock", str(self.base / "world.lock"),
+                           "--queue-lock", str(self.base / "queue.lock"), "run",
+                           "--request", str(request), "--attempt-id", "one"])
+        self.assertEqual(result, 1)
+        self.assertEqual(json.loads(output.getvalue())["code"], "server_jar_command_mismatch")
+        journal = self.journal()
+        self.assertEqual(journal["failure_code"], "server_jar_command_mismatch")
+        self.assertEqual(journal["phase"], "start_server")
+        self.assertEqual(journal["status"], "failed")
+        self.assertEqual(journal["events"][-1]["code"], "server_jar_command_mismatch")
+        for text in (output.getvalue(), json.dumps(journal)):
+            self.assertNotIn("private-credential-marker", text)
+            self.assertNotIn("/private/runtime/", text)
+
     def test_strict_request_prevents_unbounded_or_repeated_calls(self):
         for field, value in (("max_api_requests", 2), ("max_actions", True),
                              ("operation_seconds", 301), ("total_seconds", 1801),
@@ -574,6 +611,31 @@ class CommandAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(TrialError, "adapter_failed") as caught:
             bad.perform("status", {}, timeout_seconds=5)
         self.assertNotIn("private-marker", str(caught.exception))
+
+    def test_known_error_protocol_is_exact_bounded_and_not_a_lexical_allowlist(self):
+        known = b'{"error":"server_jar_command_mismatch"}'
+        self.assertEqual(adapter_failure_code(known), "server_jar_command_mismatch")
+        self.assertEqual(adapter_failure_code(known + b" " * (512 - len(known))),
+                         "server_jar_command_mismatch")
+        bad_outputs = (b"", b"not JSON /private/private-marker", b"\xff",
+                       b'{"error":"private_marker_looks_like_a_code"}',
+                       b'{"error":"/private/password-marker"}',
+                       b'{"error":"server_jar_command_mismatch","detail":"private-marker"}',
+                       b'{"error":"private-marker","error":"server_jar_command_mismatch"}',
+                       b'{"error":"server_jar_command_mismatch"}\n{"error":"private-marker"}',
+                       b'{"error":["server_jar_command_mismatch"]}', b'{"error":NaN}',
+                       b'"server_jar_command_mismatch"',
+                       known + b" " * (513 - len(known)),
+                       b'{"error":"' + b"private-marker" * 100 + b'"}')
+        for raw in bad_outputs:
+            with self.subTest(length=len(raw)):
+                self.assertEqual(adapter_failure_code(raw), "adapter_failed")
+
+    def test_failed_command_with_oversized_error_envelope_keeps_generic_failure(self):
+        raw = '{"error":"server_jar_command_mismatch"}' + " " * 512
+        adapter = self.adapter("import sys; print(" + repr(raw) + ");sys.exit(1)")
+        with self.assertRaisesRegex(TrialError, "^adapter_failed$"):
+            adapter.perform("status", {}, timeout_seconds=5)
 
     def test_timeout_terminates_process_group(self):
         adapter = self.adapter("import time; time.sleep(60)")
