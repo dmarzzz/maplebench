@@ -96,6 +96,12 @@ these changes. Its separate acceptance scenario has been frozen, but no API
 attempt has started: the desktop is locked and visible browser verification is
 pending. The historical Terra attempt remains blocked.
 
+The new runner's read-only preflight passed after applying the required two-CPU
+affinity to its command wrapper. An earlier unrestricted-affinity invocation
+failed Docker image inspection before touching game state. This was an operator
+resource-wrapper correction; the frozen source, configuration and planned API
+request remain unchanged.
+
 This release also makes the executed SDK dispatcher a mandatory frozen input.
 The earlier four-trial inventory omitted that file; its historical verdicts
 remain preserved, with this additional reproducibility limitation recorded.

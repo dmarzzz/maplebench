@@ -82,6 +82,15 @@ script, `--config`, and config path. Include all imported source dependencies in
 its frozen dependency list: collector, freeze, score, trial, publisher, bridge,
 and maple_agent. Protect those sources and configuration from other users.
 
+Apply the shared-host two-CPU bound to the runner and its subprocesses as well
+as the game server. An `RLIMIT_CPU` value limits accumulated CPU seconds; it
+does not restrict the number of available CPUs. During release acceptance, the
+Docker image check exited 2 under a 768 MiB address-space cap with unrestricted
+CPU affinity, then succeeded with the same cap and two-CPU affinity. Full runner
+preflight subsequently passed with that affinity. Use an explicit allowed CPU
+set or a validated equivalent; do not resolve this prerequisite failure by
+removing resource limits or changing frozen game inputs.
+
 ## Ownership, browser, and phases
 
 The backend checks actual `/proc` ancestry `runner -> guard -> backend`, exact
