@@ -466,8 +466,12 @@ class CosmicRuntime:
         world, worker, cosmic = self.unit("world"), self.unit("worker"), self.unit("cosmic")
         admin = self.admin("status")
         session, bridge = admin.get("session", {}), admin.get("bridge", {})
-        idle = session.get("artifactsSettled") is True and (not bridge.get("run") or
-            bridge["run"].get("status") in ("completed", "failed", "timed_out", "cancelled"))
+        run = bridge.get("run") or {}
+        initial_idle = run.get("id") is None and run.get("status") == "idle"
+        idle = (session.get("artifactsSettled") is True
+                and (not run or initial_idle or run.get("status") in ("completed", "failed", "timed_out", "cancelled"))
+                and run.get("workerActive") is not True and run.get("leaseReleasePending") is not True
+                and bridge.get("browserReleasePending") is not True)
         waiting = session.get("state") == "waiting" and session.get("fresh") is True and session.get("pinned") is True
         stopped = self.stopped(cosmic)
         conflict = not stopped

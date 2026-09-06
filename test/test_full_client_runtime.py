@@ -227,6 +227,24 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(result["account_offline"])
 
+    def test_status_accepts_actual_initial_bridge_idle_only_without_run_identity(self):
+        run = {"status": "idle", "mode": "manual", "model": None}
+        self.host.admin.return_value["bridge"]["run"] = run
+        self.assertTrue(self.backend.status()["controller_idle"])
+        run["id"] = None
+        self.assertTrue(self.backend.status()["controller_idle"])
+        run["id"] = self.run_id
+        self.assertFalse(self.backend.status()["controller_idle"])
+        run.update(id=None, status="running")
+        self.assertFalse(self.backend.status()["controller_idle"])
+        run.update(status="idle", workerActive=True)
+        self.assertFalse(self.backend.status()["controller_idle"])
+        run.update(workerActive=False, leaseReleasePending=True)
+        self.assertFalse(self.backend.status()["controller_idle"])
+        run.update(leaseReleasePending=False)
+        self.host.admin.return_value["bridge"]["browserReleasePending"] = True
+        self.assertFalse(self.backend.status()["controller_idle"])
+
     def test_stopped_worker_does_not_hide_pending_queue_rows(self):
         self.host.queue_count.return_value = 1
         result = self.backend.status()
