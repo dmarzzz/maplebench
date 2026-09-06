@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MapleBench · Full-client results</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./dashboard.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 15 7 20 5 18 11 23 13 15 18 13 17 13 23 11 23 11 17 9 18 1 13 6 11 4 5 9 7Z" fill="currentColor"/></svg><div><strong>Maple<b>Bench</b></strong><span>Full-client results</span></div></div>
+      <p id="connection" role="status">Waiting for results</p>
+    </header>
+    <section class="live" aria-labelledby="live-title">
+      <div class="live-heading"><span id="live-badge" class="pill">No active attempt</span><span id="live-id"></span></div>
+      <h1 id="live-title">The next run starts here.</h1>
+      <p id="live-description">This page shows actual full-client attempts as their evidence arrives.</p>
+      <ol id="phases" aria-label="Trial phases"></ol>
+      <dl class="live-stats">
+        <div><dt>API model returned</dt><dd id="live-model">—</dd></div>
+        <div><dt>Actions</dt><dd id="live-actions">—</dd></div>
+        <div><dt>Live XP change <small>diagnostic</small></dt><dd id="live-xp">—</dd></div>
+        <div><dt>Last observed state</dt><dd id="live-survival">—</dd></div>
+      </dl>
+    </section>
+    <section aria-labelledby="comparison-title">
+      <div class="section-heading"><div><h2 id="comparison-title">Same-start comparisons</h2><p>Matching baseline, scenario, budgets, and runtime. Unranked.</p></div><label>Starting state<select id="groups" aria-label="Comparison starting state"></select></label></div>
+      <p id="comparison-empty" class="empty">A comparison needs verified completed attempts from at least two models.</p>
+      <div class="table-wrap" id="comparison-wrap" hidden><table><caption class="visually-hidden">Verified persisted outcomes for the selected starting state</caption><thead><tr><th>Exact model</th><th>Persisted XP</th><th>At logout</th><th>API time</th><th>Play time</th><th>Recording</th></tr></thead><tbody id="comparison-rows"></tbody></table></div>
+      <p class="note">Persisted XP includes penalties and is measured after normal logout. Verification comes from the completed runner’s checked evidence. Recording review and publication approval are separate.</p>
+    </section>
+    <section aria-labelledby="history-title">
+      <div class="section-heading"><div><h2 id="history-title">Every visible attempt</h2><p>Failures, recoveries, and unscored integration runs stay in the history.</p></div><span id="count">0 attempts</span></div>
+      <div class="table-wrap"><table><caption class="visually-hidden">Full-client attempt history</caption><thead><tr><th>Attempt / exact model</th><th>Status</th><th>Persisted XP</th><th>Diagnostic XP</th><th>Actions</th><th>Recording</th></tr></thead><tbody id="history"></tbody></table></div>
+      <p id="history-empty" class="empty">No attempts have been exported yet.</p>
+    </section>
+    <footer><span id="scope">Read-only results. No runs are started from this page.</span><span>Full-client gameplay / Cosmic persistence</span></footer>
+  </main>
+</body>
+</html>
