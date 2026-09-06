@@ -638,7 +638,7 @@ class RuntimeTests(unittest.TestCase):
     def web_fixture(self):
         script = self.root / "repo/scripts/serve-full-client.py"
         client = self.root / "client"
-        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "maple_agent.py")),
+        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "maple_agent.py", "agent-sandbox.mjs")),
                     *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "waiting.html")),
                     *(client / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))]
         for path in required:
@@ -686,6 +686,15 @@ class RuntimeTests(unittest.TestCase):
             self.backend.manifest["extra_files"].pop(0)
             with self.assertRaisesRegex(runtime.RuntimeErrorCode, "serving_sources_not_frozen"):
                 self.backend.web_identity({"MainPID": "123", "User": "synthetic"})
+
+    def test_container_dispatcher_cannot_be_omitted_from_frozen_runtime(self):
+        self.web_fixture()
+        self.backend.manifest["extra_files"] = [
+            ref for ref in self.backend.manifest["extra_files"]
+            if Path(ref["path"]).name != "agent-sandbox.mjs"]
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "serving_sources_not_frozen"):
+            self.backend.web_identity({"MainPID": "123", "User": "synthetic"})
+        self.host.proc.assert_not_called()
 
     def test_web_asset_link_inventory_cannot_switch_or_omit_frozen_files(self):
         self.web_fixture()

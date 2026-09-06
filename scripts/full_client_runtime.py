@@ -349,7 +349,9 @@ class CosmicRuntime:
                 "served_client_build_paths_mismatch")
         script = absolute(self.config["web_script"])
         controls = script.parent.parent / "ui/full-client"
-        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "maple_agent.py")),
+        # The executor reads the JavaScript dispatcher at each container launch;
+        # pin it alongside imported modules, not just the Docker image.
+        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "maple_agent.py", "agent-sandbox.mjs")),
                     controls / "controller.js", controls / "waiting.html",
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}

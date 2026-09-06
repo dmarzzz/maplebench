@@ -66,7 +66,8 @@ directory are checked after start. The prior service launch returns when the
 owned runtime drop-in is removed; no persistent service change is required.
 Docker inspection uses the existing local Unix daemon and never pulls images.
 The manifest's `extra_files` must include the serving script, its sibling
-`full_client_bridge.py`, `full_client_session.py`, `full_client_capture.py`, `maple_agent.py`, repository
+`full_client_bridge.py`, `full_client_session.py`, `full_client_capture.py`, `maple_agent.py`,
+`agent-sandbox.mjs` (the exact JavaScript dispatcher supplied to Docker), repository
 `ui/full-client/controller.js` and `waiting.html`, and client root
 `web/index.html`, `assets_server.py`, and `ws_proxy.py`. The actual nonroot web
 process's interpreter, entrypoint, environment roots, output/admin/lock paths
