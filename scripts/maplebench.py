@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -525,7 +526,33 @@ def worker(queue,batch,work,watch=False):
 
 def restore_world():
     override='/run/systemd/system/maplebench-cosmic.service.d/zz-maplebench-batch.conf'
-    sudo('rm','-f',override); sudo('systemctl','daemon-reload'); sudo('systemctl','restart','maplebench-cosmic')
+    # An idle worker also reaches this function immediately after startup. Only
+    # an actual batch override requires a restart; the normal world may already
+    # have been restored and verified by another trusted lifecycle operation.
+    probe = subprocess.run(['/usr/bin/systemctl', 'show', 'maplebench-cosmic', '--no-pager',
+                            '--property=LoadState,ActiveState,SubState,MainPID,DropInPaths,NeedDaemonReload'],
+                           check=True, timeout=10, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, text=True)
+    if len(probe.stdout) > 16384:
+        raise RuntimeError('Normal world status unavailable')
+    state = dict(line.split('=', 1) for line in probe.stdout.splitlines() if '=' in line)
+    if (set(state) != {'LoadState', 'ActiveState', 'SubState', 'MainPID', 'DropInPaths', 'NeedDaemonReload'}
+            or state['LoadState'] != 'loaded' or not re.fullmatch(r'[0-9]+', state['MainPID'])):
+        raise RuntimeError('Normal world status unavailable')
+    # A removed file can still be loaded by systemd until daemon-reload.
+    if os.path.lexists(override) or override in shlex.split(state['DropInPaths']):
+        sudo('rm', '-f', override)
+        sudo('systemctl', 'daemon-reload')
+        sudo('systemctl', 'restart', 'maplebench-cosmic')
+        return
+    if state['NeedDaemonReload'] != 'no':
+        raise RuntimeError('Unrelated normal world configuration change requires review')
+    if state['ActiveState'] == 'active' and state['SubState'] == 'running' and int(state['MainPID']) > 1:
+        return
+    if state['ActiveState'] in {'inactive', 'failed'} and state['MainPID'] == '0':
+        sudo('systemctl', 'start', 'maplebench-cosmic')
+        return
+    raise RuntimeError('Normal world service transition requires review')
 
 
 def main():
