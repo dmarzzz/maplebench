@@ -450,6 +450,8 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(runtime.pwd, "getpwnam", return_value=user), patch.object(runtime.os, "chown"):
             self.backend.start_server()
         dropin = Path(self.backend.state["dropin"]).read_text()
+        self.assertEqual(Path(self.backend.state["dropin"]).name, "zz-maplebench-trial.conf")
+        self.assertGreater(Path(self.backend.state["dropin"]).name, "seed.conf")
         self.assertIn('Environment="MAPLEBENCH_ENABLED=false"', dropin)
         self.assertNotIn("MAPLEBENCH_ENABLED=true", dropin)
         self.assertEqual(self.backend.state["native_environment"]["MAPLEBENCH_ENABLED"], "false")

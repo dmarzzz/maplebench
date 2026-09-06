@@ -66,8 +66,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def trusted_request(self):
         hosts = self.headers.get_all('Host', [])
         origin = self.headers.get('Origin')
+        # Browser-driven reloads may label this navigation cross-site. Only the
+        # inert waiting document can be entered that way; control/credential
+        # endpoints and embedded resources retain their same-origin requirement.
+        waiting_navigation = (self.command == 'GET' and self.path.partition('?')[0] == '/control/wait'
+            and origin is None and self.headers.get('Sec-Fetch-Mode') == 'navigate'
+            and self.headers.get('Sec-Fetch-Dest') == 'document')
         if (len(hosts) != 1 or not loopback_authority(hosts[0])
-                or self.headers.get('Sec-Fetch-Site') in {'cross-site','same-site'}
+                or self.headers.get('Sec-Fetch-Site') in {'cross-site','same-site'} and not waiting_navigation
                 or (origin is not None and origin != 'http://' + hosts[0])):
             self.close_connection = True
             self.send_error(403)

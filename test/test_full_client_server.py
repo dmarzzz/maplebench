@@ -75,6 +75,25 @@ class FullClientServerTests(unittest.TestCase):
         self.assertNotIn('observation',json.loads(body))
         self.assertTrue(json.loads(body)['fresh'])
 
+    def test_cross_site_top_level_waiting_navigation_is_the_only_exception(self):
+        self.module.SESSION=self.module.SessionCoordinator(self.module.BRIDGE)
+        navigation={'Sec-Fetch-Site':'cross-site','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'}
+        for path in ('/control/wait','/control/wait?transition='+'a'*32):
+            status,body=self.request('GET',path,headers=navigation)
+            self.assertEqual(status,200)
+            self.assertIn(b'<html',body)
+        for path in ('/demo-session','/control/status','/web/index.html','/control/start'):
+            with self.subTest(path=path):
+                self.assertEqual(self.request('GET',path,headers=navigation)[0],403)
+        for changes in ({'Sec-Fetch-Dest':'iframe'},{'Sec-Fetch-Dest':'script'},
+                {'Sec-Fetch-Mode':'cors'},{'Origin':'http://'+self.host},
+                {'Origin':'https://attacker.example'},{'Host':'attacker.example'}):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.request('GET','/control/wait',headers=navigation|changes)[0],403)
+        for path in ('/control/wait','/control/frame','/control/start'):
+            with self.subTest(method='POST',path=path):
+                self.assertEqual(self.request('POST',path,b'{}',navigation|{'Content-Type':'application/json'})[0],403)
+
     def test_browser_start_requires_the_existing_renderer_owner(self):
         self.module.BRIDGE.frame(self.frame())
         with mock.patch.object(self.module.BRIDGE,'_run') as worker:

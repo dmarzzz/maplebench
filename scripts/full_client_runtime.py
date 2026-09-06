@@ -426,7 +426,7 @@ class CosmicRuntime:
 
     def owned_dropin(self):
         require(self.state.get("dropin"), "dropin_owner_missing")
-        expected = Path(self.config["dropin_root"]) / (self.config["services"]["cosmic"] + ".d") / "90-maplebench-trial.conf"
+        expected = Path(self.config["dropin_root"]) / (self.config["services"]["cosmic"] + ".d") / "zz-maplebench-trial.conf"
         require(Path(self.state["dropin"]) == expected, "dropin_owner_path_mismatch")
         raw = self.read_stable(expected, 16384)
         require(hashlib.sha256(raw).hexdigest() == self.state["dropin_sha256"], "dropin_ownership_lost")
@@ -537,7 +537,7 @@ class CosmicRuntime:
         native = native_root / self.run_id
         dropin_dir = Path(self.config["dropin_root"]) / (self.config["services"]["cosmic"] + ".d")
         require(not dropin_dir.is_symlink(), "symlink_dropin_directory")
-        dropin = dropin_dir / "90-maplebench-trial.conf"
+        dropin = dropin_dir / "zz-maplebench-trial.conf"
         require(not dropin.exists() and not native.exists(), "existing_trial_owner")
         env = dict(zip(ENV_NAMES, (self.run_id, self.state["server_instance_id"],
                        str(self.config["mysql"]["character_id"]), str(self.config["mysql"]["account_id"]),

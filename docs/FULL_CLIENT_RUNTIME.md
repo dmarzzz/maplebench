@@ -92,7 +92,8 @@ runner dies. No phase opens a replacement lock and calls that ownership.
    snapshot to the frozen full character/keymap. A partial failure stays failed.
 3. `start_server` persists its unique owner, native directory, expected drop-in
    bytes and previous invocation before changing the service. It creates a
-   Cosmic-owned mode-0700 child for a new journal and one owned runtime drop-in,
+   Cosmic-owned mode-0700 child for a new journal and the owned runtime drop-in
+   `zz-maplebench-trial.conf`, ordered after existing `seed.conf` overrides,
    preserving the nonroot service user and overriding only the trial launch. The drop-in sets
    2300 MiB memory, no swap, two CPUs, a bounded lease, and the five native trial
    variables documented below. A start is never automatically replayed.
