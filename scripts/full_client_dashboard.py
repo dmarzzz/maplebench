@@ -5,6 +5,10 @@ build_snapshot(attempt_root, relay_root=None, live_status=None,
                recording_map=None, limit=50) returns public-safe JSON only.
 The completed runner is trusted to have performed full bundle verification;
 this exporter rechecks its small hashed receipts and recomputes persisted XP.
+Input attempts and accepted acknowledgments are separate. Legacy results count
+attempts in program.actions; current results also preserve actionAttempts.
+Only complete checked execution receipts support a no_op boolean. Persisted XP
+and publication status remain independent of incomplete input receipts.
 It never repeats baseline/video hashing, invokes a controller, grants ranked
 eligibility, or copies recordings. Expose only the exported JSON and new static
 ui/full-client-dashboard assets, never either private input directory.
@@ -31,7 +35,7 @@ from urllib.parse import urlsplit
 
 from full_client_score import parse_json, score_trial, same_json
 from full_client_trial import PHASES, RUNTIME_ERROR_CODES
-from maple_agent import MODELS
+from maple_agent import MODELS, validate_rpc
 
 RUN=re.compile(r'[a-f0-9]{32}\Z')
 SHA=re.compile(r'[a-f0-9]{64}\Z')
@@ -50,7 +54,7 @@ class ProjectionError(ValueError): pass
 
 
 def number(value,minimum=0,maximum=2**53-1):
-    return type(value) in (int,float) and math.isfinite(value) and minimum<=value<=maximum
+    return type(value) in (int,float) and minimum<=value<=maximum and math.isfinite(value)
 
 
 def integer(value,maximum=2**53-1):
@@ -183,6 +187,66 @@ def verified_score(reader,folder,journal):
     return recomputed,result,group_id,refs
 
 
+def action_evidence(result,action_limit):
+    """Summarize an already hashed, runner-bound result without promoting it.
+
+    Count only accepted bounded pressKeys receipts. A legacy attempted input
+    can have no returned receipt; that preserves the accepted subset while
+    preventing a complete/no-op claim. Live or relay-only counters never enter
+    this function, and no raw SDK arguments/errors are exported.
+    """
+    value={'actions':None,'acknowledged_actions':None,'action_attempts':None,
+           'action_verification':'receipts_incomplete','no_op':None}
+    program=mapping(result.get('program')); controller=mapping(result.get('controller'))
+    if integer(action_limit,10000) is None or action_limit<1: return value
+    reported=integer(program.get('actions'),action_limit)
+    # Historical executor incremented actions before the endpoint response.
+    # The distinct actionAttempts field marks the newer acknowledged counter.
+    attempts=integer(program.get('actionAttempts'),action_limit) if 'actionAttempts' in program else reported
+    value['action_attempts']=attempts
+    steps=program.get('steps'); sdk_limit=integer(controller.get('sdkRequestLimit'),10000)
+    if not isinstance(steps,list) or sdk_limit is None or not 1<=sdk_limit or len(steps)>sdk_limit:
+        return value
+
+    def fresh(observation):
+        observation=mapping(observation)
+        return (observation.get('ready') is True and observation.get('source')=='full-client'
+            and all(number(observation.get(key),0,1499.999) for key in ('ageMs','renderAgeMs')))
+
+    acknowledged=0; presses=0; complete=True
+    for index,raw in enumerate(steps):
+        step=mapping(raw); method=step.get('method'); receipt=mapping(step.get('result'))
+        if method=='pressKeys': presses+=1
+        if step.get('kind')!='sdk' or method not in ('observe','wait','pressKeys'):
+            complete=False; continue
+        try:
+            validate_rpc({'type':'rpc','id':index+1,'method':method,'args':step.get('args')},
+                         {'adapter':'full-client'})
+        except (ValueError,TypeError,KeyError):
+            complete=False; continue
+        valid=receipt.get('error') in (None,'')
+        if method=='pressKeys':
+            valid=valid and receipt.get('accepted') is True and fresh(receipt.get('observation'))
+            if valid: acknowledged+=1
+        elif method=='observe': valid=valid and fresh(receipt)
+        else:
+            waited=receipt.get('waitedMs'); requested=step['args'][0]
+            valid=valid and number(waited,0,requested) and (waited==requested
+                or program.get('reason')=='time_limit' and index==len(steps)-1)
+        complete=complete and valid
+    value.update(actions=acknowledged,acknowledged_actions=acknowledged)
+    if attempts is not None and attempts<presses:
+        value['action_attempts']=None  # A counter cannot erase receipts already present.
+    complete=(complete and program.get('error') is None
+        and program.get('reason') in ('program_complete','completed','time_limit','action_limit','death')
+        and fresh(result.get('initial')) and fresh(result.get('final'))
+        and integer(controller.get('actions'),action_limit)==reported
+        and reported is not None and attempts is not None and reported==attempts==presses==acknowledged)
+    if complete:
+        value.update(action_verification='receipts_rechecked',no_op=attempts==0)
+    return value
+
+
 def publication_evidence(reader,folder,run_id,refs,result,score,recording,now_ms):
     """Project a private validator receipt without granting ranked eligibility.
 
@@ -251,6 +315,8 @@ def project_attempt(reader,run_id,folder,relay_folder,live,recording_map,now_ms,
          'requested_model':None,'returned_model':None,'attribution':'unknown','failure_code':None,'failure_phase':None,
          'api_outcome':None,'api_response_saved':False,'api_usage':{},'charged_usage':{},
          'created_at_ms':None,'updated_at_ms':None,'actions':None,'action_limit':None,
+         'reported_actions':None,'acknowledged_actions':None,'action_attempts':None,
+         'action_verification':'unverified','no_op':None,
          'diagnostic_xp':None,'alive_at_last_observation':None,'alive_at_logout':None,
          'persisted_xp':None,'score_verification':'pending','comparison_group':None,
          'ranked':False,'publication_eligible':False,'publication_evidence':None,
@@ -324,8 +390,10 @@ def project_attempt(reader,run_id,folder,relay_folder,live,recording_map,now_ms,
         row['returned_model']=returned
         row['attribution']='exact' if returned and returned==row['requested_model']==model(controller.get('model')) else 'mismatch' if returned else 'pending'
         if row['attribution']!='exact': row['comparison_group']=None
-        row['actions']=integer(controller.get('actions'),10000)
+        row['reported_actions']=integer(controller.get('actions'),10000)
         row['action_limit']=row['action_limit'] or integer(controller.get('actionLimit'),10000)
+        if row['score_verification']=='runner_verified_receipts_rechecked':
+            row.update(action_evidence(result,row['action_limit']))
         xp=result.get('observedXpDelta')
         if number(xp,-2**53+1): row['diagnostic_xp']=xp
         alive=mapping(mapping(result.get('final')).get('character')).get('alive')
@@ -364,7 +432,9 @@ def project_attempt(reader,run_id,folder,relay_folder,live,recording_map,now_ms,
             row['recording']={'url':url,'sha256':approved['sha256'],'reviewed':recording.get('reviewed') is True}
     except (ValueError,OSError,TypeError,KeyError,RecursionError):
         row.update(status='unavailable',failure_code='evidence_unavailable',persisted_xp=None,
-                   score_verification='unverified',comparison_group=None)
+                   score_verification='unverified',comparison_group=None,
+                   actions=None,acknowledged_actions=None,action_attempts=None,
+                   action_verification='unverified',no_op=None)
     if row['created_at_ms'] is not None:
         row['timing']['attempt_elapsed_ms']=max(0,(now_ms if row['status'] in ('running','recovering') else row['updated_at_ms'])-row['created_at_ms'])
     return row

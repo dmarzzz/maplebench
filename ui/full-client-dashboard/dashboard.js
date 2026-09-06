@@ -3,7 +3,7 @@
   const $=id=>document.getElementById(id), el=(tag,text)=>{const node=document.createElement(tag);if(text!=null)node.textContent=String(text);return node;};
   const phases=[['restore_baseline','Restore'],['start_server','Start server'],['login','Login'],['run_controller','Play'],['disconnect','Logout'],['collect_final','Verify XP'],['cleanup','Finish']];
   const labels={running:'In progress',requesting:'Awaiting API',completed:'Completed',failed:'Failed',interrupted:'Interrupted',recovering:'Recovering',recovered:'Recovered; invalid run',unavailable:'Evidence unavailable',idle:'Idle'};
-  let snapshot=null,selected=null,closed=false,timer;
+  let snapshot=null,closed=false,timer;
   const format=value=>Number.isFinite(value)?value.toLocaleString('en-US'):'—';
   const xp=value=>Number.isFinite(value)?`${value>0?'+':''}${format(value)}`:'—';
   const seconds=value=>Number.isFinite(value)?`${(value/1000).toFixed(1)}s`:'—';
@@ -71,37 +71,62 @@
   }
   function cell(row,value,className){const node=el('td',value);if(className)node.className=className;row.append(node);return node;}
   function scoreCell(tr,row){const node=cell(tr,xp(row.persisted_xp),'numeric');if(row.persisted_xp<0)node.classList.add('negative');else if(row.persisted_xp>0)node.classList.add('positive');if(row.persisted_xp!=null)node.append(el('small','Runner verified'));else node.append(el('small',row.kind==='integration'?'Unscored integration':['failed','interrupted','recovered'].includes(row.status)?'No verified score':'Awaiting verification'));}
+  function inputDetails(node,row){
+    if(!Number.isFinite(row.acknowledged_actions)&&Number.isFinite(row.reported_actions)){
+      node.replaceChildren(el('span',`${format(row.reported_actions)} reported`),el('small','Action receipts not verified'));return;
+    }
+    node.replaceChildren(el('span',`${format(row.acknowledged_actions)} acknowledged`));
+    if(Number.isFinite(row.action_attempts))node.append(el('small',`${format(row.action_attempts)} attempted`));
+    if(row.no_op===true)node.append(el('small','No input actions executed'));
+    else if(row.action_verification==='receipts_incomplete')node.append(el('small','Action evidence incomplete'));
+    else if(row.action_verification!=='receipts_rechecked')node.append(el('small','Action receipts not verified'));
+  }
   function renderLive(){
     const rows=snapshot.attempts;
     const row=rows.find(item=>['running','recovering','requesting'].includes(item.status))||rows[0];
     if(!row)return;
-    $('live-badge').replaceWith(Object.assign(badge(row.status),{id:'live-badge'}));
+    const liveBadge=badge(row.status);
+    if(row.status==='completed')liveBadge.textContent='Completed · saved result';
+    $('live-badge').replaceWith(Object.assign(liveBadge,{id:'live-badge'}));
     $('live-id').textContent=row.id;
-    $('live-title').textContent=row.requested_model?`${row.requested_model} attempt`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
+    $('live-title').textContent=row.requested_model?`${row.status==='completed'?'Latest result: ':''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
     const phase=phases.find(([key])=>key===row.phase)?.[1]||'Preparing';
     const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
     const expectsRenderer=['running','requesting'].includes(row.status)&&['login','run_controller'].includes(row.phase);
     $('live-description').textContent=row.failure_code?`${failedPhase}: ${row.failure_code.replaceAll('_',' ')}.${row.api_response_saved?' The API response was saved; this attempt has no verified persisted score.':''}`
-      :row.status==='completed'?'The attempt finished. Its persisted outcome and recording appear below.'
+      :row.status==='completed'?'The latest saved run completed. Every starting-state group appears below.'
       :`${phase}${expectsRenderer&&row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
     const current=phases.findIndex(([key])=>key===row.phase);$('phases').replaceChildren();
     for(const [index,[key,label]]of phases.entries()){const node=el('li',label),state=row.phase_states?.[key];if(state==='failed'){node.textContent=`${label}: failed`;node.className='phase-failed';}else if(row.status==='completed'||state==='returned')node.className='done';else if(index===current)node.className='current';$('phases').append(node);}
     $('live-model').textContent=row.returned_model||'Awaiting exact attribution';
-    $('live-actions').textContent=`${format(row.actions)}${row.action_limit!=null?' / '+format(row.action_limit):''}`;
-    $('live-xp').textContent=xp(row.diagnostic_xp);$('live-survival').textContent=alive(row.alive_at_last_observation);
+    inputDetails($('live-actions'),row);
+    const saved=Number.isFinite(row.persisted_xp);
+    $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
+    $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
   }
   function renderComparisons(){
-    const groups=snapshot.comparisons;
-    if(!groups.some(group=>group.id===selected))selected=groups.find(group=>group.ready)?.id||groups[0]?.id;
-    $('groups').replaceChildren();
-    if(!groups.length)$('groups').append(el('option','No verified starting state'));
-    groups.forEach((group,index)=>{const option=el('option',`Group ${index+1}: ${group.models.length} models, ${group.attempt_ids.length} attempts`);option.value=group.id;option.selected=group.id===selected;$('groups').append(option);});
-    $('groups').disabled=groups.length<2;
-    const group=groups.find(item=>item.id===selected);
-    $('comparison-empty').hidden=group?.ready===true;$('comparison-wrap').hidden=group?.ready!==true;$('comparison-rows').replaceChildren();
-    for(const row of snapshot.attempts.filter(item=>group?.attempt_ids.includes(item.id))){
-      const tr=el('tr');cell(tr,row.requested_model);scoreCell(tr,row);cell(tr,alive(row.alive_at_logout));
-      cell(tr,seconds(row.timing.api_ms));cell(tr,seconds(row.timing.controller_ms));publicationCell(tr,row);recording(cell(tr),row);$('comparison-rows').append(tr);
+    const groups=snapshot.comparisons.map(group=>({group,rows:snapshot.attempts.filter(item=>group.attempt_ids.includes(item.id))}));
+    const latest=rows=>Math.max(0,...rows.map(row=>row.created_at_ms||0));
+    groups.sort((a,b)=>latest(b.rows)-latest(a.rows));
+    $('comparison-empty').hidden=groups.length>0;$('comparison-groups').replaceChildren();
+    for(const [index,{group,rows}] of groups.entries()){
+      const block=el('article'),heading=el('div'),title=el('h3',`${index===0?'Latest group':'Earlier group'} · ${group.models.length} ${group.models.length===1?'model':'models'}`);
+      block.className='result-group';heading.className='group-heading';heading.append(title,el('span',`${rows.length} ${rows.length===1?'attempt':'attempts'} · ${group.id.slice(0,10)}`));block.append(heading);
+      block.append(el('p',group.ready?'Matching baseline, scenario, budgets and runtime. One or more runs per model; no ranking established.':'Separate starting state. Its result is visible here; another model is needed for a within-group comparison.'));
+      const noOps=rows.filter(row=>row.no_op===true),incomplete=rows.filter(row=>row.action_verification==='receipts_incomplete');
+      if(noOps.length){const note=el('p',`${noOps.map(row=>row.requested_model).join(' and ')} executed no input actions. Their zero XP remains in the results.`);note.className='group-notice';block.append(note);}
+      if(incomplete.length){const note=el('p',`${incomplete.map(row=>row.requested_model).join(' and ')} has incomplete action evidence. Persisted XP and publication status are shown separately.`);note.className='group-notice';block.append(note);}
+      const wrap=el('div'),table=el('table'),caption=el('caption',`${title.textContent}: persisted outcomes`),head=el('thead'),headRow=el('tr'),body=el('tbody');
+      wrap.className='table-wrap';caption.className='visually-hidden';body.id=`comparison-rows-${group.id}`;
+      for(const label of ['Exact model','Persisted XP','Input actions','At logout','API / play time','Publication evidence','Recording'])headRow.append(el('th',label));
+      head.append(headRow);table.append(caption,head,body);wrap.append(table);block.append(wrap);
+      for(const row of rows){
+        const tr=el('tr'),identity=cell(tr,row.requested_model);identity.append(el('small',row.id.slice(0,12)));
+        scoreCell(tr,row);inputDetails(cell(tr,null,'input-summary'),row);cell(tr,alive(row.alive_at_logout));
+        const timing=cell(tr,`${seconds(row.timing.api_ms)} API`);timing.append(el('small',`${seconds(row.timing.controller_ms)} play`));
+        publicationCell(tr,row);recording(cell(tr),row);body.append(tr);
+      }
+      $('comparison-groups').append(block);
     }
   }
   function renderHistory(){
@@ -110,14 +135,21 @@
     for(const row of snapshot.attempts){
       const tr=el('tr'),identity=cell(tr);identity.append(el('strong',row.requested_model||'No evaluated model'),el('small',row.id));
       if(row.attribution==='mismatch')identity.append(el('small',`Returned ${row.returned_model}; attribution mismatch`));
-      const state=cell(tr);state.append(badge(row.status));if(row.failure_code)state.append(el('small',row.failure_code.replaceAll('_',' ')));
+      const state=cell(tr);state.append(badge(row.status));if(row.no_op===true)state.append(el('small','No input actions'));if(row.failure_code)state.append(el('small',row.failure_code.replaceAll('_',' ')));
       if(row.api_outcome==='uncertain')state.append(el('small',row.api_response_saved?'API receipt saved; runner accounting uncertain':'API outcome uncertain'));
       if(row.kind==='integration')state.append(el('small','Unranked integration'));
-      scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');cell(tr,format(row.actions),'numeric');publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
+      scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');inputDetails(cell(tr,null,'input-summary'),row);publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
     }
     $('scope').textContent=snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
   }
-  function freshness(){if(!snapshot)return;const age=Date.now()-snapshot.generated_at_ms;const stale=age>10000||age< -1000||snapshot.live_status_available===false;$('connection').className=stale?'stale':'';$('connection').textContent=age>10000||age< -1000?'Results feed is stale':snapshot.live_status_available===false?'History updated · live status unavailable':`Updated ${Math.max(0,Math.floor(age/1000))}s ago`;}
+  function freshness(){
+    if(!snapshot)return;
+    const age=Date.now()-snapshot.generated_at_ms,active=snapshot.attempts.some(row=>['running','requesting','recovering'].includes(row.status));
+    const stale=age>10000||age< -1000||snapshot.live_status_available===false;
+    $('connection').className=active&&stale?'stale':'';
+    $('connection').textContent=active&&stale?'Live updates stale · showing saved snapshot':stale
+      ?`Saved results · ${new Date(snapshot.generated_at_ms).toLocaleString()}`:`Snapshot updated ${Math.max(0,Math.floor(age/1000))}s ago`;
+  }
   async function refresh(){
     if(closed)return;
     try{
@@ -129,7 +161,6 @@
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
     finally{if(!closed)timer=setTimeout(refresh,2000);}
   }
-  $('groups').addEventListener('change',()=>{selected=$('groups').value;renderComparisons();});
   window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
   refresh();
 })();

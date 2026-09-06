@@ -32,6 +32,23 @@ class DashboardTests(unittest.TestCase):
         raw=json.dumps(value,sort_keys=True).encode(); path.write_bytes(raw)
         return {'path':path.name,'sha256':hashlib.sha256(raw).hexdigest()}
 
+    def execution(self,result,acknowledged=4,attempts=4,*,legacy=False):
+        observation={'ready':True,'source':'full-client','ageMs':12,'renderAgeMs':8,
+                     'character':{'alive':True,'exp':1000,'level':180}}
+        result['initial']=copy.deepcopy(observation)
+        result['final']=copy.deepcopy(observation)|{'character':result.get('final',{}).get('character',{'alive':True})}
+        result['controller'].update(actions=attempts if legacy else acknowledged,sdkRequestLimit=100,actionLimit=80)
+        result['program']={'reason':'program_complete','error':None,
+            'actions':attempts if legacy else acknowledged,
+            'steps':[{'kind':'sdk','method':'pressKeys','args':[['ATTACK'],100],
+                      'result':{'accepted':True,'error':None,'observation':copy.deepcopy(observation)}}
+                     for _ in range(acknowledged)],'logs':[]}
+        if not legacy: result['program']['actionAttempts']=attempts
+
+    def save_result(self,folder,journal,result):
+        journal['receipts']['collect_final']['artifacts']['result']=self.write(folder/'result.json',result)
+        self.write(folder/'journal.json',journal)
+
     def attempt(self,run_id,model='gpt-6-astra',xp=100,status='completed',runtime='f'*64):
         folder=self.attempts/run_id; folder.mkdir()
         evidence=fixture()
@@ -48,6 +65,7 @@ class DashboardTests(unittest.TestCase):
             'api':{'model':model,'status':'completed'},'observedXpDelta':max(xp,0),
             'final':{'character':{'alive':xp>=0}},'timing':{'apiLatencyMs':800,'elapsedMs':6000,'endedAtMs':7000},
             'timeline':{'status':'completed'}}
+        self.execution(result)
         request={'model':model,'metadata':{'maplebench_run_id':run_id}}
         response={'model':model,'status':'completed','metadata':{'maplebench_run_id':run_id}}
         recording={'path':'video.webm','sha256':'d'*64,'status':'completed','reviewed':False,
@@ -85,6 +103,133 @@ class DashboardTests(unittest.TestCase):
             'externally_published':False,'private_marker':'/private/validator-secret'}
         path=folder/f'publication-verdict-{version}.json';self.write(path,verdict)
         return path,verdict,reviewed
+
+    def test_legacy_attempt_counter_does_not_mislabel_missing_acknowledgment_or_erase_xp(self):
+        folder,journal,result=self.attempt('1'*32,model='gpt-5.6-terra',xp=4500)
+        self.execution(result,acknowledged=34,attempts=35,legacy=True)
+        result['program']['reason']='time_limit'
+        self.save_result(folder,journal,result)
+        self.publication(folder,journal,result,ready=False)
+        row=self.snapshot()['attempts'][0]
+        self.assertEqual(row['reported_actions'],35)
+        self.assertEqual(row['action_attempts'],35)
+        self.assertEqual(row['acknowledged_actions'],34);self.assertEqual(row['actions'],34)
+        self.assertEqual(row['action_verification'],'receipts_incomplete');self.assertIsNone(row['no_op'])
+        self.assertEqual(row['persisted_xp'],4500)
+        self.assertEqual(row['publication_evidence'],{'status':'blocked','reason_code':'receipts_incomplete'})
+        self.assertIsNotNone(row['comparison_group'])
+        self.assertFalse(row['ranked']);self.assertFalse(row['publication_eligible'])
+
+    def test_legacy_completed_zero_inputs_and_separate_current_acceptance_are_explicit(self):
+        for run_id,name in (('1'*32,'gpt-5.6-sol'),('2'*32,'gpt-5.6-luna')):
+            folder,journal,result=self.attempt(run_id,model=name,xp=0)
+            self.execution(result,acknowledged=0,attempts=0,legacy=True)
+            self.save_result(folder,journal,result)
+        folder,journal,result=self.attempt('3'*32,xp=9500,runtime='e'*64)
+        self.execution(result,acknowledged=29,attempts=29)
+        self.save_result(folder,journal,result)
+        value=self.snapshot();rows={row['id']:row for row in value['attempts']}
+        for run_id in ('1'*32,'2'*32):
+            row=rows[run_id]
+            self.assertEqual(row['persisted_xp'],0)
+            self.assertEqual(row['action_attempts'],0);self.assertEqual(row['acknowledged_actions'],0)
+            self.assertIs(row['no_op'],True);self.assertEqual(row['action_verification'],'receipts_rechecked')
+        acceptance=rows['3'*32]
+        self.assertEqual(acceptance['persisted_xp'],9500)
+        self.assertEqual(acceptance['action_attempts'],29);self.assertEqual(acceptance['acknowledged_actions'],29)
+        self.assertIs(acceptance['no_op'],False)
+        self.assertNotEqual(acceptance['comparison_group'],rows['1'*32]['comparison_group'])
+        self.assertEqual(len(value['comparisons']),2)
+        self.assertTrue(all(row['ranked'] is False and row['publication_eligible'] is False for row in rows.values()))
+
+    def test_invalid_receipts_only_count_the_valid_subset_without_changing_persisted_score(self):
+        changes=[lambda p:p['steps'][0]['result'].update(accepted=False),
+                 lambda p:p['steps'][0].update(kind='sdk_error'),
+                 lambda p:p['steps'][0].update(args=[['LEFT','RIGHT'],100]),
+                 lambda p:p['steps'][0]['result']['observation'].update(renderAgeMs=1500),
+                 lambda p:p['steps'][0]['result'].update(error='/private/action-error'),
+                 lambda p:p['steps'][0].update(method='private_method'),
+                 lambda p:p['steps'][0].update(args=[['ATTACK'],True])]
+        for index,change in enumerate(changes):
+            with self.subTest(index=index):
+                folder,journal,result=self.attempt(f'{index+1:032x}',xp=-600)
+                change(result['program']);self.save_result(folder,journal,result)
+        for row in self.snapshot()['attempts']:
+            self.assertEqual(row['acknowledged_actions'],3)
+            self.assertEqual(row['action_attempts'],4)
+            self.assertEqual(row['action_verification'],'receipts_incomplete');self.assertIsNone(row['no_op'])
+            self.assertEqual(row['persisted_xp'],-600)
+            self.assertNotIn('/private/action-error',json.dumps(row));self.assertNotIn('private_method',json.dumps(row))
+
+    def test_zero_counter_alone_does_not_prove_noop(self):
+        changes=[lambda r:r['program'].pop('steps'),
+                 lambda r:r['program'].update(error='/private/program-error'),
+                 lambda r:r['program'].update(steps=[{'kind':'rejected_rpc','error':'private-input'}]),
+                 lambda r:r['initial'].update(ready=False),
+                 lambda r:r['final'].update(renderAgeMs=2**500),
+                 lambda r:r['program'].update(reason='program_error'),
+                 lambda r:r['controller'].update(actions=1),
+                 lambda r:r['program'].update(actionAttempts=None)]
+        for index,change in enumerate(changes):
+            folder,journal,result=self.attempt(f'{index+1:032x}',xp=0)
+            self.execution(result,acknowledged=0,attempts=0)
+            change(result);self.save_result(folder,journal,result)
+        for row in self.snapshot()['attempts']:
+            self.assertIsNone(row['no_op']);self.assertEqual(row['action_verification'],'receipts_incomplete')
+            self.assertEqual(row['persisted_xp'],0)
+            self.assertNotIn('private-input',json.dumps(row));self.assertNotIn('/private/program-error',json.dumps(row))
+
+    def test_action_receipt_and_counter_limits_fail_closed(self):
+        changes=[lambda r:r['program'].update(steps=None),
+                 lambda r:r['controller'].update(sdkRequestLimit=3),
+                 lambda r:r['program'].update(steps=r['program']['steps']*26),
+                 lambda r:r['program'].update(actionAttempts=10001),
+                 lambda r:r['program'].update(actionAttempts=True),
+                 lambda r:r['program'].update(actionAttempts=3)]
+        for index,change in enumerate(changes):
+            folder,journal,result=self.attempt(f'{index+1:032x}')
+            change(result);self.save_result(folder,journal,result)
+        rows={row['id']:row for row in self.snapshot()['attempts']}
+        for index in range(len(changes)):
+            row=rows[f'{index+1:032x}']
+            self.assertIsNone(row['no_op']);self.assertEqual(row['action_verification'],'receipts_incomplete')
+            self.assertEqual(row['persisted_xp'],100)
+            if index<3: self.assertIsNone(row['acknowledged_actions'])
+            else: self.assertIsNone(row['action_attempts'])
+
+    def test_zero_input_observe_and_completed_wait_receipts_allow_noop(self):
+        folder,journal,result=self.attempt('1'*32,xp=-600)
+        self.execution(result,acknowledged=0,attempts=0)
+        result['program']['steps']=[{'kind':'sdk','method':'observe','args':[],
+            'result':copy.deepcopy(result['initial'])},
+            {'kind':'sdk','method':'wait','args':[100],'result':{'waitedMs':100}}]
+        self.save_result(folder,journal,result)
+        row=self.snapshot()['attempts'][0]
+        self.assertIs(row['no_op'],True);self.assertEqual(row['persisted_xp'],-600)
+        result['program']['steps'][-1]['result']['waitedMs']=50
+        self.save_result(folder,journal,result)
+        self.assertIsNone(self.snapshot()['attempts'][0]['no_op'])
+        result['program']['reason']='time_limit';self.save_result(folder,journal,result)
+        self.assertIs(self.snapshot()['attempts'][0]['no_op'],True)
+
+    def test_live_counter_cannot_replace_hashed_terminal_acknowledgments(self):
+        run_id='1'*32;_,_,result=self.attempt(run_id)
+        live={'bridge':{'fresh':True,'run':result['controller']|{'actions':99}}}
+        row=self.snapshot(live_status=live)['attempts'][0]
+        self.assertEqual(row['reported_actions'],99)
+        self.assertEqual(row['acknowledged_actions'],4);self.assertEqual(row['action_attempts'],4)
+        self.assertEqual(row['action_verification'],'receipts_rechecked')
+
+    def test_unhashed_relay_result_never_confirms_actions_or_noop(self):
+        run_id='1'*32;folder,journal,result=self.attempt(run_id,xp=0)
+        self.execution(result,acknowledged=0,attempts=0)
+        # Keep the original journal hash so the edited private result is invalid.
+        self.write(folder/'result.json',result)
+        relay=self.relay/run_id;relay.mkdir();self.write(relay/'result.json',result)
+        row=self.snapshot()['attempts'][0]
+        self.assertEqual(row['reported_actions'],0)
+        self.assertIsNone(row['acknowledged_actions']);self.assertIsNone(row['action_attempts'])
+        self.assertIsNone(row['no_op']);self.assertEqual(row['action_verification'],'unverified')
 
     def test_publication_status_is_separate_from_verified_score_and_never_grants_ranking(self):
         for index,status in enumerate(('passed','blocked','awaiting_review'),1):
@@ -263,12 +408,15 @@ class DashboardTests(unittest.TestCase):
         live={'bridge':{'fresh':True,'run':{'id':run_id,'status':'running','mode':'api','model':'gpt-6-astra','returnedModel':'gpt-6-astra','actions':12}},
             'observation':{'ready':True,'ageMs':0,'renderAgeMs':0,'character':{'exp':1123,'level':180,'alive':True,'account_id':'private'}}}
         row=self.snapshot(live_status=live)['attempts'][0]
-        self.assertEqual(row['actions'],12);self.assertEqual(row['diagnostic_xp'],123)
+        self.assertEqual(row['reported_actions'],12);self.assertEqual(row['diagnostic_xp'],123)
+        self.assertIsNone(row['actions']);self.assertIsNone(row['acknowledged_actions'])
+        self.assertIsNone(row['no_op']);self.assertEqual(row['action_verification'],'unverified')
         self.assertIsNone(row['persisted_xp']);self.assertTrue(row['alive_at_last_observation'])
         live['observation']['renderAgeMs']=2000
         self.assertIsNone(self.snapshot(live_status=live)['attempts'][0]['diagnostic_xp'])
         live['bridge']['run']['id']='2'*32
         self.assertIsNone(self.snapshot(live_status=live)['attempts'][0]['actions'])
+        self.assertIsNone(self.snapshot(live_status=live)['attempts'][0]['reported_actions'])
 
     def test_completed_api_with_failed_trial_retains_diagnostics_and_recording_only(self):
         run_id='1'*32;folder,journal,result=self.attempt(run_id,status='recovered')
@@ -285,7 +433,9 @@ class DashboardTests(unittest.TestCase):
             'sha256':'d'*64,'url':'/full-client-benchmark/recordings/'+run_id+'.webm'}})['attempts'][0]
         self.assertEqual(row['status'],'recovered');self.assertEqual(row['failure_phase'],'run_controller')
         self.assertEqual(row['phase_states'],{'run_controller':'failed'})
-        self.assertEqual(row['actions'],34);self.assertEqual(row['diagnostic_xp'],42)
+        self.assertEqual(row['reported_actions'],34);self.assertEqual(row['diagnostic_xp'],42)
+        self.assertIsNone(row['actions']);self.assertIsNone(row['acknowledged_actions'])
+        self.assertIsNone(row['no_op']);self.assertEqual(row['action_verification'],'unverified')
         self.assertEqual(row['returned_model'],'gpt-6-astra');self.assertTrue(row['api_response_saved'])
         self.assertEqual(row['api_outcome'],'uncertain');self.assertEqual(row['charged_usage']['total_tokens'],30000)
         self.assertIsNotNone(row['recording']);self.assertIsNone(row['persisted_xp']);self.assertIsNone(row['comparison_group'])
