@@ -14,6 +14,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from full_client_docker_fixture import local_binding
 from full_client_freeze import (FreezeError, Inventory, build_manifest, inspect_image,
                                 main, read_private_json, verify_manifest, write_manifest)
 
@@ -40,9 +42,10 @@ class RuntimeFreezeTests(unittest.TestCase):
         for name, path in self.inputs.items():
             path.write_bytes(("synthetic-" + name).encode())
         self.inputs["config"].write_bytes(b"private-marker: synthetic-only")
+        self.binding = local_binding(self, self.root)
         self.config = {"working_directory": str(self.working), "wz_path": str(self.root / "wz-alias"),
                        **{key: str(self.inputs[key]) for key in ("server_jar", "client_js", "client_wasm")},
-                       "docker_image": "synthetic-existing:tag", "docker_command": [sys.executable]}
+                       "docker_image": "synthetic-existing:tag", "docker_command": [self.binding["executable"]["path"]], "docker_socket": self.binding["socket_path"]}
         self.inspect_patch = patch("full_client_freeze.inspect_image", return_value=IMAGE)
         self.inspect = self.inspect_patch.start()
         self.addCleanup(self.inspect_patch.stop)
@@ -57,13 +60,36 @@ class RuntimeFreezeTests(unittest.TestCase):
         self.assertEqual(manifest["wz_path"], str(self.wz))
         self.assertEqual(manifest["inventory_roots"], sorted([str(self.scripts), str(self.wz)]))
         self.assertEqual(manifest["docker_image_id"], IMAGE)
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["docker_binding"], self.binding)
         self.assertEqual(manifest["extra_files"], [])
         self.assertEqual({item["path"] for item in manifest["files"]},
                          {str(self.inputs[key]) for key in ("config", "script", "wz")})
         for reference in [*manifest["files"], *(manifest[key] for key in ("server_jar", "client_js", "client_wasm"))]:
             self.assertEqual(reference["sha256"], hashlib.sha256(Path(reference["path"]).read_bytes()).hexdigest())
         self.assertNotIn("private-marker", json.dumps(manifest))
-        self.assertIs(verify_manifest(manifest, docker_command=[sys.executable]), manifest)
+        self.assertIs(verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"]), manifest)
+
+    def test_legacy_manifest_verifies_without_rewriting_or_gaining_execution_binding(self):
+        manifest = build_manifest(self.config, schema_version=1)
+        before = json.dumps(manifest, sort_keys=True)
+        self.assertNotIn("docker_binding", manifest)
+        self.assertIs(verify_manifest(manifest, docker_command=self.config["docker_command"],
+                                     docker_socket=self.config["docker_socket"]), manifest)
+        self.assertEqual(json.dumps(manifest, sort_keys=True), before)
+
+    def test_docker_binary_or_endpoint_switch_is_drift_even_when_image_is_identical(self):
+        manifest = self.manifest()
+        alternative = self.root / "alternative"
+        alternative.mkdir()
+        binding = local_binding(self, alternative)
+        for command, endpoint in (([binding["executable"]["path"]], self.config["docker_socket"]),
+                                  (self.config["docker_command"], binding["socket_path"])):
+            with self.subTest(command=command), self.assertRaisesRegex(FreezeError, "runtime_manifest_drift"):
+                verify_manifest(manifest, docker_command=command, docker_socket=endpoint)
+        Path(self.binding["executable"]["path"]).write_bytes(b"changed executable")
+        with self.assertRaisesRegex(FreezeError, "runtime_manifest_drift"):
+            verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
 
     def test_explicit_web_dependencies_are_sorted_hashed_and_verified(self):
         extra_paths = [self.root / name for name in ("waiting.html", "serve.py", "controller.js", "index.html")]
@@ -73,17 +99,17 @@ class RuntimeFreezeTests(unittest.TestCase):
         manifest = self.manifest()
         self.assertEqual(manifest["extra_files"], [{"path": str(path),
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path in sorted(extra_paths)])
-        self.assertIs(verify_manifest(manifest, docker_command=[sys.executable]), manifest)
+        self.assertIs(verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"]), manifest)
         for path in extra_paths:
             with self.subTest(file=path.name):
                 original = path.read_bytes()
                 path.write_bytes(original + b" changed")
                 with self.assertRaisesRegex(FreezeError, "runtime_manifest_drift"):
-                    verify_manifest(manifest, docker_command=[sys.executable])
+                    verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
                 path.write_bytes(original)
         extra_paths[0].unlink()
         with self.assertRaises(FreezeError):
-            verify_manifest(manifest, docker_command=[sys.executable])
+            verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
 
     def test_extra_files_reject_invalid_paths_duplicates_and_oversized_lists(self):
         alias = self.root / "script-alias.py"
@@ -107,7 +133,7 @@ class RuntimeFreezeTests(unittest.TestCase):
         # A named dependency also inside a scanned tree is one physical path in
         # the budget, while retaining an explicit role pin in extra_files.
         self.config["extra_files"] = [str(self.inputs["script"])]
-        manifest = build_manifest(self.config | {"limits": {"max_files": 6}})
+        manifest = build_manifest(self.config | {"limits": {"max_files": 7}})
         self.assertEqual(manifest["extra_files"], [next(item for item in manifest["files"]
                                                      if item["path"] == str(self.inputs["script"]))])
 
@@ -134,7 +160,7 @@ class RuntimeFreezeTests(unittest.TestCase):
             bad = copy.deepcopy(manifest)
             change(bad)
             with self.assertRaises(FreezeError):
-                verify_manifest(bad, docker_command=[sys.executable])
+                verify_manifest(bad, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
 
     def test_any_config_script_wz_or_build_edit_is_drift(self):
         manifest = self.manifest()
@@ -143,7 +169,7 @@ class RuntimeFreezeTests(unittest.TestCase):
                 original = path.read_bytes()
                 path.write_bytes(original + b"-changed")
                 with self.assertRaisesRegex(FreezeError, "runtime_manifest_drift"):
-                    verify_manifest(manifest, docker_command=[sys.executable])
+                    verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
                 path.write_bytes(original)
 
     def test_new_and_deleted_inventory_files_are_drift(self):
@@ -151,11 +177,11 @@ class RuntimeFreezeTests(unittest.TestCase):
         extra = self.scripts / "new.js"
         extra.write_bytes(b"new synthetic source")
         with self.assertRaisesRegex(FreezeError, "runtime_manifest_drift"):
-            verify_manifest(manifest, docker_command=[sys.executable])
+            verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
         extra.unlink()
         self.inputs["wz"].unlink()
         with self.assertRaisesRegex(FreezeError, "runtime_manifest_drift"):
-            verify_manifest(manifest, docker_command=[sys.executable])
+            verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
 
     def test_root_alias_retargeting_is_detected(self):
         manifest = self.manifest()
@@ -165,7 +191,7 @@ class RuntimeFreezeTests(unittest.TestCase):
         (self.working / "scripts").unlink()
         (self.working / "scripts").symlink_to(changed, target_is_directory=True)
         with self.assertRaisesRegex(FreezeError, "runtime_manifest_drift"):
-            verify_manifest(manifest, docker_command=[sys.executable])
+            verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
 
     def test_all_descendant_symlinks_are_rejected_without_following_them(self):
         for target in (self.inputs["config"], self.wz):
@@ -191,7 +217,14 @@ class RuntimeFreezeTests(unittest.TestCase):
                 build_manifest(self.config | {"limits": limits})
 
     def test_time_budget_stops_inventory(self):
-        with patch("full_client_freeze.time.monotonic", side_effect=[0, 121]):
+        clock = [0]
+        def now():
+            value = clock[0]
+            clock[0] = 121
+            return value
+        # After Inventory records its deadline, time remains beyond that
+        # deadline regardless of how often Docker's independent hash checks read it.
+        with patch("full_client_freeze.time.monotonic", side_effect=now):
             with self.assertRaisesRegex(FreezeError, "inventory_timeout"):
                 self.manifest()
 
@@ -235,7 +268,7 @@ class RuntimeFreezeTests(unittest.TestCase):
         manifest = self.manifest()
         self.inspect.return_value = "sha256:" + "b" * 64
         with self.assertRaisesRegex(FreezeError, "runtime_manifest_drift"):
-            verify_manifest(manifest, docker_command=[sys.executable])
+            verify_manifest(manifest, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
 
     def test_manifest_writer_is_private_durable_and_never_overwrites(self):
         manifest = self.manifest()
@@ -250,6 +283,7 @@ class RuntimeFreezeTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), previous)
         public = self.root / "not-private"
         public.mkdir(mode=0o755)
+        public.chmod(0o755)
         with self.assertRaisesRegex(FreezeError, "private_output_parent_required"):
             write_manifest(public / "manifest.json", manifest)
 
@@ -263,7 +297,7 @@ class RuntimeFreezeTests(unittest.TestCase):
             bad = copy.deepcopy(manifest)
             change(bad)
             with self.assertRaises(FreezeError):
-                verify_manifest(bad, docker_command=[sys.executable])
+                verify_manifest(bad, docker_command=self.config["docker_command"], docker_socket=self.config["docker_socket"])
 
     def test_cli_prints_only_safe_result_and_verifies_then_detects_drift(self):
         config = self.root / "config.json"
@@ -316,16 +350,25 @@ class RuntimeFreezeTests(unittest.TestCase):
 
 
 class LocalImageInspectionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.binding = local_binding(self, self.temp.name)
+        self.command = [self.binding["executable"]["path"]]
+
     def test_fixed_local_command_ignores_remote_docker_environment_and_never_pulls(self):
         process = SimpleNamespace(returncode=0, stdout=(IMAGE + "\n").encode())
         with patch.dict(os.environ, {"DOCKER_HOST": "tcp://remote.invalid:2375", "DOCKER_CONTEXT": "remote"}), \
                 patch("full_client_freeze.subprocess.run", return_value=process) as run:
-            self.assertEqual(inspect_image([sys.executable], "synthetic:tag", 5), IMAGE)
+            self.assertEqual(inspect_image(self.command, "synthetic:tag", 5, self.binding["socket_path"]), IMAGE)
         args, options = run.call_args
-        self.assertEqual(args[0], [sys.executable, "--host", "unix:///var/run/docker.sock", "image", "inspect",
+        self.assertEqual(args[0], [*self.command, "--config", options["env"]["DOCKER_CONFIG"],
+                                   "--host", "unix://" + self.binding["socket_path"], "image", "inspect",
                                    "--format", "{{.Id}}", "--", "synthetic:tag"])
         self.assertEqual(options["timeout"], 5)
-        self.assertEqual(options["env"], {"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        self.assertEqual(options["env"], {"PATH": "/usr/bin:/bin", "LC_ALL": "C",
+            "HOME": options["env"]["DOCKER_CONFIG"], "DOCKER_CONFIG": options["env"]["DOCKER_CONFIG"]})
+        self.assertFalse(Path(options["env"]["DOCKER_CONFIG"]).exists())
         self.assertNotIn("pull", args[0])
 
     def test_failed_or_noncanonical_image_inspection_never_becomes_a_digest(self):
@@ -334,11 +377,11 @@ class LocalImageInspectionTests(unittest.TestCase):
                          SimpleNamespace(returncode=0, stdout=b"sha256:short")):
             with self.subTest(response=response.returncode), patch("full_client_freeze.subprocess.run", return_value=response):
                 with self.assertRaises(FreezeError) as failure:
-                    inspect_image([sys.executable], "synthetic:tag", 5)
+                    inspect_image(self.command, "synthetic:tag", 5, self.binding["socket_path"])
                 self.assertNotIn("private-marker", str(failure.exception))
         with patch("full_client_freeze.subprocess.run", side_effect=subprocess.TimeoutExpired("private-marker", 5)):
             with self.assertRaisesRegex(FreezeError, "docker_image_inspection_failed"):
-                inspect_image([sys.executable], "synthetic:tag", 5)
+                inspect_image(self.command, "synthetic:tag", 5, self.binding["socket_path"])
 
     def test_command_prefixes_and_option_like_image_refs_are_rejected(self):
         for command, ref in ((["docker"], "synthetic:tag"),

@@ -28,10 +28,12 @@ import uuid
 import zipfile
 
 from full_client_collect import collect, DATABASE
-from full_client_freeze import verify_manifest
+from full_client_freeze import FreezeError, FREEZE_ERROR_CODES, verify_manifest
+from full_client_docker import DockerBindingError, configured_command, validate_binding
 from full_client_score import (SOURCE, JSON_LIMIT, EvidenceError, parse_json, read_artifact_bytes,
                                open_verified_artifact, same_json, verify_trial_bundle)
-from full_client_trial import atomic_json, private_directory, read_private_json, validate_spec
+from full_client_trial import (RELAY_ERROR_CODES, RUNTIME_ERROR_CODES, atomic_json,
+                               private_directory, read_private_json, validate_spec)
 
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 RUN = re.compile(r"[0-9a-f]{32}\Z")
@@ -157,7 +159,10 @@ class Host:
                 require(block and len(output) + len(block) <= JSON_LIMIT, "admin_response_limit")
                 output.extend(block)
         response = parse_json(output)
-        require(response.get("ok") is True and isinstance(response.get("result"), dict),
+        if (isinstance(response, dict) and set(response) == {"ok", "error"} and response["ok"] is False
+                and isinstance(response["error"], str) and response["error"] in RELAY_ERROR_CODES):
+            raise RuntimeErrorCode(response["error"])
+        require(isinstance(response, dict) and response.get("ok") is True and isinstance(response.get("result"), dict),
                 "admin_operation_failed")
         return response["result"]
 
@@ -222,6 +227,7 @@ class CosmicRuntime:
         for name in ("world_lock", "queue_lock", "queue_database", "attempt_root", "admin_socket", "relay_output_root",
                      "native_output_root", "dropin_root", "systemctl", "journalctl", "docker", "web_script"):
             absolute(config[name])
+        require(config.get("docker_launcher") in (None, "/usr/bin/sudo"), "invalid_docker_command")
         require(config["dropin_root"] == "/run/systemd/system", "runtime_dropin_root_required")
         require(isinstance(config.get("game_ports"), list) and 1 <= len(config["game_ports"]) <= 16
                 and len(set(config["game_ports"])) == len(config["game_ports"])
@@ -301,6 +307,7 @@ class CosmicRuntime:
                 "invalid_settlement_policy")
         self.baseline = parse_json(ref_bytes(self.config["baseline_snapshot"]))
         self.manifest = parse_json(ref_bytes(self.config["runtime_manifest"]))
+        self.docker_binding()
         absolute(self.manifest["working_directory"])
         absolute(self.manifest["wz_path"])
         db = self.config["mysql"]
@@ -315,7 +322,8 @@ class CosmicRuntime:
         manifest = self.manifest
         absolute(manifest["working_directory"])
         absolute(manifest["wz_path"])
-        verify_manifest(manifest, docker_command=[self.config["docker"]],
+        verify_manifest(manifest, docker_command=configured_command(self.docker_binding()),
+                        docker_socket=self.config.get("docker_socket", "/var/run/docker.sock"),
                         limits={"timeout_seconds": max(1, int(self.host.remaining()))})
         jar = manifest["server_jar"]
         path = absolute(jar["path"])
@@ -334,6 +342,18 @@ class CosmicRuntime:
         ref_bytes(self.config["baseline"], MAX_SQL)
         ref_bytes(self.config["orchestrator"])
 
+    def docker_binding(self):
+        """New trials require an execution binding; old manifests remain evidence only."""
+        require(type(self.manifest.get("schema_version")) is int and self.manifest["schema_version"] == 2
+                and self.manifest.get("docker_binding") is not None,
+                "docker_binding_required")
+        binding = validate_binding(self.manifest["docker_binding"], verify_files=False)
+        command = (["/usr/bin/sudo", "-n"] if self.config.get("docker_launcher") else []) + [self.config["docker"]]
+        require(configured_command(binding) == command
+                and binding["socket_path"] == str(Path(self.config.get("docker_socket", "/var/run/docker.sock")).resolve()),
+                "docker_binding_mismatch")
+        return binding
+
     def online_identity(self):
         """Bounded process/UID/environment checks without scanning WZ/NX/JAR bytes."""
         web = self.unit("web")
@@ -351,7 +371,7 @@ class CosmicRuntime:
         controls = script.parent.parent / "ui/full-client"
         # The executor reads the JavaScript dispatcher at each container launch;
         # pin it alongside imported modules, not just the Docker image.
-        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "maple_agent.py", "agent-sandbox.mjs")),
+        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "maple_agent.py", "agent-sandbox.mjs")),
                     controls / "controller.js", controls / "waiting.html",
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}
@@ -680,6 +700,7 @@ class CosmicRuntime:
             self.admin("start", model=spec["model"], duration_seconds=duration,
                        run_id=self.run_id, request_id=self.run_id, total_token_limit=budgets["max_total_tokens"],
                        docker_image_id=self.manifest["docker_image_id"],
+                       docker_binding=self.docker_binding(),
                        trial_context={"scenario_fingerprint": spec["scenario_fingerprint"],
                                       "baseline_sha256": spec["baseline_sha256"]})
             terminal_seen = None
@@ -730,6 +751,8 @@ class CosmicRuntime:
                 and result["controller"].get("dockerImageId") == self.manifest["docker_image_id"]
                 and result["controller"].get("status") == "completed"
                 and api.get("status") == "completed", "controller_model_or_source_mismatch")
+        require(same_json(result["controller"].get("dockerBinding"), self.docker_binding()),
+                "docker_binding_mismatch")
         require(same_json(result.get("trialContext"), {"scenario_fingerprint": spec["scenario_fingerprint"],
                                                        "baseline_sha256": spec["baseline_sha256"]}),
                 "controller_trial_context_mismatch")
@@ -1138,7 +1161,10 @@ def main(argv=None):
         result = CosmicRuntime(config).perform(request["operation"], request["context"],
                                                timeout_seconds=request["timeout_seconds"])
     except RuntimeErrorCode as error:
-        print(json.dumps({"error": str(error)}))
+        print(json.dumps({"error": str(error) if str(error) in RUNTIME_ERROR_CODES else "runtime_operation_failed"}))
+        return 1
+    except (FreezeError, DockerBindingError) as error:
+        print(json.dumps({"error": str(error) if str(error) in FREEZE_ERROR_CODES else "runtime_operation_failed"}))
         return 1
     except (OSError, ValueError, KeyError, TypeError, AttributeError, sqlite3.Error, subprocess.SubprocessError):
         print(json.dumps({"error": "runtime_operation_failed"}))

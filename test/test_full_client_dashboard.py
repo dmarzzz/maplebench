@@ -239,6 +239,10 @@ class DashboardTests(unittest.TestCase):
         row=self.snapshot()['attempts'][0]
         self.assertEqual(row['phase'],'start_server');self.assertEqual(row['failure_code'],'host_command_failed')
         self.assertIsNone(row['persisted_xp'])
+        for code in ('inventory_timeout','runtime_manifest_drift','docker_executable_changed',
+                     'docker_binding_required','recorder_not_ready','client_busy_or_not_ready'):
+            journal['failure_code']=code; self.write(folder/'journal.json',journal)
+            self.assertEqual(self.snapshot()['attempts'][0]['failure_code'],code)
         journal['failure_code']='private-password-marker';self.write(folder/'journal.json',journal)
         self.assertEqual(self.snapshot()['attempts'][0]['failure_code'],'details_unavailable')
 

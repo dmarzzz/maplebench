@@ -16,10 +16,14 @@ import stat
 import subprocess
 import time
 
+from full_client_docker import (DOCKER_ERROR_CODES, DockerBindingError, bound_invocation, freeze_binding,
+                                validate_binding)
+
 
 SCHEMA_FIELDS = {"schema_version", "working_directory", "wz_path", "inventory_roots",
                  "server_jar", "client_js", "client_wasm", "docker_image", "docker_image_id", "files",
                  "extra_files"}
+SCHEMA_V2_FIELDS = SCHEMA_FIELDS | {"docker_binding"}
 PATH_FIELDS = ("working_directory", "wz_path", "server_jar", "client_js", "client_wasm")
 ARTIFACT_FIELDS = ("server_jar", "client_js", "client_wasm")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -28,6 +32,18 @@ IMAGE_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./:@-]{0,254}\Z")
 DEFAULT_LIMITS = {"max_files": 100000, "max_total_bytes": 32 * 1024**3, "timeout_seconds": 120}
 HARD_LIMITS = {"max_files": 200000, "max_total_bytes": 128 * 1024**3, "timeout_seconds": 300}
 JSON_LIMIT = 64 * 1024**2
+FREEZE_ERROR_CODES = DOCKER_ERROR_CODES | frozenset("""
+absolute_path_required configured_path_unavailable distinct_inventory_roots_required
+docker_image_changed docker_image_inspection_failed duplicate_extra_file duplicate_json_key
+duplicate_manifest_file invalid_config_fields invalid_configured_path invalid_docker_image
+invalid_docker_image_id invalid_docker_timeout invalid_extra_files invalid_json invalid_limits
+invalid_limit_max_files invalid_limit_max_total_bytes invalid_limit_timeout_seconds
+invalid_manifest_files invalid_manifest_reference invalid_manifest_schema inventory_byte_limit
+inventory_depth_limit inventory_directory_changed inventory_entry_changed inventory_entry_limit
+inventory_file_changed inventory_file_limit inventory_non_directory inventory_non_regular_file
+inventory_symlink_descendant inventory_timeout manifest_too_large nonfinite_json private_json_changed
+private_json_required private_output_parent_required runtime_input_unavailable runtime_manifest_drift
+""".split())
 
 
 class FreezeError(ValueError):
@@ -200,23 +216,14 @@ def inspect_image(docker_command, image, timeout_seconds, docker_socket="/var/ru
     """Inspect one existing image through a fixed local Unix-socket command."""
     require(type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= 300,
             "invalid_docker_timeout")
-    require(isinstance(docker_command, list) and len(docker_command) == 1
-            and isinstance(docker_command[0], str) and Path(docker_command[0]).is_absolute(),
-            "invalid_docker_command")
     require(isinstance(image, str) and IMAGE_REF.fullmatch(image), "invalid_docker_image")
-    require(isinstance(docker_socket, str) and "\0" not in docker_socket
-            and Path(docker_socket).is_absolute() and ".." not in Path(docker_socket).parts,
-            "invalid_docker_socket")
-    info = Path(docker_command[0]).stat()
-    require(stat.S_ISREG(info.st_mode) and info.st_uid in (0, os.geteuid())
-            and not info.st_mode & (0o022 | stat.S_ISUID | stat.S_ISGID)
-            and os.access(docker_command[0], os.X_OK), "untrusted_docker_executable")
-    command = [docker_command[0], "--host", "unix://" + docker_socket, "image", "inspect",
-               "--format", "{{.Id}}", "--", image]
     try:
-        result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, check=False, timeout=min(timeout_seconds, 10),
-                                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        with bound_invocation(freeze_binding(docker_command, docker_socket)) as (prefix, env):
+            result = subprocess.run(prefix + ["image", "inspect", "--format", "{{.Id}}", "--", image],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, check=False, timeout=min(timeout_seconds, 10), env=env)
+    except DockerBindingError as error:
+        raise FreezeError(str(error)) from None
     except (OSError, subprocess.SubprocessError) as error:
         raise FreezeError("docker_image_inspection_failed") from error
     require(result.returncode == 0 and len(result.stdout) <= 256, "docker_image_inspection_failed")
@@ -228,8 +235,9 @@ def inspect_image(docker_command, image, timeout_seconds, docker_socket="/var/ru
     return identity
 
 
-def build_manifest(config):
+def build_manifest(config, *, schema_version=2):
     """Read and pin current configured inputs; never pull, copy assets, or mutate runtime."""
+    require(type(schema_version) is int and schema_version in (1, 2), "invalid_manifest_schema")
     required = {*PATH_FIELDS, "docker_image", "docker_command"}
     require(isinstance(config, dict) and required <= set(config)
             and set(config) <= required | {"limits", "docker_socket", "extra_files"}, "invalid_config_fields")
@@ -251,6 +259,11 @@ def build_manifest(config):
         require(len(roots) == 2 and not any(left in right.parents for left in roots for right in roots if left != right),
                 "distinct_inventory_roots_required")
         socket = config.get("docker_socket", "/var/run/docker.sock")
+        binding = freeze_binding(config["docker_command"], socket) if schema_version == 2 else None
+        if binding:
+            for reference in (binding["executable"], binding["launcher"]):
+                if reference:
+                    require(inventory.hash_path(Path(reference["path"])) == reference, "docker_executable_changed")
         image = inspect_image(config["docker_command"], config["docker_image"], inventory.remaining(), socket)
         references = {name: inventory.hash_path(paths[name]) for name in ARTIFACT_FIELDS}
         # These explicit pins cover the served page, wrapper, controller, and
@@ -265,18 +278,24 @@ def build_manifest(config):
         require(inspect_image(config["docker_command"], config["docker_image"], inventory.remaining(), socket) == image,
                 "docker_image_changed")
         inventory.stable()
-        return {"schema_version": 1, "working_directory": str(paths["working_directory"]),
+        if binding:
+            validate_binding(binding)
+        return {"schema_version": schema_version, "working_directory": str(paths["working_directory"]),
                 "wz_path": str(paths["wz_path"]), "inventory_roots": [str(root) for root in roots],
                 **references, "docker_image": config["docker_image"], "docker_image_id": image,
-                "files": [files[path] for path in sorted(files)], "extra_files": extra_references}
+                "files": [files[path] for path in sorted(files)], "extra_files": extra_references,
+                **({"docker_binding": binding} if binding else {})}
+    except DockerBindingError as error:
+        raise FreezeError(str(error)) from None
     except (OSError, RuntimeError) as error:
         raise FreezeError("runtime_input_unavailable") from error
 
 
 def verify_manifest(manifest, *, docker_command, limits=None, docker_socket="/var/run/docker.sock"):
     """Rebuild the complete inventory and reject edits, additions, deletions, or image drift."""
-    require(isinstance(manifest, dict) and set(manifest) == SCHEMA_FIELDS
-            and type(manifest.get("schema_version")) is int and manifest["schema_version"] == 1,
+    require(isinstance(manifest, dict) and type(manifest.get("schema_version")) is int
+            and manifest["schema_version"] in (1, 2)
+            and set(manifest) == (SCHEMA_FIELDS if manifest["schema_version"] == 1 else SCHEMA_V2_FIELDS),
             "invalid_manifest_schema")
     require(isinstance(manifest.get("docker_image_id"), str)
             and IMAGE_ID.fullmatch(manifest["docker_image_id"]), "invalid_docker_image_id")
@@ -298,7 +317,7 @@ def verify_manifest(manifest, *, docker_command, limits=None, docker_socket="/va
               "docker_image": manifest["docker_image"], "docker_command": docker_command,
               "docker_socket": docker_socket, "limits": limits,
               "extra_files": [item["path"] for item in manifest["extra_files"]]}
-    actual = build_manifest(config)
+    actual = build_manifest(config, schema_version=manifest["schema_version"])
     require(_json(actual) == _json(manifest), "runtime_manifest_drift")
     return manifest
 
@@ -356,10 +375,12 @@ def main(argv=None):
             manifest = read_private_json(args.manifest)
             # CLI configuration is also authoritative: do not verify an obsolete
             # manifest's old paths after the operator switched configured inputs.
-            require(_json(build_manifest(config)) == _json(manifest), "runtime_manifest_drift")
+            require(isinstance(manifest, dict), "invalid_manifest_schema")
+            require(_json(build_manifest(config, schema_version=manifest.get("schema_version"))) == _json(manifest),
+                    "runtime_manifest_drift")
             result = {"verified": True, "file_count": len(manifest["files"])}
     except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
-        code = str(error) if isinstance(error, FreezeError) else "runtime_freeze_failed"
+        code = str(error) if isinstance(error, FreezeError) and str(error) in FREEZE_ERROR_CODES else "runtime_freeze_failed"
         print(json.dumps({"frozen": False, "verified": False, "code": code}))
         return 1
     print(json.dumps(result, sort_keys=True))

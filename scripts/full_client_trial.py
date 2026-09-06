@@ -27,6 +27,7 @@ from typing import Protocol
 import uuid
 
 from full_client_score import verify_trial_bundle
+from full_client_freeze import FREEZE_ERROR_CODES
 
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\Z")
@@ -40,6 +41,27 @@ STATUS_FIELDS = ("ready", "queue_idle", "server_stopped", "account_offline",
 # Never infer safety from a spelling pattern or load this list from adapter
 # output/configuration: an unknown future code deliberately remains opaque.
 MAX_ERROR_JSON = 512
+# Only these reviewed relay failures may cross the private adapter and public
+# dashboard boundary. A safe-looking identifier or exception type is not enough.
+RELAY_ERROR_CODES = frozenset("""
+invalid_run_identity client_state_stale run_owner_changed recorder_not_ready
+client_busy_or_not_ready api_key_not_configured
+invalid_input_acknowledgement client_already_connected unknown_recording_run
+recording_client_mismatch recording_already_saved capture_metadata_already_saved
+trial_capture_metadata_required run_intent_incomplete run_intent_conflict
+run_cannot_be_released successful_run_cannot_be_discarded invalid_total_token_limit
+invalid_docker_image_id invalid_trial_context trial_requires_matching_attempt_identity
+corrupt_runs_require_acknowledgment trial_requires_guard_lock_descriptors client_owner_mismatch
+previous_run_not_finalized run_intent_already_claimed api_request_limit api_token_budget_too_small
+api_run_identity_mismatch api_invalid_program api_model_mismatch run_cancelled
+trial_requires_two_configured_guard_locks invalid_guard_lock_path guard_lock_path_mismatch
+guard_lock_descriptor_mismatch guard_descriptor_is_not_exclusively_locked trial_renderer_is_pinned
+invalid_browser_session_state run_is_active browser_session_unavailable browser_must_be_waiting
+trial_renderer_not_connected invalid_admin_request unexpected_guard_descriptors unknown_admin_operation
+invalid_admin_ancillary_data too_many_guard_descriptors invalid_admin_request_size
+invalid_docker_binding docker_binding_required docker_binding_mismatch docker_executable_changed
+untrusted_docker_executable invalid_docker_socket invalid_docker_command docker_binding_unavailable
+""".split())
 RUNTIME_ERROR_CODES = frozenset("""
 account_state_unavailable actual_api_request_mismatch actual_api_response_mismatch
 admin_operation_failed admin_request_limit admin_response_limit
@@ -81,7 +103,7 @@ unowned_server_cleanup_refused unprivileged_services_required unsupported_progra
 unsupported_runtime_config waiting_browser_required web_entrypoint_mismatch web_interpreter_mismatch
 web_process_missing web_process_predates_frozen_sources web_runtime_paths_mismatch web_uid_mismatch
 world_helper_or_worker_active world_or_queue_lock_not_owned
-""".split())
+""".split()) | FREEZE_ERROR_CODES | RELAY_ERROR_CODES
 
 
 class TrialError(RuntimeError):

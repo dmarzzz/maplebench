@@ -41,6 +41,8 @@ contents. The required version-1 fields are:
 | `game_ports` | Actual login/channel TCP ports; each must be listening on a socket owned by this Cosmic PID |
 | `dropin_root` | Exactly `/run/systemd/system` |
 | `systemctl`, `journalctl`, `docker` | Absolute existing host executable paths |
+| `docker_launcher` | Optional, exactly `/usr/bin/sudo`; produces only `/usr/bin/sudo -n <docker>` |
+| `docker_socket` | Existing local Unix socket path; default `/var/run/docker.sock`, canonical target must match the manifest |
 
 The scenario contains `program_seconds` (22 or 60), `trial_budgets` exactly equal
 to the runner request's budgets, `instructions_sha256` of the bridge's formatted
@@ -66,9 +68,41 @@ WorkingDirectory and ExecStart with the pinned Java/JAR/WZ paths, a 1536 MiB Jav
 heap and two active processors. Actual process arguments and service working
 directory are checked after start. The prior service launch returns when the
 owned runtime drop-in is removed; no persistent service change is required.
-Docker inspection uses the existing local Unix daemon and never pulls images.
+New trials require runtime manifest schema 2. Its `docker_binding` has exactly
+`schema_version:1`, `executable:{path,sha256}`, `launcher:null` or
+`launcher:{path:"/usr/bin/sudo",sha256}`, and `socket_path`. Paths name the
+canonical existing executable and local Unix socket. The freezer's
+`docker_command` is either `[absolute_docker]` or exactly
+`["/usr/bin/sudo","-n",absolute_docker]`; the backend configuration must select
+the same command and endpoint. No image is pulled. Schema 1 remains verifiable
+for historical evidence but cannot authorize a new production trial.
+
+The private `start` request must include the frozen `docker_binding` alongside
+`docker_image_id`. The bridge validates it before claiming a new attempt and
+again before the provider call; the executor checks it at launch and cleanup.
+The binding becomes part of the immutable request identity and private result.
+Public start, status and renderer-poll responses omit these host paths. The
+runtime and publication validator require the result's `dockerBinding` and
+`dockerImageId` to match the schema-2 runtime artifact.
+
+Inspection, execution and cleanup use the same fixed executable/launcher and
+explicit `--host unix://<socket_path>`. Each invocation has a fresh mode-0700
+directory containing an empty Docker config, passed with `--config`, and a
+minimal fixed environment. Inherited `MAPLEBENCH_DOCKER_COMMAND`, Docker
+contexts/hosts/configuration, HOME, PATH, XDG settings and credentials cannot
+redirect trial execution. Cleanup reuses the launch invocation and checks the
+executable pin again; drift fails the run without executing the changed binary.
+Generic non-trial adapters retain their existing operator-configured invocation.
+
+The host administrator remains responsible for the parent directories and
+socket service: these pins check executable bytes/owner/mode and the canonical
+socket's type/owner/mode, but do not authenticate a daemon against root or hash
+every ancestor. Python import roots, virtual-environment package bytes and
+third-party dependencies are a separate deployment gate; this Docker binding
+does not establish their complete identity.
+
 The manifest's `extra_files` must include the serving script, its sibling
-`full_client_bridge.py`, `full_client_session.py`, `full_client_capture.py`, `maple_agent.py`,
+`full_client_bridge.py`, `full_client_session.py`, `full_client_capture.py`, `full_client_docker.py`, `maple_agent.py`,
 `agent-sandbox.mjs` (the exact JavaScript dispatcher supplied to Docker), repository
 `ui/full-client/controller.js` and `waiting.html`, and client root
 `web/index.html`, `assets_server.py`, and `ws_proxy.py`. The actual nonroot web
@@ -82,7 +116,14 @@ The existing asset files are hashed in place, never copied into the repository.
 Configure the runner's command adapter with absolute Python executable, backend
 script, `--config`, and config path. Include all imported source dependencies in
 its frozen dependency list: collector, freeze, score, trial, publisher, bridge,
-and maple_agent. Protect those sources and configuration from other users.
+full_client_docker, and maple_agent. Protect those sources and configuration from other users.
+
+Operational errors cross the backend/runner/dashboard boundary only as exact
+reviewed codes. Freezer failures such as `inventory_timeout` and
+`runtime_manifest_drift`, and relay failures such as `recorder_not_ready` or
+`docker_binding_required`, remain visible. Unknown codes, additional error
+fields, raw stderr, private paths and arbitrary exception strings keep a generic
+failure. A code looking like an identifier does not make it safe.
 
 Apply the shared-host two-CPU bound to the runner and its subprocesses as well
 as the game server. An `RLIMIT_CPU` value limits accumulated CPU seconds; it

@@ -9,6 +9,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from full_client_docker_fixture import local_binding
 from full_client_bridge import FullClientBridge, write_json
 from maple_agent import validate_rpc, model_decision
 
@@ -452,6 +454,7 @@ class FullClientTests(unittest.TestCase):
             with mock.patch('full_client_bridge.threading.Thread'), tempfile.TemporaryFile() as world, tempfile.TemporaryFile() as queue:
                 run=bridge.start('api','gpt-6-astra',run_id='d'*32,request_id='d'*32,
                     total_token_limit=100000,trial_context=context,docker_image_id=image_id,
+                    docker_binding=local_binding(self,folder),private=True,
                     lease_fds=(world.fileno(),queue.fileno()))
             response={'id':'test-response','model':'gpt-6-astra','status':'completed',
                 'metadata':{'maplebench_run_id':'d'*32},
@@ -462,12 +465,60 @@ class FullClientTests(unittest.TestCase):
                  mock.patch('full_client_bridge.execute_program',return_value={'reason':'program_complete','actions':0,'steps':[]}) as execute:
                 bridge._run(run)
             self.assertEqual(execute.call_args.kwargs['docker_image'],image_id)
+            self.assertEqual(execute.call_args.kwargs['docker_binding'],run['dockerBinding'])
             result=json.loads((bridge.output/run['id']/'result.json').read_text())
             self.assertEqual(result['source'],'full-client-trial')
             self.assertEqual(result['trialContext'],context)
             self.assertEqual(result['controller']['dockerImageId'],image_id)
             self.assertLessEqual(result['controller']['apiTokenUpperBound'],100000)
             self.assertEqual(result['controller']['controllerSeconds'],24)
+
+    def test_trial_binding_is_required_immutable_and_private_before_worker_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            key=Path(folder)/'unused-test-key'; key.touch(mode=0o600)
+            bridge=FullClientBridge(Path(folder)/'runs',key); bridge.frame(self.frame())
+            options={'run_id':'e'*32,'request_id':'e'*32,
+                'trial_context':{'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64},
+                'docker_image_id':'sha256:'+'c'*64}
+            binding=local_binding(self,folder)
+            with mock.patch('full_client_bridge.threading.Thread') as thread, \
+                 tempfile.TemporaryFile() as world, tempfile.TemporaryFile() as queue:
+                with self.assertRaisesRegex(ValueError,'docker_binding_required'):
+                    bridge.start('api','gpt-6-astra',**options)
+                thread.assert_not_called()
+                options.update(docker_binding=binding,lease_fds=(world.fileno(),queue.fileno()))
+                public=bridge.start('api','gpt-6-astra',**options)
+                for descriptor in bridge.leases[public['id']]: self.addCleanup(os.close,descriptor)
+                self.assertNotIn('dockerBinding',public)
+                self.assertNotIn('dockerBinding',bridge.status()['run'])
+                self.assertNotIn('dockerBinding',bridge.frame(self.frame())['run'])
+                self.assertNotIn('dockerBinding',bridge.start('api','gpt-6-astra',**options))
+                self.assertEqual(bridge.start('api','gpt-6-astra',**options,private=True)['dockerBinding'],binding)
+                self.assertEqual(bridge.status(private=True)['run']['dockerBinding'],binding)
+                alternative=Path(folder)/'alternative'; alternative.mkdir()
+                with self.assertRaisesRegex(ValueError,'run_intent_conflict'):
+                    bridge.start('api','gpt-6-astra',**(options|{'docker_binding':local_binding(self,alternative)}))
+                self.assertEqual(thread.call_count,1)
+
+    def test_binding_change_after_capture_wait_rejects_api_without_spending(self):
+        with tempfile.TemporaryDirectory() as folder:
+            key=Path(folder)/'unused-test-key'; key.touch(mode=0o600)
+            bridge=FullClientBridge(Path(folder)/'runs',key); bridge.frame(self.frame())
+            binding=local_binding(self,folder)
+            with mock.patch('full_client_bridge.threading.Thread'), tempfile.TemporaryFile() as world, tempfile.TemporaryFile() as queue:
+                run=bridge.start('api','gpt-6-astra',run_id='e'*32,request_id='e'*32,
+                    trial_context={'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64},
+                    docker_image_id='sha256:'+'c'*64,docker_binding=binding,private=True,
+                    lease_fds=(world.fileno(),queue.fileno()))
+            def changed(*_): Path(binding['executable']['path']).write_bytes(b'changed while recording prepared')
+            with mock.patch.object(bridge,'_wait_for_capture',side_effect=changed), \
+                 mock.patch.object(bridge,'request',return_value=self.observation()), \
+                 mock.patch('full_client_bridge.bounded_request') as provider:
+                bridge._run(run)
+            provider.assert_not_called()
+            self.assertEqual(bridge.run['reason'],'docker_executable_changed')
+            self.assertEqual(bridge.run['apiOutcome'],'not_started')
+            bridge.frame(self.frame(releaseAck=run['id']))
 
     def test_invalid_private_runtime_caps_never_start_worker(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -554,6 +605,7 @@ class FullClientTests(unittest.TestCase):
             with mock.patch('full_client_bridge.threading.Thread'), tempfile.TemporaryFile() as world, tempfile.TemporaryFile() as queue:
                 run=bridge.start('api','gpt-6-astra',run_id='d'*32,request_id='d'*32,
                     trial_context={'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64},
+                    docker_binding=local_binding(self,folder),docker_image_id='sha256:'+'c'*64,private=True,
                     lease_fds=(world.fileno(),queue.fileno()))
             from full_client_bridge import ControlError
             with mock.patch.object(bridge,'_wait_for_capture',side_effect=ControlError('recorder_not_ready')), \
@@ -663,10 +715,12 @@ class FullClientTests(unittest.TestCase):
             with mock.patch('full_client_bridge.threading.Thread'), tempfile.TemporaryFile() as world, tempfile.TemporaryFile() as queue:
                 run=bridge.start('api','gpt-6-astra',run_id='f'*32,request_id='f'*32,
                     trial_context={'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64},
+                    docker_binding=local_binding(self,folder),docker_image_id='sha256:'+'c'*64,private=True,
                     lease_fds=(world.fileno(),queue.fileno()))
                 retained=list(bridge.leases[run['id']])
                 duplicate=bridge.start('api','gpt-6-astra',run_id='f'*32,request_id='f'*32,
                     trial_context={'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64},
+                    docker_binding=local_binding(self,folder),docker_image_id='sha256:'+'c'*64,private=True,
                     lease_fds=(world.fileno(),queue.fileno()))
                 self.assertEqual(duplicate['id'],run['id'])
                 self.assertEqual(bridge.leases[run['id']],retained)

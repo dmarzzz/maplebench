@@ -14,8 +14,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from full_client_publish import (PROGRAM_FORMAT, main, validate_manifest, _measure_video_probe,
-                                _probe_video, _video_probe_limits, _verify_settlement_policy, JSON_LIMIT)
-from full_client_score import open_verified_artifact, verify_trial_bundle
+                                _probe_video, _video_probe_limits, _verify_settlement_policy, _verify_docker_execution, JSON_LIMIT)
+from full_client_score import EvidenceError, open_verified_artifact, verify_trial_bundle
 from full_client_capture import capture_receipt
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_full_client_score import bundle_fixture, write_artifact
@@ -57,6 +57,29 @@ def complete_manifest():
 
 
 class PublicationGateTests(unittest.TestCase):
+    def test_new_runtime_binding_matches_receipt_without_accessing_host_docker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest=complete_manifest(); manifest['artifacts']={}
+            binding={'schema_version':1,'executable':{'path':'/frozen/private/docker','sha256':'a'*64},
+                     'launcher':{'path':'/usr/bin/sudo','sha256':'b'*64},'socket_path':'/frozen/private/docker.sock'}
+            runtime={'schema_version':2,'docker_binding':binding,'docker_image_id':'sha256:'+'c'*64}
+            write_artifact(Path(directory),manifest['artifacts'],'runtime_manifest',runtime)
+            manifest['result']['controller'].update(dockerBinding=copy.deepcopy(binding),dockerImageId=runtime['docker_image_id'])
+            with patch('full_client_docker.executable_reference',side_effect=AssertionError('offline evidence only')):
+                _verify_docker_execution(manifest,directory)
+                for change in (lambda controller:controller.pop('dockerBinding'),
+                               lambda controller:controller['dockerBinding'].update(socket_path='/other/socket'),
+                               lambda controller:controller['dockerBinding']['executable'].update(sha256='d'*64),
+                               lambda controller:controller.update(dockerImageId='sha256:'+'d'*64)):
+                    bad=copy.deepcopy(manifest); change(bad['result']['controller'])
+                    with self.assertRaisesRegex(EvidenceError,'docker: frozen execution binding'):
+                        _verify_docker_execution(bad,directory)
+            # Historical bundles are not relabeled or rewritten by the new check.
+            old=complete_manifest(); old['artifacts']={}
+            _verify_docker_execution(old,directory)
+            write_artifact(Path(directory),old['artifacts'],'runtime_manifest',{'schema_version':1})
+            _verify_docker_execution(old,directory)
+
     def assert_blocked(self, manifest, reason):
         verdict = validate_manifest(manifest)
         self.assertFalse(verdict["ready"], verdict)

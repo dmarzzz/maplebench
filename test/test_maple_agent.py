@@ -5,8 +5,14 @@ import os
 from pathlib import Path
 import tempfile
 import time
+import sys
 import unittest
 from unittest.mock import Mock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from full_client_docker_fixture import local_binding
+from full_client_docker import DockerBindingError
 
 SPEC = importlib.util.spec_from_file_location('maple_agent', Path(__file__).parents[1] / 'scripts/maple_agent.py')
 agent = importlib.util.module_from_spec(SPEC)
@@ -85,7 +91,8 @@ class ProtocolBoundaryTest(unittest.TestCase):
 class ExecutorAcknowledgementTest(unittest.TestCase):
     """Drive the trusted executor protocol without launching a process."""
     def execute_messages(self, messages, endpoint=None, *, program_seconds=10,
-                         max_actions=10, cancelled_wait=False, write=None):
+                         max_actions=10, cancelled_wait=False, write=None, docker_binding=None,
+                         construction_error=None, launch_error=None, cleanup_error=None):
         clock=[100.0]
         process=Mock()
         process.poll.return_value=None
@@ -102,17 +109,77 @@ class ExecutorAcknowledgementTest(unittest.TestCase):
         event.is_set.return_value=False
         event.wait.side_effect=wait
         packets=b''.join(json.dumps(value).encode()+b'\n' for value in messages+[{'type':'done','ok':True}])
-        with patch.object(agent,'docker_command',return_value=['unused-test-command']), \
-             patch.object(agent.subprocess,'Popen',return_value=process), \
-             patch.object(agent.subprocess,'run'), \
+        original = agent.docker_command
+        with patch.object(agent,'docker_command',side_effect=construction_error,
+                          wraps=original if docker_binding else None,
+                          **({} if docker_binding else {'return_value':['unused-test-command']})), \
+             patch.object(agent.subprocess,'Popen',return_value=process,side_effect=launch_error) as launch, \
+             patch.object(agent.subprocess,'run',side_effect=cleanup_error) as cleanup, \
              patch.object(agent.selectors,'DefaultSelector',return_value=selector), \
              patch.object(agent.os,'set_blocking'), patch.object(agent.os,'read',return_value=packets), \
              patch.object(agent,'_write_packet',side_effect=write), \
              patch.object(agent.time,'monotonic',side_effect=lambda:clock[0]):
-            result=agent.execute_program('await sdk.observe();',SCENARIO|{'adapter':'full-client'},
-                'http://127.0.0.1:8790',deadline=100+program_seconds+2,program_seconds=program_seconds,
-                max_actions=max_actions,request_fn=request,cancel_event=event)
+            try:
+                result=agent.execute_program('await sdk.observe();',SCENARIO|{'adapter':'full-client'},
+                    'http://127.0.0.1:8790',deadline=100+program_seconds+2,program_seconds=program_seconds,
+                    max_actions=max_actions,request_fn=request,cancel_event=event,docker_binding=docker_binding)
+            finally:
+                self.launch_call, self.cleanup_call = launch.call_args, cleanup.call_args
         return result,calls,clock[0]
+
+    def test_bound_execution_and_cleanup_use_same_invocation_despite_hostile_environment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            binding = local_binding(self, folder)
+            def mutate(*_):
+                os.environ['MAPLEBENCH_DOCKER_COMMAND'] = 'changed private-launcher'
+                os.environ['DOCKER_HOST'] = 'tcp://changed.invalid'
+                return {'accepted':True,'observation':OBS}
+            with patch.dict(os.environ, {'PATH':'/private/bin','HOME':'/private/home',
+                    'DOCKER_HOST':'tcp://private.invalid','DOCKER_CONTEXT':'private-context',
+                    'DOCKER_CONFIG':'/private/config','MAPLEBENCH_DOCKER_COMMAND':'private-launcher'}):
+                result, _, _ = self.execute_messages([rpc('observe',[])], mutate, docker_binding=binding)
+            launch, cleanup = self.launch_call, self.cleanup_call
+            prefix = launch.args[0][:launch.args[0].index('run')]
+            self.assertEqual(prefix[0], binding['executable']['path'])
+            self.assertEqual(prefix[-2:], ['--host','unix://' + binding['socket_path']])
+            self.assertEqual(cleanup.args[0][:-3], prefix)
+            self.assertEqual(cleanup.kwargs['env'], launch.kwargs['env'])
+            self.assertEqual(set(launch.kwargs['env']), {'PATH','LC_ALL','HOME','DOCKER_CONFIG'})
+            self.assertNotIn('private-', str((launch, cleanup)))
+            self.assertEqual(result['reason'], 'program_complete')
+            self.assertFalse(Path(launch.kwargs['env']['DOCKER_CONFIG']).exists())
+
+    def test_bound_config_removed_on_construction_launch_and_cleanup_failure(self):
+        for stage in ('construction','launch','cleanup','binding_cleanup'):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as folder:
+                binding = local_binding(self, folder)
+                original = agent.bound_invocation
+                configs=[]
+                from contextlib import contextmanager
+                @contextmanager
+                def track(value):
+                    with original(value) as invocation:
+                        configs.append(Path(invocation[1]['DOCKER_CONFIG']))
+                        yield invocation
+                def mutate(*_):
+                    Path(binding['executable']['path']).write_bytes(b'changed after launch')
+                    return {'accepted':True,'observation':OBS}
+                with patch.object(agent,'bound_invocation',track):
+                    if stage == 'construction':
+                        with self.assertRaisesRegex(ValueError,'synthetic construction'):
+                            self.execute_messages([],docker_binding=binding,construction_error=ValueError('synthetic construction'))
+                    else:
+                        result, _, _ = self.execute_messages([rpc('observe',[])],
+                            mutate if stage=='binding_cleanup' else None, docker_binding=binding,
+                            launch_error=OSError('private launch') if stage=='launch' else None,
+                            cleanup_error=OSError('private cleanup') if stage=='cleanup' else None)
+                        self.assertNotIn('private launch',str(result))
+                        if stage=='binding_cleanup':
+                            self.assertEqual(result['reason'],'infrastructure_error')
+                            self.assertEqual(result['error'],'docker_executable_changed')
+                            self.assertIsNone(self.cleanup_call)
+                self.assertEqual(len(configs),1)
+                self.assertFalse(configs[0].exists())
 
     def test_endpoint_timeout_at_program_end_is_uncertain_not_a_clean_timeout(self):
         for method,args in [('attack',[42]),('pressKeys',[['LEFT'],100]),('observe',[])]:
@@ -311,6 +378,25 @@ class DockerIsolationTest(unittest.TestCase):
         self.assertEqual(result['reason'], 'program_complete', result)
         self.assertEqual(result['actions'], 1)
         self.assertEqual(calls[-1][1], {'type': 'basic_attack', 'targetId': 42})
+
+    def test_frozen_local_sudo_binding_executes_existing_image_under_hostile_routing(self):
+        if not sys.platform.startswith('linux') or not Path('/usr/bin/sudo').is_file():
+            self.skipTest('Requires the vetted Linux sudo Docker runner')
+        from full_client_docker import freeze_binding
+        from full_client_freeze import inspect_image
+        command=['/usr/bin/sudo','-n','/usr/bin/docker']
+        binding=freeze_binding(command,'/var/run/docker.sock')
+        image_id=inspect_image(command,'node:22.19.0-bookworm-slim',5,binding['socket_path'])
+        with patch.dict(os.environ,{'DOCKER_HOST':'tcp://unused.invalid:2375','DOCKER_CONTEXT':'unused',
+                'DOCKER_CONFIG':'/private/unused','HOME':'/private/unused','PATH':'/private/unused',
+                'MAPLEBENCH_DOCKER_COMMAND':'unused-launcher','OPENAI_API_KEY':'must-stay-on-host'}):
+            result,calls=self.execute('''
+              if (process.env.OPENAI_API_KEY) throw new Error('Credential crossed boundary');
+              await sdk.attack((await sdk.observe()).monsters[0].objectId);
+            ''',docker_image=image_id,docker_binding=binding)
+        self.assertEqual(result['reason'],'program_complete',result)
+        self.assertEqual(result['actions'],1)
+        self.assertEqual(len(calls),2)
 
     def test_continuous_replanning_keeps_real_docker_program_acting(self):
         calls, actions = [], []

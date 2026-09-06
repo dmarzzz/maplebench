@@ -1,5 +1,8 @@
 """Offline failure tests for the private backend; never touch live services/DB."""
 import hashlib
+import contextlib
+import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -7,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import stat
 import unittest
 from unittest.mock import MagicMock, patch
 import zipfile
@@ -22,6 +26,8 @@ class RuntimeTests(unittest.TestCase):
         self.run_id = "a" * 32
         self.directory = self.root / self.run_id
         self.directory.mkdir(mode=0o700)
+        self.binding = {"schema_version": 1, "executable": {"path": "/usr/bin/docker", "sha256": "a" * 64},
+                        "launcher": None, "socket_path": str(Path("/var/run/docker.sock").resolve())}
         self.host = MagicMock()
         self.host.remaining.return_value = 120
         self.host.now.return_value = 2000
@@ -236,11 +242,28 @@ class RuntimeTests(unittest.TestCase):
         self.backend.admin("status")
         self.assertEqual(self.host.admin.call_args.kwargs["lock_fds"], ())
 
+    def test_new_trial_docker_binding_requires_schema2_and_exact_operator_routes(self):
+        for manifest in ({"schema_version":1}, {"schema_version":2}, {"schema_version":2.0,"docker_binding":self.binding}):
+            self.backend.manifest=manifest
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode,'docker_binding_required'):
+                self.backend.docker_binding()
+        self.backend.manifest={"schema_version":2,"docker_binding":self.binding}
+        self.assertEqual(self.backend.docker_binding(),self.binding)
+        for name, value in (('docker','/private/docker'),('docker_socket','/private/docker.sock'),
+                            ('docker_launcher','/usr/bin/sudo')):
+            with self.subTest(name=name), patch.dict(self.backend.config,{name:value}):
+                with self.assertRaisesRegex(runtime.RuntimeErrorCode,'docker_binding_mismatch'):
+                    self.backend.docker_binding()
+        binding=copy.deepcopy(self.binding);binding['launcher']={'path':'/usr/bin/sudo','sha256':'b'*64}
+        self.backend.manifest['docker_binding']=binding
+        with patch.dict(self.backend.config,{'docker_launcher':'/usr/bin/sudo'}):
+            self.assertEqual(self.backend.docker_binding(),binding)
+
     def test_failed_api_start_claim_is_durable_and_not_replayed(self):
         self.backend.owned_server = MagicMock()
         self.backend.account_state = MagicMock(return_value=2)
         self.backend.state["session"]["login_at_ms"] = 1000
-        self.backend.manifest = {"docker_image_id": "sha256:" + "1" * 64}
+        self.backend.manifest = {"schema_version": 2, "docker_binding": self.binding, "docker_image_id": "sha256:" + "1" * 64}
         self.backend.context["request"].update(scenario_fingerprint="2" * 64, baseline_sha256="3" * 64,
             budgets={"controller_seconds": 24, "max_actions": 80, "max_output_tokens": 3000, "max_total_tokens": 9000})
         from full_client_bridge import PROMPT
@@ -261,7 +284,7 @@ class RuntimeTests(unittest.TestCase):
         from full_client_bridge import PROMPT
         self.host.now.return_value = 25000
         self.backend.owned_server = MagicMock()
-        self.backend.manifest = {"docker_image_id": "sha256:" + "1" * 64}
+        self.backend.manifest = {"schema_version": 2, "docker_binding": self.binding, "docker_image_id": "sha256:" + "1" * 64}
         self.backend.context["request"].update(scenario_fingerprint="2" * 64, baseline_sha256="3" * 64,
             budgets={"controller_seconds": 24, "max_actions": 80, "max_output_tokens": 3000, "max_total_tokens": 9000})
         self.backend.scenario = {"program_seconds": 22, "reasoning": {"effort": "low"},
@@ -297,7 +320,7 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(online[0])
             events.append("metadata")
             self.backend.state["result"] = {"source": "full-client-trial",
-                "controller": run | {"model": "gpt-6-astra", "mode": "api", "dockerImageId": self.backend.manifest["docker_image_id"]},
+                "controller": run | {"model": "gpt-6-astra", "mode": "api", "dockerImageId": self.backend.manifest["docker_image_id"], "dockerBinding": self.binding},
                 "api": {"model": "gpt-6-astra", "status": "completed", "usage": {"output_tokens": 30, "total_tokens": 50}},
                 "trialContext": {"scenario_fingerprint": "2" * 64, "baseline_sha256": "3" * 64},
                 "timing": {"startedAtMs": 1000, "endedAtMs": 23000},
@@ -638,7 +661,7 @@ class RuntimeTests(unittest.TestCase):
     def web_fixture(self):
         script = self.root / "repo/scripts/serve-full-client.py"
         client = self.root / "client"
-        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "maple_agent.py", "agent-sandbox.mjs")),
+        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "maple_agent.py", "agent-sandbox.mjs")),
                     *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "waiting.html")),
                     *(client / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))]
         for path in required:
@@ -776,6 +799,42 @@ class RuntimeTests(unittest.TestCase):
                 values["environ"] = bad
                 with self.assertRaisesRegex(runtime.RuntimeErrorCode, "legacy_bot_adapter_must_be_disabled"):
                     self.backend.validate_process(unit)
+
+
+class SafeRuntimeErrorTests(unittest.TestCase):
+    def test_admin_only_preserves_exact_reviewed_error_envelopes(self):
+        host=runtime.Host(); host.remaining=MagicMock(return_value=5)
+        cases=[({'ok':False,'error':code},code) for code in
+               ('recorder_not_ready','client_busy_or_not_ready','docker_executable_changed','guard_lock_descriptor_mismatch')]
+        cases += [({'ok':False,'error':'private_code_looks_safe'},'admin_operation_failed'),
+                  ({'ok':False,'error':'/private/password'},'admin_operation_failed'),
+                  ({'ok':False,'error':['recorder_not_ready']},'admin_operation_failed'),
+                  ({'ok':False,'error':'recorder_not_ready','detail':'private-marker'},'admin_operation_failed')]
+        for envelope,expected in cases:
+            connection=MagicMock(); connection.recv.return_value=runtime.encoded(envelope)
+            manager=MagicMock(); manager.__enter__.return_value=connection
+            with self.subTest(expected=expected), patch.object(runtime.socket,'socket',return_value=manager), \
+                 patch.object(Path,'lstat',return_value=MagicMock(st_mode=stat.S_IFSOCK|0o600)):
+                with self.assertRaisesRegex(runtime.RuntimeErrorCode,'^'+expected+'$'):
+                    host.admin('/unused/admin.sock',{'op':'status'})
+
+    def test_cli_preserves_vetted_freezer_codes_but_never_arbitrary_exception_text(self):
+        for error,expected in ((runtime.FreezeError('inventory_timeout'),'inventory_timeout'),
+                               (runtime.FreezeError('runtime_manifest_drift'),'runtime_manifest_drift'),
+                               (runtime.DockerBindingError('docker_executable_changed'),'docker_executable_changed'),
+                               (runtime.FreezeError('/private/password'),'runtime_operation_failed'),
+                               (runtime.RuntimeErrorCode('private_looks_safe'),'runtime_operation_failed'),
+                               (ValueError('/private/password'),'runtime_operation_failed')):
+            output=io.StringIO()
+            source=MagicMock(); source.buffer=io.BytesIO(runtime.encoded({'operation':'status','context':{},'timeout_seconds':5}))
+            with self.subTest(error=type(error).__name__), patch.object(runtime.os,'geteuid',return_value=0), \
+                 patch.object(runtime.sys,'platform','linux'), patch.object(runtime.sys,'stdin',source), \
+                 patch.object(runtime,'read_private_json',return_value={}), \
+                 patch.object(runtime,'CosmicRuntime') as backend, contextlib.redirect_stdout(output):
+                backend.return_value.perform.side_effect=error
+                self.assertEqual(runtime.main(['--config','/unused/private.json']),1)
+            self.assertEqual(json.loads(output.getvalue()),{'error':expected})
+            self.assertNotIn('/private/password',output.getvalue())
 
 
 if __name__ == "__main__":

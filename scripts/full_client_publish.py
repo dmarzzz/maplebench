@@ -36,6 +36,7 @@ import tempfile
 from full_client_score import (EvidenceError, SOURCE, JSON_LIMIT, parse_json,
                                open_verified_artifact, read_artifact_bytes, read_json_artifact,
                                same_json, verified_artifact, verify_trial_bundle)
+from full_client_docker import DockerBindingError, validate_binding
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -413,6 +414,32 @@ def _probe_video(path, expected_sha256):
         raise EvidenceError("video: ffprobe unavailable, timed out, or rejected the recording") from error
 
 
+def _verify_docker_execution(manifest, artifact_root):
+    """Check receipt identity offline; never inspect this machine's Docker.
+
+    Legacy bundles predate the execution binding and keep their original
+    contract. New runtime manifests require the exact recorded binding.
+    """
+    controller = manifest["result"]["controller"]
+    artifacts = manifest["artifacts"]
+    runtime = (read_json_artifact(artifact_root, artifacts, "runtime_manifest")
+               if "runtime_manifest" in artifacts else None)
+    if not controller.get("dockerBinding") and (runtime is None or isinstance(runtime, dict)
+            and type(runtime.get("schema_version")) is int and runtime["schema_version"] == 1):
+        return
+    try:
+        if not isinstance(runtime, dict) or type(runtime.get("schema_version")) is not int or runtime["schema_version"] != 2:
+            raise DockerBindingError("docker_binding_required")
+        binding = validate_binding(runtime.get("docker_binding"), verify_files=False)
+        if (not same_json(controller.get("dockerBinding"), binding)
+                or controller.get("dockerImageId") != runtime.get("docker_image_id")
+                or not isinstance(runtime.get("docker_image_id"), str)
+                or not re.fullmatch("sha256:[0-9a-f]{64}", runtime["docker_image_id"])):
+            raise DockerBindingError("docker_binding_mismatch")
+    except DockerBindingError as error:
+        raise EvidenceError("docker: frozen execution binding is missing, invalid or differs from the controller receipt") from error
+
+
 def _verify_persisted_manifest(manifest, artifact_root):
     def require(condition, reason):
         if not condition:
@@ -428,6 +455,7 @@ def _verify_persisted_manifest(manifest, artifact_root):
     result = manifest["result"]
     require(same_json(read_json_artifact(artifact_root, artifacts, "result"), result),
             "artifacts.result: complete result artifact differs from manifest")
+    _verify_docker_execution(manifest, artifact_root)
     scenario = read_json_artifact(artifact_root, artifacts, "scenario")
     require(isinstance(scenario, dict) and scenario.get("id") == manifest["scenario"]["id"],
             "artifacts.scenario: frozen scenario ID differs from manifest")

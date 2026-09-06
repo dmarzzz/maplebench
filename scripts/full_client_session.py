@@ -137,7 +137,7 @@ class SessionCoordinator:
             raise ControlError('unexpected_guard_descriptors')
         if operation=='status':
             with self.bridge.lock:
-                return {'bridge':self.bridge.status(),'session':self.status(),
+                return {'bridge':self.bridge.status(private=True),'session':self.status(),
                         'observation':self.bridge._snapshot() if self.bridge.fresh() else None}
         if operation in ('prepare_wait','disconnect'):
             return self.navigate('waiting')
@@ -162,7 +162,8 @@ class SessionCoordinator:
                 return self.bridge.start('api',request.get('model'),request.get('duration_seconds',22),
                     client=self.owner,run_id=run_id,request_id=request_id,
                     total_token_limit=request.get('total_token_limit'),trial_context=request.get('trial_context'),
-                    docker_image_id=request.get('docker_image_id'),lease_fds=descriptors)
+                    docker_image_id=request.get('docker_image_id'),docker_binding=request.get('docker_binding'),
+                    lease_fds=descriptors,private=True)
         raise ControlError('unknown_admin_operation')
 
 

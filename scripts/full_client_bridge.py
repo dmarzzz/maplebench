@@ -17,6 +17,7 @@ from pathlib import Path
 
 from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, validate_rpc
 from full_client_capture import capture_receipt
+from full_client_docker import DockerBindingError, validate_binding
 
 
 class ControlError(ValueError):
@@ -364,7 +365,7 @@ class FullClientBridge:
                 # The browser subtracts the full request round trip, requiring
                 # no shared wall clock to reject a delayed command response.
                 command['remainingMs'] = math.floor((self.pending['deadline']-dispatch_now)*1000)
-            return {'command': command, 'run': {k:v for k,v in self.run.items() if k != 'client'},
+            return {'command': command, 'run': {k:v for k,v in self.run.items() if k not in ('client','dockerBinding')},
                     'clock':self.capture_clock,
                     'releaseKeys':{'runId':self.run['id']} if self._cancelled(self.run.get('id')) else None}
 
@@ -402,9 +403,9 @@ class FullClientBridge:
             finally:
                 self.pending = None
 
-    def status(self):
+    def status(self, *, private=False):
         with self.lock:
-            return {'run':{k:v for k,v in self.run.items() if k != 'client'},
+            return {'run':{k:v for k,v in self.run.items() if k != 'client' and (private or k != 'dockerBinding')},
                     'quarantinedRuns':sorted(self.quarantines),
                     'fresh':self.fresh(), 'rendererConnected':self.client is not None and time.monotonic()-self.last_seen < 3,
                     'browserReleasePending':self._cancelled(self.run.get('id')) and self.run.get('id') not in self.release_acks,
@@ -465,7 +466,7 @@ class FullClientBridge:
                 self.run['recordingStatus'] = 'saved'
             return video
 
-    def _existing_run(self, identity):
+    def _existing_run(self, identity, *, private=False):
         folder = self.output/identity['id']
         try:
             intent = json.loads((folder/'request.json').read_text())
@@ -478,7 +479,7 @@ class FullClientBridge:
             raise ControlError('run_intent_incomplete')
         if self.run.get('id') == identity['id']:
             controller = self.run
-        return {k:v for k,v in controller.items() if k != 'client'}
+        return {k:v for k,v in controller.items() if k != 'client' and (private or k != 'dockerBinding')}
 
     def release_failed_run(self, run_id):
         """Explicit trusted-operator acknowledgment; never exposed by HTTP."""
@@ -509,7 +510,7 @@ class FullClientBridge:
             write_json(folder/'controller.json',self.run)
 
     def start(self, mode, model=None, duration_seconds=22, *, client=None, run_id=None, request_id=None,
-              total_token_limit=None, trial_context=None, docker_image_id=None, lease_fds=()):
+              total_token_limit=None, trial_context=None, docker_image_id=None, docker_binding=None, lease_fds=(), private=False):
         if mode not in ('script', 'api') or (mode == 'api' and model not in MODELS):
             raise ValueError('Invalid controller selection')
         if type(duration_seconds) is not int or duration_seconds not in (22, 60):
@@ -531,11 +532,20 @@ class FullClientBridge:
                 raise ControlError('invalid_run_identity')
         if trial_context is not None and (run_id is None or run_id != request_id):
             raise ControlError('trial_requires_matching_attempt_identity')
+        if trial_context is not None and (docker_binding is None or docker_image_id is None):
+            raise ControlError('docker_binding_required')
+        if docker_binding is not None:
+            try:
+                docker_binding = validate_binding(docker_binding)
+            except DockerBindingError as error:
+                raise ControlError(str(error)) from None
         run_id = run_id or request_id or uuid.uuid4().hex
         request_id = request_id or run_id
         identity = {'id':run_id,'requestId':request_id,'mode':mode,
                     'model':model if mode=='api' else None,'programSeconds':duration_seconds,
                     'totalTokenLimit':total_token_limit,'trialContext':trial_context,'dockerImageId':docker_image_id}
+        if docker_binding is not None:
+            identity['dockerBinding'] = docker_binding
         with self.lock:
             claim = self.output/'requests'/f'{request_id}.json'
             if claim.exists():
@@ -545,9 +555,9 @@ class FullClientBridge:
                     raise ControlError('run_intent_incomplete') from None
                 if previous != identity:
                     raise ControlError('run_intent_conflict')
-                return self._existing_run(identity)
+                return self._existing_run(identity, private=private)
             if (self.output/run_id).exists():
-                return self._existing_run(identity)
+                return self._existing_run(identity, private=private)
             self._check_cancelled(run_id)
             if self.quarantines:
                 raise ControlError('corrupt_runs_require_acknowledgment')
@@ -555,11 +565,11 @@ class FullClientBridge:
                     or not all(type(fd) is int for fd in lease_fds)):
                 raise ControlError('trial_requires_guard_lock_descriptors')
             if mode == 'api' and (not self.key_file or not self.key_file.is_file()):
-                raise ValueError('API key file is not configured')
+                raise ControlError('api_key_not_configured')
             if (self.run['status'] in ('requesting', 'running') or self.run.get('workerActive') or self.leases
                     or self._cancelled(self.run.get('id')) and self.run.get('id') not in self.release_acks
                     or self.pending or not self.fresh()):
-                raise ValueError('Client busy or not ready')
+                raise ControlError('client_busy_or_not_ready')
             if client is not None and client != self.client:
                 raise ControlError('client_owner_mismatch')
             if self.run.get('id'):
@@ -602,7 +612,7 @@ class FullClientBridge:
                 self.run.update(status='failed',reason='worker_start_failed',workerActive=False)
                 write_json(folder/'controller.json',self.run)
                 raise
-        return {k:v for k,v in value.items() if k != 'client'}
+        return {k:v for k,v in value.items() if k != 'client' and (private or k != 'dockerBinding')}
 
     def _run(self, run):
         out = self.output / run['id']
@@ -651,6 +661,10 @@ class FullClientBridge:
                         raise ControlError('api_request_limit')
                     with self.lock:
                         self._check_cancelled(run['id'])
+                    if run.get('trialContext'):
+                        if run.get('dockerBinding') is None:
+                            raise ControlError('docker_binding_required')
+                        validate_binding(run['dockerBinding'])
                     requested = True
                     payload = payload | {'metadata':dict(payload.get('metadata', {}),maplebench_run_id=run['id'])}
                     # Conservative preflight estimate, not a provider-guaranteed
@@ -728,6 +742,7 @@ class FullClientBridge:
                                      deadline=time.monotonic()+program_seconds+2, program_seconds=program_seconds,
                                      max_actions=action_limit, max_requests=sdk_request_limit,
                                      request_fn=run_request, step_callback=record_progress,cancel_event=cancel_event,
+                                     **({'docker_binding':run['dockerBinding']} if run.get('dockerBinding') else {}),
                                      **({'docker_image':run['dockerImageId']} if run.get('dockerImageId') else {}))
             timeline['program_ended_ms'] = round((time.monotonic()-started)*1000)
             phase = 'final_observation'
@@ -784,7 +799,8 @@ class FullClientBridge:
                 write_json(out/'controller.json', final_controller)
         except Exception as error:
             # Avoid writing arbitrary exception strings from credential-bearing I/O.
-            reason = error.code if isinstance(error, ControlError) else type(error).__name__
+            reason = (error.code if isinstance(error, ControlError) else str(error)
+                      if isinstance(error, DockerBindingError) else type(error).__name__)
             if result is None and progress_steps:
                 result = {'reason':reason,'actions':sum(step.get('method')=='pressKeys'
                               and step.get('result',{}).get('accepted') is True for step in progress_steps),

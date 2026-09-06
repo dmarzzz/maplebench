@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import urllib.parse
 import uuid
 
+from full_client_docker import DockerBindingError, bound_invocation, validate_binding
+
 MODELS = ('gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_LINE_BYTES = 16384
@@ -201,11 +203,11 @@ def docker_prefix():
     return prefix
 
 
-def docker_command(image, container_name, program_seconds):
+def docker_command(image, container_name, program_seconds, *, prefix=None):
     if not isinstance(image, str) or not image or image.startswith('-'):
         raise ValueError('Invalid sandbox image')
     script = Path(__file__).with_name('agent-sandbox.mjs').read_text()
-    return docker_prefix() + ['run', '--rm', '--pull=never', '--name', container_name, '-i',
+    return (docker_prefix() if prefix is None else list(prefix)) + ['run', '--rm', '--pull=never', '--name', container_name, '-i',
             '--network=none', '--read-only', '--cap-drop=ALL',
             '--security-opt=no-new-privileges:true', '--user=65534:65534',
             '--cpus=0.5', '--memory=256m', '--memory-swap=256m', '--pids-limit=32',
@@ -233,7 +235,22 @@ def _write_packet(pipe, value, deadline):
 def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
                     program_seconds=15, docker_image='node:22.19.0-bookworm-slim',
                     request_fn=bounded_request, step_callback=None, stop_when=None,
-                    cancel_event=None, max_requests=100):
+                    cancel_event=None, max_requests=100, docker_binding=None):
+    options = dict(deadline=deadline, max_actions=max_actions, program_seconds=program_seconds,
+                   docker_image=docker_image, request_fn=request_fn, step_callback=step_callback,
+                   stop_when=stop_when, cancel_event=cancel_event, max_requests=max_requests)
+    if docker_binding is not None:
+        # The scope includes command/selector construction, launch, protocol and
+        # cleanup: every failure removes the private temporary CLI config.
+        with bound_invocation(docker_binding) as invocation:
+            return _execute_program(code, scenario, base_url, **options,
+                                    docker_binding=docker_binding, invocation=invocation)
+    return _execute_program(code, scenario, base_url, **options)
+
+
+def _execute_program(code, scenario, base_url, *, deadline, max_actions,
+                     program_seconds, docker_image, request_fn, step_callback,
+                     stop_when, cancel_event, max_requests, docker_binding=None, invocation=None):
     """Run untrusted code in Docker and proxy its validated, bounded SDK calls."""
     _integer(max_requests, 1, 10000, 'program SDK request limit')
     if not isinstance(code, str) or not code.strip() or len(code) > 12000:
@@ -244,10 +261,17 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
     if remaining <= 0:
         return {'reason': 'time_limit', 'actions': 0, 'actionAttempts': 0, 'error': None, 'steps': []}
     name = 'maplebench-agent-' + uuid.uuid4().hex
-    command = docker_command(docker_image, name, remaining)
+    # Full-client trials supply a frozen local executable/endpoint. Generic
+    # adapters retain their operator-configured Docker command for compatibility.
+    if invocation is not None:
+        prefix, cli_env = invocation
+        command = docker_command(docker_image, name, remaining, prefix=prefix)
+    else:
+        prefix = docker_prefix()
+        command = docker_command(docker_image, name, remaining)
+        cli_env = {key: os.environ[key] for key in ('PATH', 'HOME', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'XDG_RUNTIME_DIR') if key in os.environ}
     # No OPENAI_API_KEY or other inherited credential reaches the Docker CLI.
     # The container receives only image defaults; no --env/volume/socket mounts.
-    cli_env = {key: os.environ[key] for key in ('PATH', 'HOME', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'XDG_RUNTIME_DIR') if key in os.environ}
     process = None
     selector = selectors.DefaultSelector()
     steps, logs, actions, action_attempts, rpc_count, output_bytes = [], [], 0, 0, 0, 0
@@ -404,10 +428,14 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
                 process.kill(); process.wait(timeout=2)
             # Also kill the daemon-owned container, including forked children.
             try:
-                subprocess.run(docker_prefix() + ['rm', '-f', name], env=cli_env, stdout=subprocess.DEVNULL,
+                if docker_binding is not None:
+                    validate_binding(docker_binding)
+                subprocess.run(prefix + ['rm', '-f', name], env=cli_env, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, timeout=3, check=False)
             except (OSError, subprocess.TimeoutExpired):
                 pass  # Its independent GNU timeout still applies.
+            except DockerBindingError as error:
+                outcome = {'reason': 'infrastructure_error', 'error': str(error)}
     return outcome | {'actions': actions, 'actionAttempts': action_attempts, 'steps': steps, 'logs': logs}
 
 
