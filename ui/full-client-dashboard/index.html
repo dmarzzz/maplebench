@@ -38,5 +38,13 @@
     </section>
     <footer><span id="scope">Read-only results. No runs are started from this page.</span><span>Full-client gameplay / Cosmic persistence</span></footer>
   </main>
+  <dialog id="replay" aria-labelledby="replay-title" aria-describedby="replay-verification">
+    <div class="replay-heading">
+      <div><h2 id="replay-title">Recorded attempt</h2><p id="replay-verification"></p></div>
+      <button id="replay-close" type="button" autofocus>Close replay</button>
+    </div>
+    <video id="replay-video" controls playsinline preload="metadata" aria-label="Recorded full-client gameplay"></video>
+    <p id="replay-playback-status" role="status"></p>
+  </dialog>
 </body>
 </html>

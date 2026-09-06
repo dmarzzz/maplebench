@@ -9,6 +9,36 @@
   const seconds=value=>Number.isFinite(value)?`${(value/1000).toFixed(1)}s`:'—';
   const alive=value=>value===true?'Alive':value===false?'Dead':'—';
   const badge=status=>{const node=el('span',labels[status]||'Unavailable');node.className='pill';if(Object.hasOwn(labels,status))node.classList.add(status);return node;};
+  let replayFocus=null,replayRunId=null,replaySection=null;
+  const replay=$('replay'),player=$('replay-video');
+  function stopReplay(){player.pause();player.removeAttribute('src');player.load();}
+  function openReplay(url,row,trigger){
+    replayFocus=trigger;replayRunId=row.id;replaySection=trigger.closest('tbody')?.id;
+    $('replay-title').textContent=`${row.returned_model||row.requested_model||'Script / no evaluated model'} · ${row.id.slice(0,12)}`;
+    $('replay-verification').textContent=row.persisted_xp!=null
+      ?'Persisted XP verified by the runner. Unranked recording.'
+      :row.kind==='integration'?'Unscored integration recording.'
+      :['failed','interrupted','recovered'].includes(row.status)?'No verified persisted score. This attempt is invalid for comparison.'
+      :'No verified persisted score. Unranked recording.';
+    if(row.attribution==='mismatch')$('replay-verification').textContent+=` Requested model: ${row.requested_model}.`;
+    $('replay-playback-status').textContent='Loading recording…';
+    stopReplay();player.src=url.href;
+    if(!replay.open)replay.showModal();
+    $('replay-close').focus();
+    player.play().catch(()=>{if(replay.open&&player.src===url.href)$('replay-playback-status').textContent='Use Play to start the recording.';});
+  }
+  $('replay-close').addEventListener('click',()=>replay.close());
+  replay.addEventListener('close',()=>{
+    stopReplay();
+    if(closed)return;
+    const replacement=[...document.querySelectorAll('button[data-recording-run]')].find(node=>node.dataset.recordingRun===replayRunId&&node.closest('tbody')?.id===replaySection);
+    const target=replayFocus?.isConnected?replayFocus:replacement||$('live-title');
+    if(target===$('live-title'))target.tabIndex=-1;
+    target.focus();replayFocus=null;
+  });
+  player.addEventListener('playing',()=>{if(replay.open)$('replay-playback-status').textContent='Playing saved recording.';});
+  player.addEventListener('ended',()=>{if(replay.open)$('replay-playback-status').textContent='Recording finished.';});
+  player.addEventListener('error',()=>{if(replay.open&&player.getAttribute('src'))$('replay-playback-status').textContent='The recording could not be loaded.';});
   function recording(cell,row){
     const value=row.recording;
     if(!value){cell.textContent='Not linked';return;}
@@ -16,8 +46,9 @@
       const url=new URL(value.url,location.href);
       if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash
           ||!/^\/(?:[A-Za-z0-9_-]+\/){0,3}recordings\/[A-Za-z0-9_./-]+\.(webm|mp4)$/.test(url.pathname)
-          ||(url.origin!==location.origin&&!['127.0.0.1','localhost','[::1]'].includes(url.hostname)))throw Error();
-      const link=el('a','Watch recording');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';cell.append(link);
+          ||url.origin!==location.origin)throw Error();
+      const button=el('button','Watch recording');button.type='button';button.className='watch-recording';button.dataset.recordingRun=row.id;
+      button.addEventListener('click',()=>openReplay(url,row,button));cell.append(button);
     }catch{cell.textContent='Not linked';}
   }
   function cell(row,value,className){const node=el('td',value);if(className)node.className=className;row.append(node);return node;}
@@ -31,9 +62,10 @@
     $('live-title').textContent=row.requested_model?`${row.requested_model} attempt`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
     const phase=phases.find(([key])=>key===row.phase)?.[1]||'Preparing';
     const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
+    const expectsRenderer=['running','requesting'].includes(row.status)&&['login','run_controller'].includes(row.phase);
     $('live-description').textContent=row.failure_code?`${failedPhase}: ${row.failure_code.replaceAll('_',' ')}.${row.api_response_saved?' The API response was saved; this attempt has no verified persisted score.':''}`
       :row.status==='completed'?'The attempt finished. Its persisted outcome and recording appear below.'
-      :`${phase}${row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
+      :`${phase}${expectsRenderer&&row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
     const current=phases.findIndex(([key])=>key===row.phase);$('phases').replaceChildren();
     for(const [index,[key,label]]of phases.entries()){const node=el('li',label),state=row.phase_states?.[key];if(state==='failed'){node.textContent=`${label}: failed`;node.className='phase-failed';}else if(row.status==='completed'||state==='returned')node.className='done';else if(index===current)node.className='current';$('phases').append(node);}
     $('live-model').textContent=row.returned_model||'Awaiting exact attribution';
@@ -79,6 +111,6 @@
     finally{if(!closed)timer=setTimeout(refresh,2000);}
   }
   $('groups').addEventListener('change',()=>{selected=$('groups').value;renderComparisons();});
-  window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);});
+  window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
   refresh();
 })();

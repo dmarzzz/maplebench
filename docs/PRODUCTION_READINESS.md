@@ -48,7 +48,7 @@ not claimed to be deterministic.
 - `scripts/full_client_freeze.py`: read-only inventory and drift verification
   for existing server/client builds, configuration, scripts, WZ and sandbox
   image. It does not create a database baseline or copy game assets.
-- `scripts/full_client_dashboard.py`: allowlisted results projection for the
+- [Live results dashboard](FULL_CLIENT_DASHBOARD.md): allowlisted results projection for the
   full-client dashboard. It rechecks completed runner receipts, keeps failures
   visible, separates diagnostic client XP from persisted XP, and groups only
   matching frozen inputs. The gallery serves the exported JSON and explicitly
