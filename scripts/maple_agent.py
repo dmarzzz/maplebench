@@ -23,6 +23,9 @@ MODELS = ('gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_LINE_BYTES = 16384
 MAX_PROGRAM_OUTPUT = 131072
+# Leave time for the next relay poll and a post-hold acknowledgement. This is
+# an admission reserve, never permission to extend the program deadline.
+PRESS_KEYS_ACK_SECONDS = 0.5
 SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'properties': {'note': {'type': 'string'}, 'code': {'type': 'string'}},
@@ -239,7 +242,7 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
     end = min(deadline, time.monotonic() + program_seconds)
     remaining = end - time.monotonic()
     if remaining <= 0:
-        return {'reason': 'time_limit', 'actions': 0, 'error': None, 'steps': []}
+        return {'reason': 'time_limit', 'actions': 0, 'actionAttempts': 0, 'error': None, 'steps': []}
     name = 'maplebench-agent-' + uuid.uuid4().hex
     command = docker_command(docker_image, name, remaining)
     # No OPENAI_API_KEY or other inherited credential reaches the Docker CLI.
@@ -247,7 +250,7 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
     cli_env = {key: os.environ[key] for key in ('PATH', 'HOME', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'XDG_RUNTIME_DIR') if key in os.environ}
     process = None
     selector = selectors.DefaultSelector()
-    steps, logs, actions, rpc_count, output_bytes = [], [], 0, 0, 0
+    steps, logs, actions, action_attempts, rpc_count, output_bytes = [], [], 0, 0, 0, 0
     seen_ids = set()
     buffer = b''
     outcome = {'reason': 'program_error', 'error': 'Sandbox exited without completion'}
@@ -335,12 +338,18 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
                             raise AgentError('Invalid SDK request ID') from None
                         _write_packet(process.stdin, {'id': rpc_id, 'ok': False, 'error': str(error)}, end)
                         continue
-                    if method not in ('observe', 'wait') and actions >= max_actions:
+                    if method not in ('observe', 'wait') and action_attempts >= max_actions:
                         outcome = {'reason': 'action_limit', 'error': None}
                         finished = True; break
                     left = end - time.monotonic()
                     if left <= 0:
                         raise TimeoutError('Program deadline reached')
+                    if method == 'pressKeys' and left < action['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS:
+                        # Do not shorten or dispatch the model's hold. Preserve
+                        # the fixed budget with a passive, cancellable tail.
+                        cancelled = cancel_event.wait(left) if cancel_event is not None else time.sleep(left)
+                        outcome = {'reason': 'replaced' if cancelled else 'time_limit', 'error': None}
+                        finished = True; break
                     if method == 'wait':
                         delay = min(action / 1000, left)
                         if cancel_event is not None:
@@ -350,11 +359,25 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
                         else:
                             time.sleep(delay)
                         result = {'waitedMs': round(delay * 1000)}
-                    elif method == 'observe':
-                        result = request_fn(base_url + '/v1/observe', timeout=min(3, left))
                     else:
-                        actions += 1
-                        result = request_fn(base_url + '/v1/action', action, timeout=min(3, left))
+                        if method != 'observe':
+                            # Reservations cap rejected and uncertain attempts,
+                            # while actions counts only acknowledged acceptance.
+                            action_attempts += 1
+                        try:
+                            result = (request_fn(base_url + '/v1/observe', timeout=min(3, left))
+                                      if method == 'observe' else
+                                      request_fn(base_url + '/v1/action', action, timeout=min(3, left)))
+                        except Exception as error:
+                            safe_error = 'endpoint_timeout' if isinstance(error, TimeoutError) else 'endpoint_error'
+                            record({'kind': 'sdk_error', 'method': method, 'args': message['args'],
+                                    'error': safe_error,
+                                    'outcome': 'unavailable' if method == 'observe' else 'uncertain'})
+                            outcome = {'reason': 'replaced' if cancel_event is not None and cancel_event.is_set()
+                                       else 'infrastructure_error', 'error': safe_error}
+                            finished = True; break
+                        if method != 'observe' and isinstance(result, dict) and result.get('accepted') is True:
+                            actions += 1
                     step = {'kind': 'sdk', 'method': method, 'args': message['args'], 'result': result}
                     record(step)
                     obs = result if method == 'observe' else result.get('observation', {}) if isinstance(result, dict) else {}
@@ -385,7 +408,7 @@ def execute_program(code, scenario, base_url, *, deadline, max_actions=500,
                                stderr=subprocess.DEVNULL, timeout=3, check=False)
             except (OSError, subprocess.TimeoutExpired):
                 pass  # Its independent GNU timeout still applies.
-    return outcome | {'actions': actions, 'steps': steps, 'logs': logs}
+    return outcome | {'actions': actions, 'actionAttempts': action_attempts, 'steps': steps, 'logs': logs}
 
 
 def model_decision(model, instructions, input_value, api_key, *, output_tokens, timeout, request_fn=bounded_request):
@@ -459,7 +482,7 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
     decisions, recent, usages = [], [], []
     started = time.monotonic()
     deadline = started + wall_seconds
-    token_count = actions = api_requests_started = 0
+    token_count = actions = action_attempts = api_requests_started = 0
     reason, failure = 'decision_limit', None
 
     active = None
@@ -470,10 +493,11 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
             step_file.flush()
 
         def record_execution(turn, result):
-            nonlocal actions
+            nonlocal actions, action_attempts
             actions += result['actions']
+            action_attempts += result.get('actionAttempts', result['actions'])
             decision = decisions[turn]
-            decision['execution'] = {key: result[key] for key in ('reason', 'error', 'actions', 'logs') if key in result}
+            decision['execution'] = {key: result[key] for key in ('reason', 'error', 'actions', 'actionAttempts', 'logs') if key in result}
             write_json(out / 'decisions.json', decisions)
             choice = decision['choice']
             recent.append({'note': choice['note'][:240], 'code': choice['code'],
@@ -492,7 +516,7 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
                 result = state['future'].result()
             except Exception as error:
                 result = {'reason':'infrastructure_error', 'error':type(error).__name__,
-                          'actions':state['actions'], 'steps':[]}
+                          'actions':state['actions'], 'actionAttempts':state['actionAttempts'], 'steps':[]}
             record_execution(state['turn'], result)
             active = None
             return result
@@ -518,11 +542,11 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
                     reason = 'death'; break
                 if stop_when and stop_when(obs):
                     reason = 'completed'; break
-                if actions + (active['actions'] if active else 0) >= max_actions:
+                if action_attempts + (active['actionAttempts'] if active else 0) >= max_actions:
                     reason = 'action_limit'; break
                 input_value = {'observation': obs, 'recent_programs': recent[-2:],
                                'remainingSeconds': round(deadline - time.monotonic(), 2),
-                               'remainingActions': max_actions - actions - (active['actions'] if active else 0)}
+                               'remainingActions': max_actions - action_attempts - (active['actionAttempts'] if active else 0)}
                 if active is not None:
                     input_value['active_program'] = {'turn': active['turn'],
                         'code': decisions[active['turn']]['choice']['code'],
@@ -565,21 +589,24 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
                         reason, failure = previous['reason'], previous.get('error'); break
                     if time.monotonic() >= deadline:
                         reason = 'time_limit'; break
-                    if actions >= max_actions:
+                    if action_attempts >= max_actions:
                         reason = 'action_limit'; break
-                    state = {'turn': turn, 'cancel': threading.Event(), 'actions': 0}
+                    state = {'turn': turn, 'cancel': threading.Event(), 'actions': 0, 'actionAttempts': 0}
                     def worker_step(step, state=state):
-                        if step.get('kind') == 'sdk' and step.get('method') not in ('observe', 'wait'):
+                        if step.get('kind') in ('sdk', 'sdk_error') and step.get('method') not in ('observe', 'wait'):
+                            state['actionAttempts'] += 1
+                        if (step.get('kind') == 'sdk' and step.get('method') not in ('observe', 'wait')
+                                and step.get('result', {}).get('accepted') is True):
                             state['actions'] += 1
                         persist_step(step, state['turn'])
                     state['future'] = pool.submit(execute_fn, choice['code'], scenario, base_url,
-                        deadline=deadline, max_actions=max_actions-actions, program_seconds=program_seconds,
+                        deadline=deadline, max_actions=max_actions-action_attempts, program_seconds=program_seconds,
                         docker_image=docker_image, request_fn=request_fn, step_callback=worker_step,
                         stop_when=stop_when, cancel_event=state['cancel'], max_requests=600)
                     active = state
                 else:
                     result = execute_fn(choice['code'], scenario, base_url, deadline=deadline,
-                                        max_actions=max_actions - actions, program_seconds=program_seconds,
+                                        max_actions=max_actions - action_attempts, program_seconds=program_seconds,
                                         docker_image=docker_image, request_fn=request_fn,
                                         step_callback=persist_step, stop_when=stop_when)
                     record_execution(turn, result)
@@ -604,7 +631,7 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
                 if reason not in ('infrastructure_error', 'budget_limit') and last['reason'] in terminals:
                     reason, failure = last['reason'], last.get('error')
     result = {'reason': reason, 'error': failure, 'decisions': len(decisions),
-              'apiUsage': usages, 'accountedTokens': token_count, 'actions': actions,
+              'apiUsage': usages, 'accountedTokens': token_count, 'actions': actions, 'actionAttempts': action_attempts,
               'apiRequestsStarted': api_requests_started,
               'controlMode': control_mode, 'apiLatencyMs': sum(d['latencyMs'] for d in decisions),
               'usage_complete': api_requests_started == len(usages) and all(

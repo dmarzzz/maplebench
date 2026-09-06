@@ -28,12 +28,12 @@
     <section aria-labelledby="comparison-title">
       <div class="section-heading"><div><h2 id="comparison-title">Same-start comparisons</h2><p>Matching baseline, scenario, budgets, and runtime. Unranked.</p></div><label>Starting state<select id="groups" aria-label="Comparison starting state"></select></label></div>
       <p id="comparison-empty" class="empty">A comparison needs verified completed attempts from at least two models.</p>
-      <div class="table-wrap" id="comparison-wrap" hidden><table><caption class="visually-hidden">Verified persisted outcomes for the selected starting state</caption><thead><tr><th>Exact model</th><th>Persisted XP</th><th>At logout</th><th>API time</th><th>Play time</th><th>Recording</th></tr></thead><tbody id="comparison-rows"></tbody></table></div>
-      <p class="note">Persisted XP includes penalties and is measured after normal logout. Verification comes from the completed runner’s checked evidence. Recording review and publication approval are separate.</p>
+      <div class="table-wrap" id="comparison-wrap" hidden><table><caption class="visually-hidden">Verified persisted outcomes for the selected starting state</caption><thead><tr><th>Exact model</th><th>Persisted XP</th><th>At logout</th><th>API time</th><th>Play time</th><th>Publication evidence</th><th>Recording</th></tr></thead><tbody id="comparison-rows"></tbody></table></div>
+      <p class="note">Persisted XP includes penalties and is measured after normal logout. Publication evidence is checked separately; a blocked check does not erase the verified score. All displayed runs remain unranked.</p>
     </section>
     <section aria-labelledby="history-title">
       <div class="section-heading"><div><h2 id="history-title">Every visible attempt</h2><p>Failures, recoveries, and unscored integration runs stay in the history.</p></div><span id="count">0 attempts</span></div>
-      <div class="table-wrap"><table><caption class="visually-hidden">Full-client attempt history</caption><thead><tr><th>Attempt / exact model</th><th>Status</th><th>Persisted XP</th><th>Diagnostic XP</th><th>Actions</th><th>Recording</th></tr></thead><tbody id="history"></tbody></table></div>
+      <div class="table-wrap"><table><caption class="visually-hidden">Full-client attempt history</caption><thead><tr><th>Attempt / exact model</th><th>Status</th><th>Persisted XP</th><th>Diagnostic XP</th><th>Actions</th><th>Publication evidence</th><th>Recording</th></tr></thead><tbody id="history"></tbody></table></div>
       <p id="history-empty" class="empty">No attempts have been exported yet.</p>
     </section>
     <footer><span id="scope">Read-only results. No runs are started from this page.</span><span>Full-client gameplay / Cosmic persistence</span></footer>

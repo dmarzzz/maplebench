@@ -16,7 +16,7 @@ The local dashboard shows the recordings and retains failed attempts separately.
 | --- | --- | ---: | ---: | --- | ---: |
 | `gpt-6-astra` | `feb1b38a0df741c6b6d04e9df10d04ba` | 27 | 0 | Yes | 1,175 |
 | `gpt-5.6-sol` | `219403efd71e4f899ec2217f419a98e2` | 0 | 0 | Yes | 2,414 |
-| `gpt-5.6-terra` | `332112a3a8ee4694bbe8854b292dbe8b` | 35 | +4,500 | Yes | 2,607 |
+| `gpt-5.6-terra` | `332112a3a8ee4694bbe8854b292dbe8b` | 35 attempted; 34 receipts | +4,500 | Yes | 2,607 |
 | `gpt-5.6-luna` | `a88b83dc537d4805ac3a0062429a1df7` | 0 | 0 | Yes | 1,908 |
 
 Each model made exactly one provider request. Sol and Luna returned an async
@@ -56,8 +56,14 @@ review artifacts reference those exact hashes; original candidates, API results,
 capture receipts and videos remain unchanged. Full encoded-media coverage is
 checked by bounded decoding and capture receipts, independently of visual review.
 
-Publication validation is recorded separately from runner completion. The
-validator checks the existing frozen active/termination budgets and recorded
+Publication validation using source revision `2a5a4a7` passed the complete private
+bundles for Astra, Sol and Luna. Terra failed: the executor counted 35 attempted
+actions but retained only 34 completed key-action receipts when its last endpoint
+request reached the deadline. Its database score remains verified; its action
+trace is incomplete and the run is ineligible for ranking. The original evidence
+and failed verdict remain unchanged. No retry or replacement trial was run.
+
+The validator checks the existing frozen active/termination budgets and recorded
 scenario context; it never creates missing gameplay evidence or promotes an
 integration demo. See the current [readiness record](PRODUCTION_READINESS.md).
 
@@ -80,6 +86,18 @@ active SDK time remains bound to the unchanged active budget. Raw observation
 and capture evidence replace synthetic timeline flags that the real controller
 does not emit. None of these fixes changed the frozen inputs or actual results
 of the four completed trials.
+
+The subsequent executor fix separates attempted requests from acknowledged
+actions, preserves uncertain endpoint outcomes as failures, and avoids dispatch
+of a key hold that cannot fit before the active deadline. The bridge checks
+receipt consistency; the browser rejects delayed command responses and cannot
+acknowledge a hold that finishes after its deadline. These changes apply to a
+future versioned runtime. The historical Terra attempt remains blocked.
+
+A reported monster-visibility anomaly has no identified run or timestamp yet.
+Its cause remains unconfirmed and no score was changed. Investigation requires
+entity-lifecycle evidence; persisted XP alone does not establish a particular
+monster death. See the [class/task design](CLASS_BENCHMARK_DESIGN.md).
 
 ## Limits before a public ranking
 

@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location('maple_agent', Path(__file__).parents[1] / 'scripts/maple_agent.py')
 agent = importlib.util.module_from_spec(SPEC)
@@ -82,6 +82,86 @@ class ProtocolBoundaryTest(unittest.TestCase):
         self.assertNotIn(str(Path(__file__).parents[1]), '\n'.join(command))
 
 
+class ExecutorAcknowledgementTest(unittest.TestCase):
+    """Drive the trusted executor protocol without launching a process."""
+    def execute_messages(self, messages, endpoint=None, *, program_seconds=10,
+                         max_actions=10, cancelled_wait=False, write=None):
+        clock=[100.0]
+        process=Mock()
+        process.poll.return_value=None
+        selector=Mock()
+        selector.select.return_value=[(Mock(data='stdout',fileobj=process.stdout),1)]
+        calls=[]
+        def request(url,payload=None,timeout=None):
+            calls.append((url,payload,timeout))
+            return endpoint(url,payload,timeout,clock) if endpoint else {'accepted':True,'observation':OBS}
+        def wait(delay):
+            if not cancelled_wait: clock[0]+=delay
+            return cancelled_wait
+        event=Mock()
+        event.is_set.return_value=False
+        event.wait.side_effect=wait
+        packets=b''.join(json.dumps(value).encode()+b'\n' for value in messages+[{'type':'done','ok':True}])
+        with patch.object(agent,'docker_command',return_value=['unused-test-command']), \
+             patch.object(agent.subprocess,'Popen',return_value=process), \
+             patch.object(agent.subprocess,'run'), \
+             patch.object(agent.selectors,'DefaultSelector',return_value=selector), \
+             patch.object(agent.os,'set_blocking'), patch.object(agent.os,'read',return_value=packets), \
+             patch.object(agent,'_write_packet',side_effect=write), \
+             patch.object(agent.time,'monotonic',side_effect=lambda:clock[0]):
+            result=agent.execute_program('await sdk.observe();',SCENARIO|{'adapter':'full-client'},
+                'http://127.0.0.1:8790',deadline=100+program_seconds+2,program_seconds=program_seconds,
+                max_actions=max_actions,request_fn=request,cancel_event=event)
+        return result,calls,clock[0]
+
+    def test_endpoint_timeout_at_program_end_is_uncertain_not_a_clean_timeout(self):
+        for method,args in [('attack',[42]),('pressKeys',[['LEFT'],100]),('observe',[])]:
+            def timeout(url,payload,remaining,clock):
+                clock[0]=110
+                raise TimeoutError('private endpoint details must not be saved')
+            with self.subTest(method=method):
+                result,calls,_=self.execute_messages([rpc(method,args)],timeout)
+                self.assertEqual(result['reason'],'infrastructure_error')
+                self.assertEqual(result['error'],'endpoint_timeout')
+                self.assertEqual(result['actions'],0)
+                self.assertEqual(result['actionAttempts'],0 if method=='observe' else 1)
+                self.assertEqual(len(calls),1)
+                self.assertEqual(result['steps'][0]['kind'],'sdk_error')
+                self.assertEqual(result['steps'][0]['outcome'],'unavailable' if method=='observe' else 'uncertain')
+                self.assertNotIn('private endpoint',json.dumps(result))
+
+    def test_acknowledged_action_is_preserved_when_return_to_sandbox_times_out(self):
+        def timeout_reply(pipe,packet,end):
+            if packet.get('id'): raise TimeoutError('Sandbox reply timed out')
+        result,calls,_=self.execute_messages([rpc('attack',[42])],write=timeout_reply)
+        self.assertEqual(result['actions'],1)
+        self.assertEqual(result['actionAttempts'],1)
+        self.assertEqual(len(result['steps']),1)
+        self.assertTrue(result['steps'][0]['result']['accepted'])
+        self.assertEqual(len(calls),1)
+
+    def test_rejected_requests_consume_attempt_budget_without_counting_as_actions(self):
+        result,calls,_=self.execute_messages([rpc('attack',[42],i) for i in (1,2,3)],
+            lambda *_:{'accepted':False,'observation':OBS},max_actions=2)
+        self.assertEqual(result['reason'],'action_limit')
+        self.assertEqual(result['actions'],0)
+        self.assertEqual(result['actionAttempts'],2)
+        self.assertEqual(len(calls),2)
+        self.assertEqual(len(result['steps']),2)
+
+    def test_hold_and_ack_reserve_must_fit_or_tail_is_passive_and_cancellable(self):
+        for cancelled in (False,True):
+            with self.subTest(cancelled=cancelled):
+                result,calls,ended=self.execute_messages([rpc('pressKeys',[['LEFT'],1500])],
+                    program_seconds=1.9,cancelled_wait=cancelled)
+                self.assertEqual(result['reason'],'replaced' if cancelled else 'time_limit')
+                self.assertEqual(result['actions'],0)
+                self.assertEqual(result['actionAttempts'],0)
+                self.assertEqual(result['steps'],[])
+                self.assertEqual(calls,[])
+                self.assertEqual(ended,100 if cancelled else 101.9)
+
+
 class ControllerBudgetTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -113,6 +193,20 @@ class ControllerBudgetTest(unittest.TestCase):
                     'request_fn': self.request, 'execute_fn': self.execute}
         return agent.run_agent(agent.MODELS[0], SCENARIO, 'http://127.0.0.1:8790',
                                'synthetic-test-key', self.directory.name, **(defaults | kwargs))
+
+    def test_rejected_attempt_budget_is_shared_across_programs(self):
+        def rejected(code,scenario,base_url,**kwargs):
+            self.assertEqual(kwargs['max_actions'],2-len(self.programs))
+            self.programs.append(code)
+            step={'kind':'sdk','method':'attack','args':[42],'result':{'accepted':False,'observation':OBS}}
+            kwargs['step_callback'](step)
+            return {'reason':'program_complete','actions':0,'actionAttempts':1,'error':None,'steps':[step]}
+        result=self.run_controller(execute_fn=rejected,max_actions=2,max_calls=3)
+        self.assertEqual(result['reason'],'action_limit')
+        self.assertEqual(result['actions'],0)
+        self.assertEqual(result['actionAttempts'],2)
+        self.assertEqual(len(self.api_calls),2)
+        self.assertEqual(len(self.programs),2)
 
     def test_call_cap_usage_trace_and_private_configuration_exclusion(self):
         result = self.run_controller(on_decision=lambda value: self.callback_values.append(value))
@@ -267,6 +361,34 @@ class DockerIsolationTest(unittest.TestCase):
         result, calls = self.execute('for(let i=0;i<10;i++) await sdk.attack(42);', max_actions=2)
         self.assertEqual(result['reason'], 'action_limit', result)
         self.assertEqual(len(calls), 2)
+
+    def test_full_client_deadline_preserves_uncertain_and_undispatched_actions(self):
+        # Real Docker/SDK exchange, synthetic endpoint only: no game input or API.
+        for mode in ('endpoint_timeout','insufficient_hold_time'):
+            with self.subTest(mode=mode):
+                calls=[]
+                def endpoint(url,payload=None,timeout=None):
+                    calls.append((url,payload))
+                    time.sleep(timeout)
+                    raise TimeoutError('private test endpoint detail')
+                code=('await sdk.pressKeys(["LEFT"],100);' if mode=='endpoint_timeout' else
+                      'await sdk.wait(1700); await sdk.pressKeys(["LEFT"],1500);')
+                start=time.monotonic()
+                result=agent.execute_program(code,{'adapter':'full-client'},'http://127.0.0.1:8790',
+                    deadline=start+5,program_seconds=3,request_fn=endpoint)
+                self.assertLess(time.monotonic()-start,7)
+                self.assertEqual(result['actions'],0)
+                if mode=='endpoint_timeout':
+                    self.assertEqual(result['reason'],'infrastructure_error',result)
+                    self.assertEqual(result['actionAttempts'],1)
+                    self.assertEqual(len(calls),1)
+                    self.assertEqual(result['steps'][0]['outcome'],'uncertain')
+                    self.assertNotIn('private test endpoint',json.dumps(result))
+                else:
+                    self.assertEqual(result['reason'],'time_limit',result)
+                    self.assertEqual(result['actionAttempts'],0)
+                    self.assertEqual(calls,[])
+                    self.assertTrue(all(step['method']=='wait' for step in result['steps']))
 
 
 if __name__ == '__main__':

@@ -27,6 +27,10 @@ Comparisons require the same versioned scenario and baseline, balanced order,
 repetitions, uncertainty reporting, and visible failed attempts. Combat RNG is
 not claimed to be deterministic.
 
+The next coverage milestone is a [class and task suite](CLASS_BENCHMARK_DESIGN.md),
+informed by RuneBench's task matrix. These candidate classes, long-horizon metrics
+and party objectives remain a design; they are not claimed as running benchmarks.
+
 ## Components
 
 - [Durable runner](FULL_CLIENT_RUNNER.md): operation journal, existing locks,
@@ -103,10 +107,17 @@ server logs, model outputs, recordings, and host configuration in private ignore
 directories. Publish only deliberately reviewed evidence. Never expose the
 control plane publicly to make deployment easier.
 
-Production acceptance remains pending until the concrete backend and browser
-lifecycle complete that real end-to-end verification. Do not infer acceptance
-from documentation, synthetic receipts, successful compilation, or a previous
-integration demo.
+The concrete backend and browser completed four actual same-baseline trials on
+September 6, 2026. Full private publication validation passed Astra, Sol and Luna;
+Terra's persisted score passed but its incomplete final action receipt blocks
+publication. The [acceptance record](FULL_CLIENT_ACCEPTANCE.md) preserves exact
+run IDs, outcomes and limits. Historical integration demos remain unranked.
+
+This proves controlled end-to-end operation, including two explicit recoveries.
+It does not establish unattended production availability or a dependable ranking.
+Repeated trials, balanced order, uncertainty reporting and longer operational
+acceptance are still required. A publication failure cannot be repaired by
+rewriting the original controller result.
 
 Real integration exposed two launch/evidence issues that synthetic phases did
 not reveal: systemd requires an unquoted scalar WorkingDirectory, and Chrome

@@ -359,7 +359,17 @@
     }
     renderHeader();
   };
-  const executeInput = async command => {
+  const commandDeadline = (command, sentAt, sentWall, receivedAt, receivedWall) => {
+    const elapsed=receivedAt-sentAt, wallElapsed=receivedWall-sentWall;
+    if(!Number.isInteger(command.remainingMs) || command.remainingMs<30 || command.remainingMs>3000
+      || !Number.isFinite(elapsed) || !Number.isFinite(wallElapsed)
+      || elapsed<0 || wallElapsed<0 || Math.max(elapsed,wallElapsed)>2000
+      || Math.abs(elapsed-wallElapsed)>250) return NaN;
+    // Subtract the entire trip conservatively; server and laptop clocks need
+    // not agree. Recheck this local deadline immediately before keydown.
+    return receivedAt+command.remainingMs-Math.max(elapsed,wallElapsed);
+  };
+  const executeInput = async (command, deadline) => {
     if(activeCommand) return;
     const item={interrupted:false}; activeCommand=item;
     const keys=Array.isArray(command.keys)?command.keys.map(name=>keyNames[name]):[];
@@ -370,12 +380,14 @@
         || !capture?.recorderStarted || !capture.frames || capture.autoRunId!==command.runId || capture.stopping
         || (command.runId && command.runId!==run.id)
         || !keys.length||keys.length>3||new Set(keys).size!==keys.length||keys.some(code=>!code)
-        ||!Number.isInteger(command.durationMs)||command.durationMs<30||command.durationMs>1500) throw Error('Invalid input');
+        ||!Number.isInteger(command.durationMs)||command.durationMs<30||command.durationMs>1500
+        || !Number.isFinite(deadline) || performance.now()+command.durationMs>deadline) throw Error('Invalid input');
       releaseAll(false); game.focus();
+      if(performance.now()+command.durationMs>deadline) throw Error('Input deadline reached');
       for(const code of keys) { key(code,'keydown'); held.set(code,setTimeout(()=>release(code),command.durationMs)); }
       renderHeader();
       await new Promise(resolve=>setTimeout(resolve,command.durationMs));
-      ok=!item.interrupted;
+      ok=!item.interrupted && performance.now()<=deadline;
     } finally {
       keys.filter(Boolean).forEach(release);
       acknowledgement={id:command.id,ok}; activeCommand=null; renderHeader();
@@ -385,7 +397,7 @@
     if(closed) return;
     pollAbort=new AbortController(); const timeout=setTimeout(()=>pollAbort.abort(),2000);
     try {
-      const observation=observe(), ack=acknowledgement, clientSentAtMs=Date.now();
+      const observation=observe(), ack=acknowledgement, clientSentAtMs=Date.now(), clientSentAt=performance.now();
       const response=await fetch('/control/frame',{method:'POST',headers:{'Content-Type':'application/json'},signal:pollAbort.signal,
         body:JSON.stringify({client:clientId,observation,ageMs:Date.now()-(observation.capturedAt||0),renderAgeMs:Date.now()-(Module.MapleBenchRenderedAt||0),renderedHud:Module.MapleBenchHud||null,ack,
           page:'game',sessionAck,releaseAck,clientSentAtMs,captureClockAck:capture?.clock?.id,
@@ -393,7 +405,7 @@
             interrupted:capture.hidden||capture.errors>0||capture.relayLost||capture.stopping}:null,
           captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle'})});
       if(!response.ok) throw Error('Relay unavailable');
-      const state=await response.json(),clientReceivedAtMs=Date.now();
+      const state=await response.json(),clientReceivedAtMs=Date.now(),clientReceivedAt=performance.now();
       if(acknowledgement===ack) acknowledgement=null;
       relayConnected=true; disconnectedAt=null; updateRun(state.run);
       if(capture?.autoRunId===run.id && !run.captureClockAccepted && state.clock?.client_sent_ms===clientSentAtMs) {
@@ -402,7 +414,8 @@
       if(capture?.clock && run.captureClockAccepted===capture.clock.id) capture.clockVerified=true;
       if(state.releaseKeys?.runId) { cancelledRuns.add(state.releaseKeys.runId); releaseAll(true); releaseAck=state.releaseKeys.runId; }
       if(document.hidden || !fresh(observe())) releaseAll(true);
-      if(state.command && !state.releaseKeys) executeInput(state.command).catch(()=>{});
+      if(state.command && !state.releaseKeys) executeInput(state.command,
+        commandDeadline(state.command,clientSentAt,clientSentAtMs,clientReceivedAt,clientReceivedAtMs)).catch(()=>{});
       if(state.session?.desiredPage==='waiting' && !busy() && capture) stopRecording();
       const navigation=state.navigation;
       if(navigation && navigation.page==='waiting' && /^[a-f0-9]{32}$/.test(navigation.id)

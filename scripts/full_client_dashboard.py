@@ -35,6 +35,9 @@ from maple_agent import MODELS
 
 RUN=re.compile(r'[a-f0-9]{32}\Z')
 SHA=re.compile(r'[a-f0-9]{64}\Z')
+PUBLICATION_VERDICT=re.compile(r'publication-verdict-([a-f0-9]{7,40})\.json\Z')
+ACTION_COUNT_REASON='result.program.actions: count must match the complete input receipt list.'
+MAX_VERDICTS=16
 MAX_FILE=4*1024*1024
 MAX_READ=64*1024*1024
 STATUSES={'running','completed','failed','interrupted','recovering','recovered'}
@@ -63,7 +66,7 @@ def failure(value): return value if isinstance(value,str) and value in FAILURES 
 class Reader:
     def __init__(self): self.remaining=MAX_READ
 
-    def json(self,root,name,expected=None):
+    def json(self,root,name,expected=None,maximum=MAX_FILE):
         if not isinstance(name,str) or '\\' in name or '\x00' in name:
             raise ProjectionError('invalid_artifact_reference')
         relative=PurePosixPath(name)
@@ -75,7 +78,7 @@ class Reader:
             if target.is_symlink(): raise ProjectionError('symlink_evidence')
         with os.fdopen(os.open(target,os.O_RDONLY|os.O_NOFOLLOW),'rb') as stream:
             before=os.fstat(stream.fileno())
-            if not stat.S_ISREG(before.st_mode) or not 0<before.st_size<=min(MAX_FILE,self.remaining):
+            if not stat.S_ISREG(before.st_mode) or not 0<before.st_size<=min(MAX_FILE,maximum,self.remaining):
                 raise ProjectionError('evidence_read_limit')
             raw=stream.read(before.st_size+1)
             after=os.fstat(stream.fileno()); current=target.stat()
@@ -180,6 +183,69 @@ def verified_score(reader,folder,journal):
     return recomputed,result,group_id,refs
 
 
+def publication_evidence(reader,folder,run_id,refs,result,score,recording,now_ms):
+    """Project a private validator receipt without granting ranked eligibility.
+
+    The trusted validator is not rerun on a dashboard refresh. Its receipt must
+    bind the exact reviewed manifest and the runner's existing hashed evidence.
+    No private reason text or validator metadata crosses this projection.
+    """
+    candidates=[]
+    with os.scandir(folder) as entries:
+        for index,entry in enumerate(entries):
+            if index>=256: raise ProjectionError('publication_discovery_limit')
+            match=PUBLICATION_VERDICT.fullmatch(entry.name)
+            if not match: continue
+            if not entry.is_file(follow_symlinks=False) or len(candidates)>=MAX_VERDICTS:
+                raise ProjectionError('publication_discovery_limit')
+            value=reader.json(folder,entry.name,maximum=64*1024)
+            at=integer(value.get('validated_at_ms'))
+            verdict=mapping(value.get('verdict')); reasons=verdict.get('reasons')
+            if (type(value.get('schema_version')) is not int or value['schema_version']!=1
+                    or value.get('run_id')!=run_id or value.get('validator_source_commit')!=match[1]
+                    or not digest(value.get('validator_sha256')) or not digest(value.get('reviewed_manifest_sha256'))
+                    or at is None or not 0<at<=now_ms or value.get('externally_published') is not False
+                    or type(verdict.get('ready')) is not bool or not isinstance(reasons,list)
+                    or len(reasons)>32 or any(not isinstance(reason,str) or not 0<len(reason)<=1000 for reason in reasons)
+                    or (not reasons)!=verdict['ready']):
+                raise ProjectionError('invalid_publication_receipt')
+            candidates.append(value)
+    if not candidates: return {'status':'awaiting_review','reason_code':None}
+    candidates.sort(key=lambda value:value['validated_at_ms'],reverse=True)
+    if len(candidates)>1 and candidates[0]['validated_at_ms']==candidates[1]['validated_at_ms']:
+        raise ProjectionError('ambiguous_publication_receipt')
+    latest=candidates[0]
+    reviewed=reader.json(folder,'publication-reviewed.json',latest['reviewed_manifest_sha256'])
+    reviewed_refs=mapping(reviewed.get('artifacts')); video=mapping(reviewed.get('video'))
+    video_ref=mapping(refs.get('video')); ended=mapping(result.get('timing')).get('endedAtMs')
+    if (type(reviewed.get('schema_version')) is not int or reviewed['schema_version']!=2
+            or reviewed.get('run_kind')!='ranked'
+            or not same_json(reviewed.get('result'),result) or not same_json(reviewed.get('score'),score)
+            or not same_json(reviewed.get('timeline'),result.get('timeline'))
+            or any(not same_json(reviewed_refs.get(name),reference) for name,reference in refs.items())
+            or not number(ended) or latest['validated_at_ms']<ended
+            or video.get('reviewed') is not True or not digest(recording.get('sha256'))
+            or recording.get('status')!='completed'
+            or mapping(recording.get('overlay')).get('controller_id')!=run_id
+            or mapping(recording.get('overlay')).get('mode')!='api'
+            or mapping(recording.get('overlay')).get('model')!=mapping(result.get('controller')).get('model')
+            or video.get('path')!=video_ref.get('path') or video.get('sha256')!=video_ref.get('sha256')
+            or not same_json({k:v for k,v in video.items() if k!='reviewed'},
+                             {k:v for k,v in recording.items() if k!='reviewed'})):
+        raise ProjectionError('publication_manifest_mismatch')
+    review=reader.artifact(folder,reviewed_refs,'video_review')
+    reviewed_at=integer(review.get('reviewed_at_ms'))
+    if (review.get('run_id')!=run_id or review.get('video_sha256')!=recording['sha256']
+            or review.get('reviewed') is not True or review.get('post_render_capture') is not True
+            or not same_json(review.get('overlay'),recording.get('overlay'))
+            or reviewed_at is None or not ended<=reviewed_at<=latest['validated_at_ms']):
+        raise ProjectionError('publication_review_mismatch')
+    verdict=latest['verdict']
+    return {'status':'passed' if verdict['ready'] else 'blocked',
+            'reason_code':None if verdict['ready'] else
+                          'receipts_incomplete' if verdict['reasons']==[ACTION_COUNT_REASON] else 'details_unavailable'}
+
+
 def project_attempt(reader,run_id,folder,relay_folder,live,recording_map,now_ms,prefix):
     row={'id':run_id,'kind':'trial' if folder else 'integration','status':'unavailable','phase':None,'mode':'unknown',
          'requested_model':None,'returned_model':None,'attribution':'unknown','failure_code':None,'failure_phase':None,
@@ -187,8 +253,9 @@ def project_attempt(reader,run_id,folder,relay_folder,live,recording_map,now_ms,
          'created_at_ms':None,'updated_at_ms':None,'actions':None,'action_limit':None,
          'diagnostic_xp':None,'alive_at_last_observation':None,'alive_at_logout':None,
          'persisted_xp':None,'score_verification':'pending','comparison_group':None,
-         'ranked':False,'publication_eligible':False,'timing':{},'recording':None,'phase_states':{}}
-    journal={}; result={}; controller={}; refs={}; recording={}
+         'ranked':False,'publication_eligible':False,'publication_evidence':None,
+         'timing':{},'recording':None,'phase_states':{}}
+    journal={}; result={}; controller={}; refs={}; recording={}; score={}
     try:
         if folder:
             journal=reader.json(folder,'journal.json')
@@ -283,6 +350,10 @@ def project_attempt(reader,run_id,folder,relay_folder,live,recording_map,now_ms,
         if refs:
             try: recording=reader.artifact(folder,refs,'recording')
             except (ValueError,OSError,TypeError,KeyError,RecursionError): recording={}
+        if row['score_verification']=='runner_verified_receipts_rechecked':
+            try: row['publication_evidence']=publication_evidence(reader,folder,run_id,refs,result,score,recording,now_ms)
+            except (ValueError,OSError,TypeError,KeyError,RecursionError):
+                row['publication_evidence']={'status':'blocked','reason_code':'evidence_unavailable'}
         approved=mapping(mapping(recording_map).get(run_id))
         url=recording_url(approved.get('url'),prefix)
         if (url and digest(approved.get('sha256')) and approved['sha256']==recording.get('sha256')

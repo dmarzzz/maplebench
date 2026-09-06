@@ -65,6 +65,17 @@ class FullClientTests(unittest.TestCase):
                 bridge.request('/v1/action',{'type':'press_keys','keys':['LEFT'],'durationMs':100},timeout=0.02)
             self.assertIsNone(bridge.frame(frame)['command'])
 
+    def test_absolute_program_deadline_cannot_be_extended_by_a_late_request(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge=FullClientBridge(folder)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                bridge.frame(self.frame())
+                with self.assertRaises(TimeoutError):
+                    bridge.request('/v1/action',{'type':'press_keys','keys':['LEFT'],'durationMs':100},
+                                   timeout=3,input_deadline=99.9)
+                self.assertIsNone(bridge.pending)
+                self.assertIsNone(bridge.frame(self.frame())['command'])
+
     def test_run_duration_is_exactly_bounded(self):
         with tempfile.TemporaryDirectory() as folder:
             bridge=FullClientBridge(folder)
@@ -103,7 +114,9 @@ class FullClientTests(unittest.TestCase):
                     run=bridge.start('api','gpt-6-astra',duration)
                 accepted={'kind':'sdk','method':'pressKeys','args':[['RIGHT'],100],
                           'result':{'accepted':True,'observation':observation}}
-                outcome={'reason':'program_complete','actions':1,'steps':[accepted]}
+                observed={'kind':'sdk','method':'observe','args':[],'result':observation}
+                waited={'kind':'sdk','method':'wait','args':[100],'result':{'waitedMs':100}}
+                outcome={'reason':'program_complete','actions':1,'steps':[observed,waited,accepted]}
 
                 def execute(code,scenario,url,**kwargs):
                     self.assertEqual(kwargs['program_seconds'],duration)
@@ -112,9 +125,8 @@ class FullClientTests(unittest.TestCase):
                     self.assertEqual(kwargs['max_requests'],requests)
                     self.assertEqual(bridge.run['programStartedAtMs'],1200000)
                     progress=kwargs['step_callback']
-                    progress({'method':'observe','result':observation})
-                    progress({'method':'wait','result':{'waitedMs':100}})
-                    progress(accepted|{'result':{'accepted':False}})
+                    progress(observed)
+                    progress(waited)
                     self.assertEqual(bridge.run['actions'],0)
                     progress(accepted)
                     self.assertEqual(bridge.run['actions'],1)
@@ -216,6 +228,20 @@ class FullClientTests(unittest.TestCase):
             with mock.patch('full_client_bridge.time.monotonic',return_value=103):
                 bridge.frame(self.frame(ack={'id':'a'*32,'ok':True}))
                 self.assertNotIn('ack',bridge.pending)
+
+    def test_dispatch_requires_full_hold_plus_ack_time_and_exports_remaining_budget(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge=FullClientBridge(folder)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                bridge.frame(self.frame())
+                bridge.pending={'id':'a'*32,'keys':['RIGHT'],'durationMs':1500,'deadline':101.9}
+                self.assertIsNone(bridge.frame(self.frame())['command'])
+                self.assertNotIn('sent',bridge.pending)
+                bridge.pending['deadline']=102.1
+                command=bridge.frame(self.frame())['command']
+                self.assertEqual(command['durationMs'],1500)
+                self.assertGreaterEqual(command['remainingMs'],2099)
+                self.assertLessEqual(command['remainingMs'],2100)
 
     def test_uncertain_api_result_is_journaled_and_never_retried(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -547,9 +573,14 @@ class FullClientTests(unittest.TestCase):
                     run=bridge.start('script')
                 final=self.observation(); final['character']['alive']=alive
                 final['character']['hp']=100 if alive else 0
+                def execute(*args,**kwargs):
+                    steps=[{'kind':'sdk','method':'pressKeys','args':[['LEFT'],100],
+                            'result':{'accepted':True,'observation':final}} for _ in range(actions)]
+                    for step in steps: kwargs['step_callback'](step)
+                    return {'reason':reason,'actions':actions,'steps':steps}
                 with mock.patch.object(bridge,'_wait_for_capture'), \
                      mock.patch.object(bridge,'request',return_value=final), \
-                     mock.patch('full_client_bridge.execute_program',return_value={'reason':reason,'actions':actions,'steps':[]}):
+                     mock.patch('full_client_bridge.execute_program',side_effect=execute):
                     bridge._run(run)
                 self.assertEqual(bridge.run['status'],expected)
 
@@ -572,6 +603,33 @@ class FullClientTests(unittest.TestCase):
                     bridge._run(run)
                 self.assertEqual(bridge.run['status'],expected)
                 self.assertEqual(bridge.run['reason'],'time_limit' if expected=='completed' else reason)
+
+    def test_unmatched_or_uncertain_actions_never_become_completed(self):
+        accepted={'kind':'sdk','method':'pressKeys','args':[['LEFT'],100],
+                  'result':{'accepted':True,'observation':self.observation()}}
+        uncertain={'kind':'sdk_error','method':'pressKeys','args':[['LEFT'],100],
+                   'outcome':'uncertain','error':'endpoint_timeout'}
+        cases=[(1,[],[],'program_complete',None,'action_receipt_mismatch'),
+               (0,[accepted],[accepted],'program_complete',None,'action_receipt_mismatch'),
+               (1,[accepted],[],'program_complete',None,'action_receipt_mismatch'),
+               (0,[uncertain],[uncertain],'program_timeout','endpoint_timeout','program_timeout')]
+        for actions,steps,progress,reason,error,expected_reason in cases:
+            with self.subTest(reason=reason,actions=actions,steps=steps), tempfile.TemporaryDirectory() as folder:
+                bridge=FullClientBridge(folder); bridge.frame(self.frame())
+                with mock.patch('full_client_bridge.threading.Thread'):
+                    run=bridge.start('script')
+                clock=[100]
+                def execute(*args,**kwargs):
+                    for step in progress: kwargs['step_callback'](step)
+                    clock[0]+=22
+                    return {'reason':reason,'error':error,'actions':actions,'steps':steps}
+                with mock.patch.object(bridge,'_wait_for_capture'), \
+                     mock.patch.object(bridge,'request',return_value=self.observation()), \
+                     mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                     mock.patch('full_client_bridge.execute_program',side_effect=execute):
+                    bridge._run(run)
+                self.assertEqual(bridge.run['status'],'failed')
+                self.assertEqual(bridge.run['reason'],expected_reason)
 
     def test_cancel_wakes_pending_input_and_positive_ack_cannot_revive_it(self):
         with tempfile.TemporaryDirectory() as folder:

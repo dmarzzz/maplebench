@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 
-from maple_agent import MODELS, bounded_request, execute_program, model_decision, validate_rpc
+from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, validate_rpc
 from full_client_capture import capture_receipt
 
 
@@ -353,16 +353,22 @@ class FullClientBridge:
                     self.run['leaseReleasePending']=False
                     write_json(self.output/self.run['id']/'controller.json',self.run)
             command = None
-            if valid_frame and self.pending and not self._cancelled(self.pending.get('runId')) and not self.pending.get('sent') and self.pending['deadline'] > now:
+            dispatch_now = time.monotonic()
+            if (valid_frame and self.pending and not self._cancelled(self.pending.get('runId'))
+                    and not self.pending.get('sent')
+                    and self.pending['deadline']-dispatch_now >= self.pending['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS):
                 self.pending['sent'] = True
-                self.pending['sentAt'] = now
+                self.pending['sentAt'] = dispatch_now
                 command = {k: self.pending[k] for k in ('id', 'keys', 'durationMs')}
                 command['runId'] = self.run.get('id')
+                # The browser subtracts the full request round trip, requiring
+                # no shared wall clock to reject a delayed command response.
+                command['remainingMs'] = math.floor((self.pending['deadline']-dispatch_now)*1000)
             return {'command': command, 'run': {k:v for k,v in self.run.items() if k != 'client'},
                     'clock':self.capture_clock,
                     'releaseKeys':{'runId':self.run['id']} if self._cancelled(self.run.get('id')) else None}
 
-    def request(self, url, payload=None, timeout=3, *, run_id=None):
+    def request(self, url, payload=None, timeout=3, *, run_id=None, input_deadline=None):
         with self.lock:
             run_id = run_id or self.run.get('id')
             self._check_cancelled(run_id)
@@ -378,6 +384,8 @@ class FullClientBridge:
             pending = {'id': uuid.uuid4().hex, 'keys': action['keys'], 'durationMs': action['durationMs'],
                        'runId':run_id,
                        'deadline': time.monotonic() + min(timeout, 3)}
+            if input_deadline is not None:
+                pending['deadline']=min(pending['deadline'],input_deadline)
             self.pending = pending
             try:
                 while 'ack' not in pending:
@@ -612,9 +620,10 @@ class FullClientBridge:
         final_controller = None
         progress_steps = []
         cancel_event = self.cancel_events.get(run['id'])
+        input_deadline = None
 
         def run_request(url, payload=None, timeout=3):
-            return self.request(url,payload,timeout,run_id=run['id'])
+            return self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
 
         try:
             if run.get('trialContext'):
@@ -706,15 +715,15 @@ class FullClientBridge:
                 self.run.update(programStartedAtMs=round(time.time()*1000))
 
             def record_progress(step):
-                progress_steps.append(step)
-                if step.get('method') != 'pressKeys' or step.get('result', {}).get('accepted') is not True:
-                    return
                 with self.lock:
                     if self.run.get('id') == run['id'] and self.run.get('status') == 'running':
-                        self.run['actions'] += 1
+                        progress_steps.append(step)
+                        if step.get('method') == 'pressKeys' and step.get('result', {}).get('accepted') is True:
+                            self.run['actions'] += 1
 
             phase = 'program_execution'
             program_started=time.monotonic()
+            input_deadline=program_started+program_seconds
             result = execute_program(code, SCENARIO, 'http://127.0.0.1:8840',
                                      deadline=time.monotonic()+program_seconds+2, program_seconds=program_seconds,
                                      max_actions=action_limit, max_requests=sdk_request_limit,
@@ -728,15 +737,21 @@ class FullClientBridge:
                 result['reason']='time_limit'
             interrupted = any(step.get('method') == 'pressKeys' and step.get('result', {}).get('accepted') is not True
                               for step in result['steps'])
+            acknowledged = sum(step.get('kind')=='sdk' and step.get('method')=='pressKeys'
+                               and step.get('result',{}).get('accepted') is True for step in result['steps'])
+            complete_receipts = (type(result.get('actions')) is int and result['actions']==acknowledged
+                                 and result['steps']==progress_steps
+                                 and not any(step.get('kind')=='sdk_error' for step in result['steps']))
             legitimate=(result['reason']=='program_complete'
                 or result['reason']=='death' and final['character']['alive'] is False
                 or result['reason']=='action_limit' and result['actions']==action_limit
                 or result['reason']=='time_limit' and time.monotonic()-program_started>=program_seconds)
-            status = 'completed' if legitimate and not interrupted else 'failed'
-            reason = 'input_interrupted' if interrupted else result['reason']
+            status = 'completed' if legitimate and result.get('error') is None and not interrupted and complete_receipts else 'failed'
+            reason = ('action_receipt_mismatch' if not complete_receipts and result.get('error') is None
+                      else 'input_interrupted' if interrupted and result.get('error') is None else result['reason'])
             timeline['status'] = status
             phase = 'evidence_save'
-            result_document = {'controller':run | {'status':status, 'workerActive':False,'actions':result['actions'], 'returnedModel':meta.get('model') if meta else None}, 'program':result, 'initial':initial,
+            result_document = {'controller':run | {'status':status, 'reason':reason,'workerActive':False,'actions':result['actions'], 'returnedModel':meta.get('model') if meta else None}, 'program':result, 'initial':initial,
                                          'final':final, 'source':'full-client-trial' if run.get('trialContext') else 'client telemetry; unscored integration run',
                                          'trialContext':run.get('trialContext'),
                                          'timing':{'startedAtMs':started_ms, 'endedAtMs':round(time.time()*1000),
@@ -771,7 +786,8 @@ class FullClientBridge:
             # Avoid writing arbitrary exception strings from credential-bearing I/O.
             reason = error.code if isinstance(error, ControlError) else type(error).__name__
             if result is None and progress_steps:
-                result = {'reason':reason,'actions':sum(step.get('method')=='pressKeys' for step in progress_steps),
+                result = {'reason':reason,'actions':sum(step.get('method')=='pressKeys'
+                              and step.get('result',{}).get('accepted') is True for step in progress_steps),
                           'steps':progress_steps,'error':reason}
             with self.lock:
                 self.run.update(status='failed', reason=reason, failurePhase=phase,

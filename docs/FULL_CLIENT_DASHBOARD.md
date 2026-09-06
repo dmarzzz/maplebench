@@ -44,6 +44,14 @@ the exact saved video's SHA-256 digest. A URL alone is insufficient. Copy and
 verify a recording before adding that mapping; never symlink the private trial
 directory into the gallery. A replay link does not imply publication approval.
 
+A separate publication-evidence column shows the trusted validator's checked,
+blocked or awaiting-review status. The exporter discovers a bounded set of
+versioned verdict receipts, binds the latest verdict to the exact reviewed
+manifest and original runner artifacts, and verifies the hashed visual review.
+It exports only fixed labels; private reasons, paths and review text stay private.
+A blocked publication check preserves an independently verified persisted score.
+Even an evidence-checked row remains unranked in this preliminary dashboard.
+
 ## Interpreting comparisons
 
 Comparison groups require completed, verified attempts from at least two exact

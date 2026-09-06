@@ -46,17 +46,18 @@ class DashboardTests(unittest.TestCase):
             'controller':{'id':run_id,'status':'completed','mode':'api','model':model,'returnedModel':model,
                 'trialContext':context,'dockerImageId':'sha256:'+'c'*64,'actions':4},
             'api':{'model':model,'status':'completed'},'observedXpDelta':max(xp,0),
-            'final':{'character':{'alive':xp>=0}},'timing':{'apiLatencyMs':800,'elapsedMs':6000}}
+            'final':{'character':{'alive':xp>=0}},'timing':{'apiLatencyMs':800,'elapsedMs':6000,'endedAtMs':7000},
+            'timeline':{'status':'completed'}}
         request={'model':model,'metadata':{'maplebench_run_id':run_id}}
         response={'model':model,'status':'completed','metadata':{'maplebench_run_id':run_id}}
-        recording={'sha256':'d'*64,'status':'completed','reviewed':False,
+        recording={'path':'video.webm','sha256':'d'*64,'status':'completed','reviewed':False,
             'overlay':{'controller_id':run_id,'mode':'api','model':model}}
         refs={name:self.write(folder/(name+'.json'),value) for name,value in
             [('persistence',evidence),('score',score),('result',result),('api_request',request),('api_response',response),('recording',recording)]}
         # The exporter trusts the completed runner's baseline/runtime verification;
         # these large artifacts are deliberately not reread on every UI refresh.
         refs.update(baseline={'path':'private.sql','sha256':'b'*64},scenario={'path':'scenario.json','sha256':'a'*64},
-            runtime_manifest={'path':'runtime.json','sha256':runtime})
+            runtime_manifest={'path':'runtime.json','sha256':runtime},video={'path':'video.webm','sha256':'d'*64})
         journal={'attempt_id':run_id,'status':status,'phase':'cleanup','publication_eligible':True,
             'request':{'model':model,**context,'budgets':{'total_seconds':90,'operation_seconds':60,
                 'controller_seconds':24,'max_actions':80,'max_api_requests':1,'max_output_tokens':3000,'max_total_tokens':30000}},
@@ -67,6 +68,128 @@ class DashboardTests(unittest.TestCase):
         return folder,journal,result
 
     def snapshot(self,**kwargs): return build_snapshot(self.attempts,self.relay,now_ms=10000,**kwargs)
+
+    def publication(self,folder,journal,result,*,ready=True,reasons=None,version='abcdef1',at=9000):
+        """Synthetic private validator receipt; the dashboard never runs a gate."""
+        refs=copy.deepcopy(journal['receipts']['collect_final']['artifacts'])
+        recording=json.loads((folder/refs['recording']['path']).read_bytes())
+        refs['video_review']=self.write(folder/'video-review.json',{
+            'run_id':journal['attempt_id'],'video_sha256':recording['sha256'],'reviewed':True,
+            'post_render_capture':True,'overlay':recording['overlay'],'reviewed_at_ms':8500})
+        reviewed={'schema_version':2,'run_kind':'ranked','result':copy.deepcopy(result),'score':journal['score'],
+            'timeline':result['timeline'],'video':recording|{'reviewed':True},'artifacts':refs}
+        reference=self.write(folder/'publication-reviewed.json',reviewed)
+        verdict={'schema_version':1,'run_id':journal['attempt_id'],'validator_source_commit':version,
+            'validator_sha256':'e'*64,'reviewed_manifest_sha256':reference['sha256'],'validated_at_ms':at,
+            'verdict':{'ready':ready,'reasons':([] if ready else ['result.program.actions: count must match the complete input receipt list.']) if reasons is None else reasons},
+            'externally_published':False,'private_marker':'/private/validator-secret'}
+        path=folder/f'publication-verdict-{version}.json';self.write(path,verdict)
+        return path,verdict,reviewed
+
+    def test_publication_status_is_separate_from_verified_score_and_never_grants_ranking(self):
+        for index,status in enumerate(('passed','blocked','awaiting_review'),1):
+            folder,journal,result=self.attempt(str(index)*32,xp=4500)
+            if status!='awaiting_review': self.publication(folder,journal,result,ready=status=='passed')
+        rows={row['id']:row for row in self.snapshot()['attempts']}
+        for index,status in enumerate(('passed','blocked','awaiting_review'),1):
+            row=rows[str(index)*32]
+            self.assertEqual(row['publication_evidence'],{'status':status,'reason_code':'receipts_incomplete' if status=='blocked' else None})
+            self.assertEqual(row['persisted_xp'],4500)
+            self.assertFalse(row['ranked']);self.assertFalse(row['publication_eligible'])
+        raw=json.dumps(rows)
+        for private in ('/private/validator-secret','validator_sha256','reviewed_manifest_sha256','abcdef1',
+                        'result.program.actions','publication-reviewed.json'):
+            self.assertNotIn(private,raw)
+
+    def test_versioned_verdict_uses_latest_timestamp_and_never_falls_back_from_invalid_latest(self):
+        folder,journal,result=self.attempt('1'*32)
+        self.publication(folder,journal,result,version='abcdef1',at=9000)
+        path,latest,_=self.publication(folder,journal,result,ready=False,version='1234567',at=9500)
+        # Filename order is not chronology, and a newer failed check supersedes a pass.
+        row=self.snapshot()['attempts'][0]
+        self.assertEqual(row['publication_evidence'],{'status':'blocked','reason_code':'receipts_incomplete'})
+        latest['reviewed_manifest_sha256']='0'*64;self.write(path,latest)
+        row=self.snapshot()['attempts'][0]
+        self.assertEqual(row['publication_evidence'],{'status':'blocked','reason_code':'evidence_unavailable'})
+        self.assertEqual(row['persisted_xp'],100)
+
+    def test_unknown_verdict_reasons_are_not_exported(self):
+        folder,journal,result=self.attempt('1'*32)
+        self.publication(folder,journal,result,ready=False,reasons=['private password marker /private/unsafe'])
+        row=self.snapshot()['attempts'][0]
+        self.assertEqual(row['publication_evidence'],{'status':'blocked','reason_code':'details_unavailable'})
+        self.assertNotIn('private password',json.dumps(row));self.assertNotIn('/private/unsafe',json.dumps(row))
+
+    def test_bad_verdict_metadata_blocks_publication_status_without_erasing_persisted_score(self):
+        changes=[lambda v:v.update(run_id='2'*32),lambda v:v.update(schema_version=True),
+                 lambda v:v.update(validator_source_commit='7654321'),lambda v:v.update(validator_sha256=None),
+                 lambda v:v.update(validated_at_ms=10001),lambda v:v.update(validated_at_ms=True),
+                 lambda v:v.update(externally_published=True),lambda v:v['verdict'].update(ready='true'),
+                 lambda v:v['verdict'].update(reasons=['unexpected pass reason'])]
+        for index,change in enumerate(changes):
+            folder,journal,result=self.attempt(f'{index+1:032x}')
+            path,verdict,_=self.publication(folder,journal,result)
+            change(verdict);self.write(path,verdict)
+        for row in self.snapshot()['attempts']:
+            self.assertEqual(row['publication_evidence'],{'status':'blocked','reason_code':'evidence_unavailable'})
+            self.assertEqual(row['persisted_xp'],100)
+
+    def test_reviewed_manifest_cannot_relabel_other_result_score_recording_or_frozen_refs(self):
+        changes=[lambda m:m['result']['controller'].update(model='gpt-5.6-sol'),
+                 lambda m:m['score']['metrics'].update(net_xp=99999),lambda m:m['video'].update(reviewed=False),
+                 lambda m:m['video'].update(sha256='f'*64),lambda m:m['video'].update(path='other.webm'),
+                 lambda m:m['artifacts']['runtime_manifest'].update(sha256='1'*64),
+                 lambda m:m['timeline'].update(status='failed')]
+        for index,change in enumerate(changes):
+            folder,journal,result=self.attempt(f'{index+1:032x}')
+            path,verdict,reviewed=self.publication(folder,journal,result)
+            change(reviewed)
+            verdict['reviewed_manifest_sha256']=self.write(folder/'publication-reviewed.json',reviewed)['sha256']
+            self.write(path,verdict)
+        for row in self.snapshot()['attempts']:
+            self.assertEqual(row['publication_evidence'],{'status':'blocked','reason_code':'evidence_unavailable'})
+            self.assertEqual(row['persisted_xp'],100)
+
+    def test_hashed_visual_review_cannot_be_omitted_or_attest_another_recording(self):
+        for index,change in enumerate((lambda review:review.update(video_sha256='0'*64),
+                                       lambda review:review.update(post_render_capture=False),
+                                       lambda review:review.update(reviewed_at_ms=9500))):
+            folder,journal,result=self.attempt(f'{index+1:032x}')
+            path,verdict,reviewed=self.publication(folder,journal,result)
+            review=json.loads((folder/'video-review.json').read_bytes());change(review)
+            reviewed['artifacts']['video_review']=self.write(folder/'video-review.json',review)
+            verdict['reviewed_manifest_sha256']=self.write(folder/'publication-reviewed.json',reviewed)['sha256']
+            self.write(path,verdict)
+        folder,journal,result=self.attempt('4'*32)
+        self.publication(folder,journal,result)
+        (folder/'video-review.json').unlink()
+        for row in self.snapshot()['attempts']:
+            self.assertEqual(row['publication_evidence']['status'],'blocked')
+            self.assertEqual(row['persisted_xp'],100)
+
+    def test_verdict_discovery_and_reads_are_bounded_and_symlink_safe(self):
+        for index,mode in enumerate(('many','oversized','symlink','manifest_symlink','ambiguous')):
+            folder,journal,result=self.attempt(f'{index+1:032x}')
+            path,verdict,_=self.publication(folder,journal,result)
+            if mode=='many':
+                for number in range(16):
+                    version=f'{number:07x}';self.write(folder/f'publication-verdict-{version}.json',verdict|{'validator_source_commit':version})
+            elif mode=='oversized': path.write_bytes(b' '*(64*1024+1))
+            elif mode=='symlink':
+                target=self.root/'private-verdict.json';path.replace(target);path.symlink_to(target)
+            elif mode=='manifest_symlink':
+                manifest=folder/'publication-reviewed.json';target=self.root/'private-reviewed.json'
+                manifest.replace(target);manifest.symlink_to(target)
+            else: self.write(folder/'publication-verdict-1234567.json',verdict|{'validator_source_commit':'1234567'})
+        for row in self.snapshot()['attempts']:
+            self.assertEqual(row['publication_evidence'],{'status':'blocked','reason_code':'evidence_unavailable'})
+            self.assertEqual(row['persisted_xp'],100)
+
+    def test_failed_trial_cannot_gain_publication_status_from_a_sidecar(self):
+        folder,journal,result=self.attempt('1'*32,status='failed')
+        self.publication(folder,journal,result)
+        row=self.snapshot()['attempts'][0]
+        self.assertIsNone(row['publication_evidence']);self.assertIsNone(row['persisted_xp'])
 
     def test_two_exact_models_with_equal_inputs_compare_and_negative_xp_is_preserved(self):
         self.attempt('1'*32,xp=-600)
