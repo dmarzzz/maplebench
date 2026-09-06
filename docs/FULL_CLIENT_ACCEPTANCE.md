@@ -91,8 +91,16 @@ The subsequent executor fix separates attempted requests from acknowledged
 actions, preserves uncertain endpoint outcomes as failures, and avoids dispatch
 of a key hold that cannot fit before the active deadline. The bridge checks
 receipt consistency; the browser rejects delayed command responses and cannot
-acknowledge a hold that finishes after its deadline. These changes apply to a
-future versioned runtime. The historical Terra attempt remains blocked.
+acknowledge a hold that finishes after its deadline. Release `9dd7d98` now serves
+these changes. Its separate acceptance scenario has been frozen, but no API
+attempt has started: the desktop is locked and visible browser verification is
+pending. The historical Terra attempt remains blocked.
+
+This release also makes the executed SDK dispatcher a mandatory frozen input.
+The earlier four-trial inventory omitted that file; its historical verdicts
+remain preserved, with this additional reproducibility limitation recorded.
+The new source passed 50 focused runtime tests after the preceding 355-test
+suite. Tests and successful deployment do not replace the pending live trial.
 
 A reported monster-visibility anomaly has no identified run or timestamp yet.
 Its cause remains unconfirmed and no score was changed. Investigation requires
