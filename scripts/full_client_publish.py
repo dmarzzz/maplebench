@@ -130,7 +130,9 @@ def _validate_structure(manifest):
     require(_hash(result.get("programSha256")), "result.programSha256: hash the executed program.")
     outcomes = ("program_complete", "death", "time_limit", "action_limit") if version == 2 else ("program_complete",)
     require(program.get("reason") in outcomes and program.get("error") in (None, ""),
-            "result.program: require clean program_complete, not timeout, interruption, or failure.")
+            ("result.program: require a supported completed outcome without a program error."
+             if version == 2 else
+             "result.program: require clean program_complete, not timeout, interruption, or failure."))
 
     def observation(value):
         obs = _object(value)
@@ -211,6 +213,14 @@ def _validate_structure(manifest):
         require(_integer(budgets.get("sdk_requests"), 1)
                 and isinstance(steps, list) and len(steps) <= budgets["sdk_requests"],
                 "budgets.sdk_requests: preserve and enforce the frozen SDK request limit.")
+        program_seconds, controller_seconds = controller.get("programSeconds"), controller.get("controllerSeconds")
+        require(type(program_seconds) is int and program_seconds in (22, 60)
+                and type(controller_seconds) is int and controller_seconds == program_seconds + 2
+                and budgets.get("program_ms") == program_seconds * 1000,
+                "budgets.controller: require the recorded supported program and termination limits.")
+        if _integer(budgets.get("program_ms"), 1):
+            require(held_ms <= budgets["program_ms"],
+                    "budgets.program_ms: acknowledged key holds and waits exceed the active program budget.")
     for key in ("output_tokens", "total_tokens"):
         if _integer(usage.get(key)) and _integer(budgets.get(key)):
             require(usage[key] <= budgets[key], f"budgets.{key}: recorded API usage exceeded the limit.")
@@ -218,9 +228,12 @@ def _validate_structure(manifest):
         require(action_count <= budgets["actions"], "budgets.actions: acknowledged input count exceeded the limit.")
 
     require(timeline.get("status") == "completed", "timeline.status: record a completed capture/run timeline.")
-    require(timeline.get("interrupted") is False, "timeline.interrupted: attest no client/run interruption.")
-    require(timeline.get("client_observations_fresh") is True,
-            "timeline.client_observations_fresh: verify client freshness throughout the run.")
+    if version != 2:
+        require(timeline.get("interrupted") is False, "timeline.interrupted: attest no client/run interruption.")
+        require(timeline.get("client_observations_fresh") is True,
+                "timeline.client_observations_fresh: verify client freshness throughout the run.")
+    # Version 2 derives these properties from every observation/acknowledgment
+    # above and the byte-verified capture below, not synthetic timeline flags.
     timing_keys = ("startedAtMs", "endedAtMs", "elapsedMs", "apiLatencyMs")
     valid_timing = all(_number(timing.get(key)) for key in timing_keys)
     require(valid_timing, "result.timing: record finite wall timestamps and monotonic elapsed/API milliseconds.")
@@ -229,7 +242,8 @@ def _validate_structure(manifest):
                 and abs(timing["endedAtMs"] - timing["startedAtMs"] - timing["elapsedMs"]) <= SLACK_MS,
                 "result.timing: wall duration and monotonic elapsed time disagree.")
         if _integer(budgets.get("run_ms")):
-            require(timing["elapsedMs"] <= budgets["run_ms"] + SLACK_MS, "budgets.run_ms: run exceeded its limit.")
+            require(timing["elapsedMs"] <= budgets["run_ms"] + (0 if version == 2 else SLACK_MS),
+                    "budgets.run_ms: run exceeded its limit.")
     offsets = ("api_started_ms", "api_ended_ms", "program_started_ms", "program_ended_ms")
     valid_offsets = all(_number(timeline.get(key)) for key in offsets)
     require(valid_offsets, "timeline: record API and program start/end offsets from run start.")
@@ -241,7 +255,17 @@ def _validate_structure(manifest):
         if valid_timing:
             require(d <= timing["elapsedMs"] + SLACK_MS and abs(b - a - timing["apiLatencyMs"]) <= SLACK_MS,
                     "timeline: offsets disagree with recorded elapsed time or API latency.")
-        if _integer(budgets.get("program_ms")):
+        if version == 2:
+            # The recorded interval includes executor/container termination.
+            # Its declared allowance is independently bound to the frozen
+            # scenario below; the active model-program limit remains unchanged.
+            if _integer(controller.get("controllerSeconds"), 1):
+                require(d - c <= controller["controllerSeconds"] * 1000,
+                        "budgets.controller: controller exceeded its declared termination envelope.")
+            if program.get("reason") == "time_limit" and _integer(budgets.get("program_ms")):
+                require(d - c >= budgets["program_ms"],
+                        "outcome: time_limit requires exhaustion of the active program budget.")
+        elif _integer(budgets.get("program_ms")):
             require(d - c <= budgets["program_ms"] + SLACK_MS, "budgets.program_ms: program exceeded its limit.")
 
     require(_text(scenario.get("id")) and _hash(scenario.get("fingerprint")),
@@ -409,6 +433,18 @@ def _verify_persisted_manifest(manifest, artifact_root):
             "artifacts.scenario: frozen scenario ID differs from manifest")
     require(same_json(scenario.get("budgets"), manifest["budgets"]),
             "budgets: limits must match the scenario frozen before the trial")
+    controller = result["controller"]
+    require(type(scenario.get("program_seconds")) is int and scenario["program_seconds"] in (22, 60)
+            and same_json(controller.get("programSeconds"), scenario["program_seconds"])
+            and same_json(controller.get("controllerSeconds"),
+                          _object(scenario.get("trial_budgets")).get("controller_seconds"))
+            and controller["controllerSeconds"] == scenario["program_seconds"] + 2,
+            "budgets.controller: recorded program/termination limits differ from the frozen scenario")
+    trial_context = {"scenario_fingerprint": artifacts["scenario"]["sha256"],
+                     "baseline_sha256": artifacts["baseline"]["sha256"]}
+    require(same_json(result.get("trialContext"), trial_context)
+            and same_json(controller.get("trialContext"), trial_context),
+            "trialContext: recorded result and controller must bind the original frozen scenario and baseline")
     require(same_json(result.get("timeline"), manifest["timeline"]),
             "timeline: preserve the timeline recorded in the result artifact")
     session = evidence["session"]
@@ -491,8 +527,9 @@ def _verify_persisted_manifest(manifest, artifact_root):
                 "outcome: action_limit requires exhaustion of the frozen action budget")
     if reason == "time_limit":
         duration = manifest["timeline"]["program_ended_ms"] - manifest["timeline"]["program_started_ms"]
-        require(abs(duration - manifest["budgets"]["program_ms"]) <= SLACK_MS,
-                "outcome: time_limit requires exhaustion of the frozen program budget")
+        require(manifest["budgets"]["program_ms"] <= duration
+                <= scenario["trial_budgets"]["controller_seconds"] * 1000,
+                "outcome: time_limit must exhaust the active program within the frozen controller envelope")
 
     verify_capture_bundle(manifest, artifact_root)
     _verify_settlement_policy(manifest, artifact_root, evidence, scenario)

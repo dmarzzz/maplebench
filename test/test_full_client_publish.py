@@ -233,23 +233,44 @@ POLICY = {"capture_tail_ms": 2000, "upload_after_program_ms": 5000,
           "disconnect_after_program_ms": 5000, "logout_after_disconnect_ms": 5000}
 
 
-def persisted_manifest(directory):
+def persisted_manifest(directory, *, program_seconds=22, span_ms=3900, outcome="program_complete"):
     """Synthetic collector files; media probing is explicitly mocked in tests."""
     manifest = complete_manifest()
     manifest["schema_version"] = 2
-    manifest["budgets"].update(program_ms=5000, run_ms=6000, sdk_requests=20)
+    manifest["budgets"].update(program_ms=program_seconds * 1000, run_ms=(program_seconds + 53) * 1000,
+                                sdk_requests=100 if program_seconds == 22 else 600)
+    manifest["timeline"].pop("interrupted")
+    manifest["timeline"].pop("client_observations_fresh")
     instructions = "Synthetic program-generation instructions; this is not an actual API run."
     reasoning = {"effort": "low"}
     evidence, artifacts = bundle_fixture(directory, {"id": "fixture-scenario", "budgets": manifest["budgets"],
         "instructions_sha256": hashlib.sha256(instructions.encode()).hexdigest(), "reasoning": reasoning,
-        "settlement_policy": copy.deepcopy(POLICY)})
-    evidence["session"].update(upload_observed_at_ms=7300, disconnect_requested_at_ms=7400)
+        "settlement_policy": copy.deepcopy(POLICY), "program_seconds": program_seconds,
+        "trial_budgets": {"controller_seconds": program_seconds + 2}})
+    delta = span_ms - 3900
+    evidence["session"].update(controller_ended_at_ms=7000 + delta, upload_observed_at_ms=7300 + delta,
+                               disconnect_requested_at_ms=7400 + delta, logged_out_at_ms=8000 + delta)
+    evidence["session"]["save"]["committed_at_ms"] += delta
+    evidence["session"]["save"]["log_checked_through_ms"] += delta
+    evidence["final"]["captured_at_ms"] += delta
+    if outcome == "death":
+        evidence["final"]["character"].update(hp=0, exp=400)
+    evidence["final"]["evidence_sha256"] = write_artifact(directory, artifacts, "final_db",
+        {key: value for key, value in evidence["final"].items() if key != "evidence_sha256"})
+    for name, time_key, hash_key in (("save", "committed_at_ms", "evidence_sha256"),
+                                    ("server_log", "at_ms", "logs_sha256")):
+        rows = [json.loads(line) for line in (Path(directory) / artifacts[name]["path"]).read_bytes().splitlines()]
+        for row in rows:
+            if row[time_key] >= 7000:
+                row[time_key] += delta
+        evidence["session"]["save"][hash_key] = write_artifact(directory, artifacts, name,
+            b"".join(json.dumps(row).encode() + b"\n" for row in rows), raw=True)
     write_artifact(directory, artifacts, "session", evidence["session"])
     write_artifact(directory, artifacts, "persistence", evidence)
     write_artifact(directory, artifacts, "upload_status", {"schema_version": 1,
         "source": "full_client_runtime_status", "run_id": evidence["run_id"],
         "server_instance_id": evidence["session"]["server_instance_id"], "character_id": 7, "account_id": 9,
-        "observed_at_ms": 7300, "status": {"bridge": {"run": {"id": evidence["run_id"], "status": "completed",
+        "observed_at_ms": 7300 + delta, "status": {"bridge": {"run": {"id": evidence["run_id"], "status": "completed",
             "evidenceStatus": "saved", "recordingStatus": "saved", "workerActive": False,
             "leaseReleasePending": False},
             "browserReleasePending": False}, "session": {"artifactsSettled": True}}})
@@ -257,15 +278,29 @@ def persisted_manifest(directory):
     result["source"] = "full-client-trial"
     result["controller"]["id"] = evidence["run_id"]
     result["controller"]["client"] = "fixture-client"
-    result["timing"].update(startedAtMs=2200, endedAtMs=7100, elapsedMs=4900, apiLatencyMs=800)
-    manifest["timeline"].update(api_started_ms=0, api_ended_ms=800, program_started_ms=900, program_ended_ms=4800)
+    result["controller"].update(programSeconds=program_seconds, controllerSeconds=program_seconds + 2)
+    result["program"]["reason"] = outcome
+    if outcome == "death":
+        result["initial"]["character"]["exp"] = 1000
+        result["final"]["character"].update(exp=400, hp=0, alive=False)
+        result["observedXpDelta"] = -600
+    if outcome == "action_limit":
+        action = result["program"]["steps"][1]
+        result["program"]["steps"] = [copy.deepcopy(action) for _ in range(manifest["budgets"]["actions"])]
+        result["program"]["actions"] = manifest["budgets"]["actions"]
+    result["timing"].update(startedAtMs=2200, endedAtMs=7100 + delta, elapsedMs=4900 + delta, apiLatencyMs=800)
+    manifest["timeline"].update(api_started_ms=0, api_ended_ms=800, program_started_ms=900, program_ended_ms=4800 + delta)
     result["timeline"] = copy.deepcopy(manifest["timeline"])
-    observations = [result["initial"], result["final"], result["program"]["steps"][0]["result"],
-                    result["program"]["steps"][1]["result"]["observation"]]
+    observations = [result["initial"], result["final"]] + [
+        step["result"] if step["method"] == "observe" else step["result"]["observation"]
+        for step in result["program"]["steps"] if step["method"] != "wait"]
     for observation in observations:
         observation["renderAgeMs"] = 10
     manifest["scenario"].update(fingerprint=evidence["scenario_fingerprint"],
                                  reset_fingerprint=evidence["baseline"]["sha256"])
+    result["trialContext"] = {"scenario_fingerprint": evidence["scenario_fingerprint"],
+                              "baseline_sha256": evidence["baseline"]["sha256"]}
+    result["controller"]["trialContext"] = copy.deepcopy(result["trialContext"])
     manifest["score"] = verify_trial_bundle(evidence, directory, artifacts)
     write_artifact(directory, artifacts, "score", manifest["score"])
     code = "await sdk.pressKeys(['RIGHT'], 200);"
@@ -286,10 +321,10 @@ def persisted_manifest(directory):
     manifest["video"]["overlay"]["controller_id"] = evidence["run_id"]
     clock = {"id": "e" * 32, "client_sent_ms": 2190, "server_received_ms": 2200, "server_sent_ms": 2200}
     ready = {"runId": evidence["run_id"], "serverReceivedAtMs": 2200, "renderedFrames": 1}
-    terminal = {"id": "d" * 32, "serverIssuedAtMs": 7100}
+    terminal = {"id": "d" * 32, "serverIssuedAtMs": 7100 + delta}
     capture = {"schema_version": 1, "run_id": evidence["run_id"], "client_id": "fixture-client",
-               "start_wall_ms": 2200, "end_wall_ms": 7200, "duration_ms": 5000,
-               "first_frame_wall_ms": 2200, "last_frame_wall_ms": 7190,
+               "start_wall_ms": 2200, "end_wall_ms": 7200 + delta, "duration_ms": 5000 + delta,
+               "first_frame_wall_ms": 2200, "last_frame_wall_ms": 7190 + delta,
                "rendered_frames": 120, "max_frame_gap_ms": 50, "hidden": False, "errors": 0,
                "relay_lost": False, "interrupted": False, "clock": clock | {"client_received_ms": 2210},
                "terminal_token": terminal["id"]}
@@ -299,15 +334,214 @@ def persisted_manifest(directory):
                                ready, clock, terminal)
     manifest["video"].update(measured, capture_sha256=artifacts["capture"]["sha256"])
     write_artifact(directory, artifacts, "recording", manifest["video"] | {"reviewed": False})
-    write_artifact(directory, artifacts, "video_probe", PROBE | {"video_sha256": video_hash})
+    write_artifact(directory, artifacts, "video_probe", PROBE | {"duration_ms": 5000 + delta, "video_sha256": video_hash})
     write_artifact(directory, artifacts, "video_review", {
         "video_sha256": video_hash, "run_id": evidence["run_id"], "reviewed": True,
-        "post_render_capture": True, "overlay": manifest["video"]["overlay"], "reviewed_at_ms": 7300})
+        "post_render_capture": True, "overlay": manifest["video"]["overlay"], "reviewed_at_ms": 7300 + delta})
     manifest["artifacts"] = artifacts
     return manifest
 
 
 class PersistedPublicationTests(unittest.TestCase):
+    def test_actual_timeline_shape_needs_no_synthetic_freshness_or_interruption_flags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory)
+            self.assertEqual(set(manifest["timeline"]), {"status", "api_started_ms", "api_ended_ms",
+                                                         "program_started_ms", "program_ended_ms"})
+            before = copy.deepcopy(manifest)
+            result_bytes = (Path(directory) / manifest["artifacts"]["result"]["path"]).read_bytes()
+            with patch("full_client_publish._probe_video", return_value=PROBE):
+                self.assertEqual(validate_manifest(manifest, directory), {"ready": True, "reasons": []})
+            self.assertEqual(manifest, before)
+            self.assertEqual((Path(directory) / manifest["artifacts"]["result"]["path"]).read_bytes(), result_bytes)
+
+    def test_actual_observations_and_acknowledgments_are_required_without_timeline_attestations(self):
+        paths = [("initial",), ("final",), ("program", "steps", 0, "result"),
+                 ("program", "steps", 1, "result", "observation")]
+        for path in paths:
+            for key in ("ageMs", "renderAgeMs"):
+                for stale in (None, 1500, True):
+                    with self.subTest(path=path, key=key, stale=stale), tempfile.TemporaryDirectory() as directory:
+                        manifest = persisted_manifest(directory)
+                        observation = manifest["result"]
+                        for part in path:
+                            observation = observation[part]
+                        observation[key] = stale
+                        write_artifact(directory, manifest["artifacts"], "result", manifest["result"])
+                        verdict = validate_manifest(manifest, directory)
+                        self.assertFalse(verdict["ready"])
+                        self.assertTrue(any("observation" in reason for reason in verdict["reasons"]), verdict)
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory)
+            manifest["result"]["program"]["steps"][1]["result"]["accepted"] = False
+            write_artifact(directory, manifest["artifacts"], "result", manifest["result"])
+            self.assertFalse(validate_manifest(manifest, directory)["ready"])
+
+    def test_supported_frozen_controller_envelopes_apply_uniformly_to_all_outcomes(self):
+        for seconds in (22, 60):
+            for outcome in ("program_complete", "death", "action_limit", "time_limit"):
+                for span in (seconds * 1000, seconds * 1000 + 319, (seconds + 2) * 1000):
+                    with self.subTest(seconds=seconds, outcome=outcome, span=span), tempfile.TemporaryDirectory() as directory:
+                        manifest = persisted_manifest(directory, program_seconds=seconds, span_ms=span, outcome=outcome)
+                        probe = PROBE | {"duration_ms": manifest["video"]["duration_ms"]}
+                        with patch("full_client_publish._probe_video", return_value=probe):
+                            self.assertEqual(validate_manifest(manifest, directory), {"ready": True, "reasons": []})
+                        if outcome == "death":
+                            self.assertEqual(manifest["score"]["metrics"]["net_xp"], -600)
+
+    def test_controller_envelope_has_no_extra_clock_slack_and_time_limit_cannot_end_early(self):
+        for seconds in (22, 60):
+            for outcome in ("program_complete", "death", "action_limit", "time_limit"):
+                with self.subTest(seconds=seconds, outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                    manifest = persisted_manifest(directory, program_seconds=seconds,
+                                                  span_ms=(seconds + 2) * 1000 + 1, outcome=outcome)
+                    verdict = validate_manifest(manifest, directory)
+                    self.assertFalse(verdict["ready"])
+                    self.assertTrue(any("termination envelope" in reason for reason in verdict["reasons"]), verdict)
+            with tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory, program_seconds=seconds, span_ms=seconds * 1000 - 1,
+                                              outcome="time_limit")
+                verdict = validate_manifest(manifest, directory)
+                self.assertFalse(verdict["ready"])
+                self.assertTrue(any("active program budget" in reason for reason in verdict["reasons"]), verdict)
+
+    def test_termination_allowance_cannot_be_spent_on_acknowledged_gameplay(self):
+        for gameplay_ms, expected in ((22000, True), (22001, False), (23000, False)):
+            with self.subTest(gameplay_ms=gameplay_ms), tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory, span_ms=23300, outcome="time_limit")
+                artifacts, result = manifest["artifacts"], manifest["result"]
+                press = copy.deepcopy(result["program"]["steps"][1])
+                press["args"][1] = 1000
+                waits = [3000] * 7 + ([gameplay_ms - 22000] if gameplay_ms > 22000 else [])
+                result["program"]["steps"] = [press] + [
+                    {"kind": "sdk", "method": "wait", "args": [duration], "result": {"waitedMs": duration}}
+                    for duration in waits]
+                code = "await sdk.pressKeys(['RIGHT'], 1000);\n" + "\n".join(
+                    f"await sdk.wait({duration});" for duration in waits)
+                result["programSha256"] = write_artifact(directory, artifacts, "program", code.encode(), raw=True)
+                response = json.loads((Path(directory) / artifacts["api_response"]["path"]).read_bytes())
+                response["output"][0]["content"][0]["text"] = json.dumps({"note": "synthetic active-time accounting", "code": code})
+                write_artifact(directory, artifacts, "api_response", response)
+                write_artifact(directory, artifacts, "result", result)
+                with patch("full_client_publish._probe_video", return_value=PROBE | {"duration_ms": manifest["video"]["duration_ms"]}):
+                    verdict = validate_manifest(manifest, directory)
+                self.assertEqual(verdict["ready"], expected, verdict)
+                if not expected:
+                    self.assertTrue(any("active program budget" in reason for reason in verdict["reasons"]), verdict)
+
+    def test_both_recorded_trial_contexts_bind_exact_frozen_artifact_hashes(self):
+        for owner in ("result", "controller"):
+            for alteration in ("missing", "null", "empty", "scenario", "baseline", "extra"):
+                with self.subTest(owner=owner, alteration=alteration), tempfile.TemporaryDirectory() as directory:
+                    manifest = persisted_manifest(directory)
+                    result = manifest["result"]
+                    target = result if owner == "result" else result["controller"]
+                    if alteration == "missing":
+                        target.pop("trialContext")
+                    elif alteration == "null":
+                        target["trialContext"] = None
+                    elif alteration == "empty":
+                        target["trialContext"] = {}
+                    elif alteration == "scenario":
+                        target["trialContext"]["scenario_fingerprint"] = "0" * 64
+                    elif alteration == "baseline":
+                        target["trialContext"]["baseline_sha256"] = "0" * 64
+                    else:
+                        target["trialContext"]["retroactive"] = True
+                    write_artifact(directory, manifest["artifacts"], "result", result)
+                    verdict = validate_manifest(manifest, directory)
+                    self.assertFalse(verdict["ready"])
+                    self.assertIn("trialContext", verdict["reasons"][0])
+
+    def test_regenerated_scenario_or_settlement_policy_cannot_rebind_unchanged_raw_result(self):
+        for mutation in (lambda scenario: scenario.update(instructions_sha256="1" * 64),
+                         lambda scenario: scenario["settlement_policy"].update(capture_tail_ms=3000)):
+            with tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory)
+                artifacts = manifest["artifacts"]
+                result_path = Path(directory) / artifacts["result"]["path"]
+                original_result = result_path.read_bytes()
+                scenario = json.loads((Path(directory) / artifacts["scenario"]["path"]).read_bytes())
+                evidence = json.loads((Path(directory) / artifacts["persistence"]["path"]).read_bytes())
+                mutation(scenario)
+                fingerprint = write_artifact(directory, artifacts, "scenario", scenario)
+                evidence["scenario_fingerprint"] = manifest["scenario"]["fingerprint"] = fingerprint
+                write_artifact(directory, artifacts, "persistence", evidence)
+                manifest["score"] = verify_trial_bundle(evidence, directory, artifacts)
+                write_artifact(directory, artifacts, "score", manifest["score"])
+                verdict = validate_manifest(manifest, directory)
+                self.assertFalse(verdict["ready"])
+                self.assertIn("trialContext", verdict["reasons"][0])
+                self.assertEqual(result_path.read_bytes(), original_result)
+
+    def test_recorded_program_and_controller_limits_must_be_supported_exact_integers(self):
+        for key, values in (("programSeconds", (None, True, "22", 22.0, 23)),
+                            ("controllerSeconds", (None, True, "24", 24.0, 23, 25))):
+            for value in values:
+                with self.subTest(key=key, value=value), tempfile.TemporaryDirectory() as directory:
+                    manifest = persisted_manifest(directory)
+                    manifest["result"]["controller"][key] = value
+                    write_artifact(directory, manifest["artifacts"], "result", manifest["result"])
+                    verdict = validate_manifest(manifest, directory)
+                    self.assertFalse(verdict["ready"])
+                    self.assertTrue(any("budgets.controller" in reason for reason in verdict["reasons"]), verdict)
+
+    def test_recorded_limits_must_match_the_byte_verified_frozen_scenario(self):
+        changes = [lambda scenario: scenario.pop("program_seconds"),
+                   lambda scenario: scenario.update(program_seconds=60),
+                   lambda scenario: scenario.update(program_seconds=True),
+                   lambda scenario: scenario.pop("trial_budgets"),
+                   lambda scenario: scenario["trial_budgets"].pop("controller_seconds"),
+                   lambda scenario: scenario["trial_budgets"].update(controller_seconds=25),
+                   lambda scenario: scenario["trial_budgets"].update(controller_seconds=24.0)]
+        for change in changes:
+            with tempfile.TemporaryDirectory() as directory:
+                manifest = persisted_manifest(directory)
+                artifacts = manifest["artifacts"]
+                scenario = json.loads((Path(directory) / artifacts["scenario"]["path"]).read_bytes())
+                evidence = json.loads((Path(directory) / artifacts["persistence"]["path"]).read_bytes())
+                change(scenario)
+                fingerprint = write_artifact(directory, artifacts, "scenario", scenario)
+                evidence["scenario_fingerprint"] = manifest["scenario"]["fingerprint"] = fingerprint
+                write_artifact(directory, artifacts, "persistence", evidence)
+                manifest["score"] = verify_trial_bundle(evidence, directory, artifacts)
+                write_artifact(directory, artifacts, "score", manifest["score"])
+                verdict = validate_manifest(manifest, directory)
+                self.assertFalse(verdict["ready"])
+                self.assertIn("recorded program/termination limits", verdict["reasons"][0])
+
+    def test_publication_program_budget_cannot_differ_from_recorded_active_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory)
+            manifest["budgets"]["program_ms"] += 1
+            verdict = validate_manifest(manifest, directory)
+            self.assertFalse(verdict["ready"])
+            self.assertTrue(any("budgets.controller" in reason for reason in verdict["reasons"]), verdict)
+
+    def test_total_run_budget_is_not_extended_by_clock_precision_tolerance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory)
+            manifest["budgets"]["run_ms"] = manifest["result"]["timing"]["elapsedMs"] - 1
+            verdict = validate_manifest(manifest, directory)
+            self.assertFalse(verdict["ready"])
+            self.assertTrue(any("budgets.run_ms" in reason for reason in verdict["reasons"]), verdict)
+
+    def test_zero_action_model_program_is_not_repaired_or_filtered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = persisted_manifest(directory, span_ms=915)
+            artifacts = manifest["artifacts"]
+            code = "async function run() { await sdk.pressKeys(['RIGHT'], 200); }"
+            result = manifest["result"]
+            result["program"].update(actions=0, steps=[])
+            result["programSha256"] = write_artifact(directory, artifacts, "program", code.encode(), raw=True)
+            response = json.loads((Path(directory) / artifacts["api_response"]["path"]).read_bytes())
+            response["output"][0]["content"][0]["text"] = json.dumps({"note": "synthetic uninvoked declaration", "code": code})
+            write_artifact(directory, artifacts, "api_response", response)
+            write_artifact(directory, artifacts, "result", result)
+            with patch("full_client_publish._probe_video", return_value=PROBE | {"duration_ms": manifest["video"]["duration_ms"]}):
+                self.assertEqual(validate_manifest(manifest, directory), {"ready": True, "reasons": []})
+            self.assertEqual((Path(directory) / artifacts["program"]["path"]).read_text(), code)
+
     def test_upload_status_is_required_and_cannot_claim_another_run_or_unsettled_upload(self):
         changes = [lambda r: r.update(run_id="other-run"), lambda r: r.update(character_id=True),
                    lambda r: r.update(observed_at_ms=7301), lambda r: r.update(source="model_claim"),

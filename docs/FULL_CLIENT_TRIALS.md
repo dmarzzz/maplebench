@@ -1,11 +1,11 @@
 # Full-client persistence scoring
 
 `scripts/full_client_score.py` calculates `net_xp` from supplied server persistence
-evidence. It is the offline scoring component for the proposed durable trial
-adapter. **The live demo does not yet collect this evidence or run reset trials.**
-Current recordings remain unranked integration runs. The publication gate now
-supports persisted-character evidence in schema 2 only after verifying the
-actual bundle. The calculator alone cannot grant ranked eligibility. Schema 1
+evidence. It is the offline scoring component used by the durable full-client
+trial adapter. Actual trials now restore an offline baseline, use ordinary
+login and logout, and collect positive native save receipts. Historical demos
+remain unranked integration runs. The publication gate supports persisted-character
+evidence in schema 2 only after verifying the actual bundle. The calculator alone cannot grant ranked eligibility. Schema 1
 publication manifests are structural legacy attestations and never return ready.
 
 ```sh
@@ -19,7 +19,7 @@ and JSON files over 16 MiB are rejected.
 
 ## Collection contract
 
-A trusted future trial runner must collect these records from the actual server
+The trusted trial runner collects these records from the actual server
 and database. Boolean fields are attestations by that collector, not permission
 to perform operations. Hashes bind evidence; this calculator cannot authenticate
 its origin or check referenced files. Never synthesize missing receipts to make
@@ -79,20 +79,21 @@ the entire parsed evidence object using sorted compact UTF-8 JSON (with Python's
 default ASCII escaping and no nonfinite numbers). It is not a hash of the original
 JSON file bytes. `publication_eligible` is always false.
 
-## Remaining adapter work
+## Durable adapter and comparison scope
 
-Implement acquisition of the existing world/queue locks, verified baseline
-restore while Cosmic is stopped, fresh server launch, ordinary browser login,
-bounded API control, normal disconnect, confirmed save collection, and final
-database export. Journal each phase before side effects; an interrupted attempt
-must retain its evidence and uncertain API usage. Do not resume midway through
-a reset or replay an uncertain model request. Preserve the complete attempt,
-then recover under the locks before a new attempt.
+The [durable runner](FULL_CLIENT_RUNNER.md) and [Linux backend](FULL_CLIENT_RUNTIME.md)
+acquire the existing locks, restore the baseline with Cosmic stopped, verify the
+actual fresh server process, and coordinate one browser through ordinary login,
+bounded API control, normal disconnect and final offline collection. Fsynced
+intents preserve uncertain attempts; explicit recovery cleans up without replaying
+an API request. The [results dashboard](FULL_CLIENT_DASHBOARD.md) shows completed
+persisted scores and retains failed attempts.
 
-After a real collected trial validates this contract, connect it to durable
-queue budgets and the schema 2 publication manifest below. Preserve exact
-API attribution and post-render recording. Equal baselines do not make combat
-RNG deterministic, and a successful score calculation is not publication approval.
+Four actual models have completed one trial each from the same frozen inputs.
+That establishes preliminary multi-model operation. A public ranking still needs
+a declared repeated-trial design, balanced model order and uncertainty reporting.
+Equal baselines do not make combat RNG deterministic. The separate publication
+gate and exact recording review remain required for every eligible trial.
 
 ## Verifying a private artifact bundle
 
@@ -229,6 +230,17 @@ death requires persisted zero HP, and limit outcomes must exhaust the relevant
 budget. Zero or negative net XP does not block publication. Partial inputs,
 infrastructure errors, stale observations, model substitutions, or interrupted
 recordings do. This gate does not publish files or change repository visibility.
+
+The recorded `programSeconds` and `controllerSeconds` must match the frozen
+scenario's active duration and controller envelope: 22/24 or 60/62 seconds.
+Acknowledged holds and waits remain within the active budget; the total recorded
+controller interval, including executor termination, remains within the separate
+controller envelope. A time-limit outcome cannot precede the active deadline.
+Clock-precision tolerance does not extend either budget. Both the original
+result and controller `trialContext` must match the byte-verified scenario and
+baseline fingerprints. Version 2 derives freshness and capture continuity from
+actual observations, acknowledgments and recording artifacts; it does not require
+invented timeline attestation fields.
 
 ## Measured capture bundle
 

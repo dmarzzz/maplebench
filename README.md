@@ -1,13 +1,14 @@
 # MapleBench
 
-**Status: full-client integration working; production hardening in progress.** A full Journey WASM client now runs on Cosmic,
-with normal movement, monster contact, skill attacks, and hit effects. A
-sandboxed `sdk.observe()` / `sdk.pressKeys()` program has controlled it through
-the OpenAI API. Live and recorded overlays identify the controller/model and
-show client telemetry. These are unranked integration runs; standardized resets
-and server-backed scoring still need the full-client adapter. See
-[full-client control](docs/FULL_CLIENT.md) and the
-[NanoCodex controller candidate](docs/NANOCODEX.md).
+**Status: live preliminary full-client comparison verified across four models.**
+The durable adapter restores a frozen offline baseline, runs one real browser
+through ordinary login and bounded API control, then verifies persisted net XP
+after normal logout. The results dashboard shows exact model attribution,
+actions, survival and saved gameplay. The first four trials used the same inputs;
+one attempt per model is preliminary and does not establish a ranking. See the
+[acceptance evidence](docs/FULL_CLIENT_ACCEPTANCE.md),
+[results dashboard](docs/FULL_CLIENT_DASHBOARD.md) and
+[full-client control](docs/FULL_CLIENT.md).
 
 Moving to another computer? See [the laptop handoff](docs/LAPTOP_HANDOFF.md) to
 reuse the existing runner without transferring its assets or credentials.
@@ -16,11 +17,10 @@ The earlier four-model server-bot batches and replay renderer remain available.
 Their scores and rendering provenance are separate from the new full-client
 recordings. See [scenarios](docs/SCENARIOS.md) and [replay provenance](docs/REPLAY.md).
 
-The [production readiness criteria](docs/PRODUCTION_READINESS.md) track the next
-release: durable isolated attempts, real save-commit receipts, byte-verified
-publication evidence, and a complete reset-to-logout trial. The
-[durable runner](docs/FULL_CLIENT_RUNNER.md) and evidence verifier are implemented;
-live end-to-end acceptance remains a separate gate.
+The [production readiness criteria](docs/PRODUCTION_READINESS.md) track durable
+isolated attempts, native save receipts, exact recording review and verified
+publication evidence. Repeated trials, balanced model order and longer operational
+acceptance remain necessary before a dependable public ranking.
 
 MapleBench is an experimental benchmark for evaluating coding agents in a persistent MapleStory-like game environment, beginning with simple XP optimization and progressing toward multi-agent party-quest coordination.
 

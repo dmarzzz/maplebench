@@ -84,19 +84,23 @@ hash matched its manifest, and normal logout persisted the corrected bindings
 and final XP. This still lacks a frozen baseline and is an unranked integration
 run, not a standardized benchmark score.
 
-This is not yet connected to the durable four-model batch queue or its scoring
-pipeline. `result.json` records initial/final client state, API response metadata,
-programs, and acknowledged SDK actions. Client XP changes are diagnostic only;
-a ranked benchmark still needs server-event scoring, reset parity, and a remote
-headless renderer. Currently assets, API requests, and program containers can
-run on the remote host while WASM rendering/input executes in the viewing browser.
-The reused client is a reconstruction, not proof of official-client fidelity.
+The separate [durable full-client adapter](FULL_CLIENT_RUNTIME.md) now completes
+same-baseline trials and authoritative persisted net-XP collection. Four actual
+models have completed one trial each; see [acceptance evidence](FULL_CLIENT_ACCEPTANCE.md).
+The [dashboard](FULL_CLIENT_DASHBOARD.md) separates those verified scores from
+these historical integration recordings and their diagnostic XP. The earlier
+server-bot queue remains a separate adapter.
+
+Assets, API requests and program containers run on the remote host while WASM
+rendering/input executes in the viewing browser. The reused client is a
+reconstruction, not proof of official-client fidelity. Long unattended windows
+and a repeated-trial experiment remain release work.
 
 Do not run this world alongside a queue trial on the same character/world. The
 operator must own the existing world locks and restore the normal worker when
 the demo lease ends. Never commit credentials, outputs, or game assets.
 
-## Next scored adapter: normal persistence
+## Scored adapter: normal persistence
 
 The existing bot event sink is disabled in full-client mode. The smallest
 server-backed score uses a frozen private database baseline restored while Cosmic
@@ -112,9 +116,9 @@ whole connection-to-logout session and report API/controller/settlement duration
 separately. Identical database baselines do not imply deterministic combat RNG.
 Kills and damage remain unknown without additional authoritative evidence.
 
-The offline [persistence scorer](FULL_CLIENT_TRIALS.md) now validates the proposed
-reset/session/save evidence and calculates net XP. The live collector and durable
-trial lifecycle still need implementation; this does not score existing demos.
+The offline [persistence scorer](FULL_CLIENT_TRIALS.md) validates collected
+reset/session/native-save evidence and calculates net XP. The durable runner and
+live collector implement this lifecycle; they do not retroactively score demos.
 
 The publication validator in `scripts/full_client_publish.py` is a fail-closed
 check of supplied evidence and hashes, not an independent proof of API/server
