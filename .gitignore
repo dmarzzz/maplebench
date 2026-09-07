@@ -31,3 +31,7 @@ wz/
 ._*
 __pycache__/
 *.py[cod]
+
+# Curated gameplay sample explicitly included for repository distribution.
+!/examples/full-client-benchmark/recordings/
+!/examples/full-client-benchmark/recordings/*.webm

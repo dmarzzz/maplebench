@@ -2,6 +2,10 @@
 
 Never commit credentials, personal information, account exports, private transcripts,
 host-specific configuration, database files, recordings, or game assets.
+The explicitly approved gameplay sample under `examples/full-client-benchmark/`
+is the recording exception: only clips declared in its recording manifest may
+be tracked, and the index guard verifies their exact hashes and sizes. This
+does not permit other recordings, raw runtime evidence, credentials, or WZ assets.
 Keep runtime configuration and outputs in ignored directories. Generate passwords on
 the runtime host; do not embed them in commands, documentation, or source.
 
