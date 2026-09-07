@@ -41,6 +41,11 @@ and party objectives remain a design; they are not claimed as running benchmarks
   bounded command supervisor, conservative API accounting, and explicit recovery.
 - [Linux runtime backend](FULL_CLIENT_RUNTIME.md): stopped-server baseline
   restore, pinned server launch, ordinary browser lifecycle, and real collection.
+- [Normal-service lifecycle](FULL_CLIENT_LIFECYCLE.md): explicit, journaled
+  restoration of the existing normal services, exact-instance reconciliation,
+  native startup proof and a verified first-idle worker receipt. This newer
+  command has offline validation; private configuration and rollout acceptance
+  remain outstanding, including a provable native log generation.
 - [Persistence and publication](FULL_CLIENT_TRIALS.md): byte-verified evidence,
   net-XP calculation, native save receipts, and publication schema 2.
 - [Full-client controls](FULL_CLIENT.md): real input, capture, live model labels,

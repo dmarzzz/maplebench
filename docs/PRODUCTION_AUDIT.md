@@ -20,6 +20,7 @@ yet ready to claim unattended production operation.
 | Resource and ownership safeguards | Bounded trials, guarded subprocesses, existing world/queue locks, no lock takeover, frozen local Docker invocation and bounded evidence readers. | Shared-host capacity and longer service operation are not established by a short acceptance. See workspace gaps below. |
 | Normal-worker health | Explicit schema-2 probes verify actual process bindings, owned listeners, worker-held lock inodes, queue and private relay quiescence; fresh waiting is distinct from rendering. | An operational snapshot, not trial authorization. Durable trials retain their trusted runner/account checks. Rollout acceptance remains outstanding. |
 | First-idle restoration evidence | The opt-in worker hook records zero claimed trials, exact Cosmic/worker instances, source hash and held lock identities in a create-only receipt. | Replacement/unlocked descriptors fail; the lifecycle consumer must independently verify the receipt. |
+| Explicit normal-service lifecycle | `full_client_lifecycle.py` validates a private handoff, journals start intent, proves exact native/worker instances and reconciles interrupted responses without replaying starts. | New offline tests include real process death/descendant cleanup; this command has not been deployed or accepted against the normal logger. |
 | Startup diagnostics | Native log/marker/listener observations are retained for the owned invocation. Incomplete probes preserve their deadline; byte/FD/deadline bounds constrain process evidence reads. | No unrelated-log fallback or assertion about the earlier discarded inner failure. |
 | Focused validation | 234 tests passed over runtime, runner, publisher, scorer, experiments and dashboard in one serialized, capped Linux job. | The immutable test snapshot covers the implementation fixes below. No API or live game/database operation was used by this test job. |
 
@@ -58,25 +59,39 @@ The successful source snapshot SHA256 is
 `95c38b508417ec82a26eb85dd6ff24caeef8be8b7cfe267d601a42f573d773b0`.
 These jobs issued no API requests or live game/database mutations.
 
-## Remaining workspace implementation
+The new normal-service lifecycle passed all 14 focused Linux tests in 0.537
+seconds. They include actual temporary files/flocks, an open native log and
+owned listening socket, lost start-response reconciliation, and a killed
+operator with a grandchild. The guard test confirms that its lock remains held
+until both command descendants are reaped, with the guard's CPU limit exempted
+and the command child's limit retained. An initial fixture named `operator.py`
+shadowed Python's standard-library module; renaming the test driver fixed that
+fixture before the successful run. The production lifecycle source did not
+change between those two test jobs. The successful snapshot SHA256 is
+`bfb90e3def7ef423da0269f53aa7a2734c8d98bde844791e86ff977a6683edbb`.
+Tests used the same serialized 768 MiB/two-CPU/180-second job bounds and made no
+live service, database or API calls.
 
-These are local implementation gaps, not completed work or external approvals:
+## Remaining integration and operational work
 
-1. **Normal-service lifecycle:** the legacy worker's `restore_world()` can start
-   or restart the normal service without the durable intent, exact-instance
-   continuation, native readiness, capacity admission and structured first-idle
-   proof used by the private recovery helpers. Move that supported lifecycle into
-   a reusable explicit workspace command. Keep full-client trial cleanup stopped
-   and do not let the legacy worker reinterpret trial ownership.
+Normal-worker health, first-idle receipts, invocation-bound startup diagnostics
+and the explicit lifecycle command are implemented and covered above. The
+standalone health tool refuses durable-trial mode because it lacks the trusted
+runner/account context; that existing context remains authoritative.
 
-Normal-worker health and invocation-bound startup diagnostics are implemented
-and covered above. The standalone health tool explicitly refuses durable-trial
-mode because it lacks the trusted runner/account context; that existing context
-remains authoritative. The normal-service lifecycle still needs its independent
-crash review and focused validation. Its native log-generation contract must
-refuse ambiguous reuse of an old online marker, including unsupported same-inode
-rewrites. The private recovery's earlier discarded inner error remains unproven;
-the later descriptor-limit failure was directly observed.
+The lifecycle still needs a reviewed private configuration and rollout
+acceptance against the existing normal services. In particular, its native
+log-generation contract refuses ambiguous reuse of an old online marker,
+including a same-inode rewrite by the normal logger. Accept a provable new
+generation or preserved append boundary before using this command for recovery.
+Do not treat these source tests as permission to replay old private helpers or
+as live restoration evidence. The legacy worker retains its existing batch
+cleanup behavior; the new supported handoff requires the opt-in receipt and an
+already-verified normal Cosmic instance.
+
+The private recovery's earlier discarded inner error remains unproven; the
+later descriptor-limit failure was directly observed. Neither source change
+retroactively changes those historical receipts.
 
 ## External release gates
 
@@ -96,4 +111,5 @@ the later descriptor-limit failure was directly observed.
   external publication. Keep game assets, private captures, database exports,
   credentials and the control plane private.
 
-The goal remains active while the workspace implementation gaps above remain.
+The production goal remains active through the required integration and live
+acceptance work; these source tests alone do not establish production readiness.
