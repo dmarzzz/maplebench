@@ -43,9 +43,10 @@ and party objectives remain a design; they are not claimed as running benchmarks
   restore, pinned server launch, ordinary browser lifecycle, and real collection.
 - [Normal-service lifecycle](FULL_CLIENT_LIFECYCLE.md): explicit, journaled
   restoration of the existing normal services, exact-instance reconciliation,
-  native startup proof and a verified first-idle worker receipt. This newer
-  command has offline validation; private configuration and rollout acceptance
-  remain outstanding, including a provable native log generation.
+  native startup proof and a verified first-idle worker receipt. Release
+  `86aa73f` completed a real normal-service restoration with native log/descriptor
+  and listener evidence, followed by the worker's first-idle receipt. This
+  validates one restoration, not unattended availability.
 - [Persistence and publication](FULL_CLIENT_TRIALS.md): byte-verified evidence,
   net-XP calculation, native save receipts, and publication schema 2.
 - [Full-client controls](FULL_CLIENT.md): real input, capture, live model labels,
@@ -151,6 +152,18 @@ Shared-host capacity is still an operational release gate. Normal-service
 restoration retains the original heap/cgroup settings and refuses when available
 memory is below the reviewed admission threshold. A passing short trial does not
 reserve capacity for continuous operation or demonstrate unattended recovery.
+
+Release `9a610af` corrected a relay restart defect exposed by the next acceptance
+attempt: retained readiness metadata from a completed recording prevented fresh
+ordinary-login frames from becoming ready. The failed attempt was recovered
+without a provider request. Nine focused regression tests passed, including
+strict checks for active or unsettled captures. A web-only deployment preserved
+the running normal server and worker, then an ordinary login verified three
+fresh native observations with 17 monsters and a visible native HUD. Ordinary
+logout preserved XP/keymap and the checked historical evidence hashes. This was a
+no-input, no-API operational check. The next API acceptance has not started:
+shared-host memory admission refused the controlled pause before any service
+change. See the [acceptance record](FULL_CLIENT_ACCEPTANCE.md#relay-restart-and-normal-service-acceptance).
 
 The original normal server and queue worker were restored after the separate
 acceptance. Restoration exposed a false readiness timeout: `journalctl` returned

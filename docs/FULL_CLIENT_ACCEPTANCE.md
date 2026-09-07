@@ -188,6 +188,52 @@ as a separate frozen-input group. This proves one successful coordinator entry,
 not repeated-model fairness, a live deadline-boundary test, or unattended
 production availability.
 
+## Relay restart and normal-service acceptance
+
+Release `86aa73f` completed a real invocation of the normal-service lifecycle
+after explicit trial cleanup. It started the normal game server once, verified
+fresh startup bytes through that process's own log descriptor and native
+listeners, then started the existing queue worker once. The worker's first-idle
+receipt proved that it retained the same server instance. Normal-worker health
+passed. An earlier activation's missed visual-acceptance window remains recorded;
+a later observation-only finalization replayed none of its service/configuration
+actions.
+
+Attempt `c8370d4f4cbf46c2aa757d5f79821bdc`, whose cleanup preceded that restoration,
+failed during ordinary
+login before any API request. The native client rendered the character and
+monsters, but the restarted relay rejected fresh observations. It had recovered
+the previous completed run's capture-readiness metadata while its in-memory
+capture clock had reset. Applying that historical recording's clock requirement
+to a new idle login prevented readiness. Explicit same-attempt recovery
+completed; this attempt remains recovered, with no score, new recording or
+provider request. It was not retried or substituted for an earlier result.
+
+Release `9a610af` scopes that historical metadata to its settled recording.
+Ordinary native freshness is available again once a completed recording is saved
+or a failed run is explicitly released, and no worker, input, lease or quarantine
+remains active. Active or unsettled runs retain the strict capture-clock checks.
+Nine focused tests passed, including 17 active/unsettled cases within the new
+regression coverage.
+
+The web-only update preserved both running normal processes. A separate ordinary
+login check then obtained three fresh observations, each with 17 monsters;
+observation ages were below 90 ms and render ages below 74 ms. Native Chrome
+inspection showed the character, HUD and changing monster positions. The check
+sent no gameplay input and made no API request. Ordinary logout was independently
+verified offline; persisted EXP stayed at 73,250, key bindings were unchanged,
+and the prior run's small evidence artifacts and request inventory were unchanged.
+This verifies the repaired login path, not a new scored trial or a positive
+trial-specific native save receipt.
+
+Private procedures for a new single-entry Astra acceptance and fresh normal-service
+restoration were prepared separately. The controlled pause was refused by shared-host memory
+admission before creating a pause intent, acquiring world locks or changing a
+service. A subsequent 20-second observation remained below the configured
+threshold. No new plan was submitted and no API request began. The live runtime
+continues in its normal service mode; the completed repair does not remove this
+capacity requirement.
+
 ## Limits before a public ranking
 
 - Run a declared, finite repeated-trial experiment with balanced model order,
