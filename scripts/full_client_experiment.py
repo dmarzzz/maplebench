@@ -2,6 +2,8 @@
 
 Creating a plan and reporting are offline operations. Only explicit run/resume
 launches trials. Submitted IDs are never replayed, including absent journals.
+Only a synchronous refusal before launcher entry can explicitly retire an ID;
+missing journals without that durable receipt remain unresolved.
 Private plans/journals are trusted operator inputs, not authenticated evidence.
 """
 from __future__ import annotations
@@ -45,6 +47,8 @@ POLICY = {"failure": "stop", "resume": "explicit_future_unsubmitted_only", "retr
           "launch_grace_seconds": LAUNCH_GRACE_SECONDS}
 TERMINAL = {"completed", "recovered"}
 STATUSES = TERMINAL | {"running", "failed", "interrupted", "recovering"}
+UNLAUNCHED = "retired_unlaunched"
+PRELAUNCH_REFUSALS = {"insufficient_time_for_full_trial"}
 
 
 class ExperimentError(RuntimeError):
@@ -488,6 +492,12 @@ class Experiment:
             observed = self.inspector(self.plan, entry)
             for key in charged:
                 charged[key] += max(submission["reservation"][key], observed.get("usage", {}).get(key, 0))
+            if "retirement" in submission:
+                # Keep the full reservation consumed and require continued
+                # absence. A later directory cannot be adopted as this ID.
+                require(observed["status"] == "missing" and not os.path.lexists(
+                    Path(self.plan["runner"]["state_root"]) / entry["attempt_id"]), "retired_attempt_appeared")
+                continue
             require(observed["terminal_clean"], "submitted_attempt_unresolved")
             settled = {"status": observed["status"], "journal_sha256": observed["journal_sha256"],
                        "backend_sha256": observed["backend_sha256"]}
@@ -547,8 +557,19 @@ class Experiment:
                     self.persist("submission_intent")  # No child may exist before this fsync.
                     timeout = min(reservation["wall_seconds"], end - self.monotonic(),
                                   (self.state["deadline_at_ms"] - self.now()) / 1000)
-                    require(timeout >= entry["spec"]["budgets"]["total_seconds"] + 1,
-                            "insufficient_time_for_full_trial")
+                    if timeout < entry["spec"]["budgets"]["total_seconds"] + 1:
+                        # This branch is reached only in the invocation that
+                        # fsynced the intent, before calling the launcher. Do
+                        # not infer this outcome on resume or catch exceptions
+                        # from inside the launcher, even with the same code.
+                        require(not os.path.lexists(Path(self.plan["runner"]["state_root"]) / entry["attempt_id"]),
+                                "unlaunched_attempt_appeared")
+                        self.state["submissions"][-1]["retirement"] = {
+                            "status": UNLAUNCHED, "reason": "insufficient_time_for_full_trial",
+                            "launcher_invoked": False, "actual_usage": {"api_requests": 0, "total_tokens": 0},
+                            "intent_sequence": self.state["events"][-1]["sequence"]}
+                        self.persist("submission_retired_unlaunched")
+                        raise ExperimentError("insufficient_time_for_full_trial")
                     returncode = self.launcher(self.plan, entry, request_path, timeout)
                     require(type(returncode) is int, "invalid_child_result")
                     self.state["submissions"][-1]["returncode"] = returncode
@@ -569,7 +590,8 @@ class Experiment:
     def summary(self):
         return {"schema_version": 1, "experiment_id": self.plan["experiment_id"], "status": self.state["status"],
                 "planned": len(self.plan["entries"]), "submitted": len(self.state["submissions"]),
-                "settled": len(self.state["settled"]), "ranked": False}
+                "settled": len(self.state["settled"]),
+                "retired_unlaunched": sum("retirement" in item for item in self.state["submissions"]), "ranked": False}
 
 
 def validate_state(state, plan):
@@ -592,11 +614,22 @@ def validate_state(state, plan):
         expected = {"api_requests": entry["spec"]["budgets"]["max_api_requests"],
                     "total_tokens": entry["spec"]["budgets"]["max_total_tokens"],
                     "wall_seconds": entry["spec"]["budgets"]["total_seconds"] + LAUNCH_GRACE_SECONDS}
-        require(isinstance(item, dict) and set(item) == {"ordinal", "attempt_id", "submitted_at_ms", "reservation", "returncode"}
+        fields = {"ordinal", "attempt_id", "submitted_at_ms", "reservation", "returncode"}
+        require(isinstance(item, dict) and (set(item) == fields or set(item) == fields | {"retirement"})
                 and type(item["ordinal"]) is int and item["ordinal"] == i and item["attempt_id"] == entry["attempt_id"]
                 and scoring.same_json(item["reservation"], expected)
                 and integer(item["submitted_at_ms"], state["started_at_ms"], state["updated_at_ms"])
                 and (item["returncode"] is None or integer(item["returncode"], -255, 255)), "invalid_submission_journal")
+        if "retirement" in item:
+            retired = item["retirement"]
+            require(isinstance(retired, dict) and set(retired) == {
+                    "status", "reason", "launcher_invoked", "actual_usage", "intent_sequence"}
+                    and retired["status"] == UNLAUNCHED and isinstance(retired["reason"], str)
+                    and retired["reason"] in PRELAUNCH_REFUSALS and retired["launcher_invoked"] is False
+                    and scoring.same_json(retired["actual_usage"], {"api_requests": 0, "total_tokens": 0})
+                    and integer(retired["intent_sequence"], 0, len(events) - 2)
+                    and item["returncode"] is None and item["attempt_id"] not in settled,
+                    "invalid_unlaunched_retirement")
     require(set(settled) <= {item["attempt_id"] for item in submissions}, "invalid_settlement_journal")
     for value in settled.values():
         require(isinstance(value, dict) and set(value) == {"status", "journal_sha256", "backend_sha256"}
@@ -608,14 +641,28 @@ def validate_state(state, plan):
                 and type(event["sequence"]) is int and event["sequence"] == i
                 and integer(event["at_ms"], previous, state["updated_at_ms"])
                 and event["kind"] in {"experiment_started", "execution_admitted", "explicit_resume", "submission_intent",
-                                     "child_returned", "attempt_settled", "operator_attention_required", "experiment_completed"},
+                                     "submission_retired_unlaunched", "child_returned", "attempt_settled",
+                                     "operator_attention_required", "experiment_completed"},
                 "invalid_coordinator_events")
         previous = event["at_ms"]
     intents = [event for event in events if event["kind"] == "submission_intent"]
     require(len(intents) == len(submissions)
             and all(item["submitted_at_ms"] <= event["at_ms"]
                     for item, event in zip(submissions, intents)), "submission_intent_mismatch")
-    require(state["status"] != "completed" or len(settled) == len(plan["entries"]), "incomplete_completed_experiment")
+    retirement_sequences = set()
+    for index, (item, intent) in enumerate(zip(submissions, intents)):
+        if "retirement" in item:
+            sequence = item["retirement"]["intent_sequence"]
+            require(sequence == intent["sequence"] and events[sequence + 1]["kind"] == "submission_retired_unlaunched",
+                    "retirement_intent_mismatch")
+            end = intents[index + 1]["sequence"] if index + 1 < len(intents) else len(events)
+            require(not any(event["kind"] in {"child_returned", "attempt_settled"}
+                            for event in events[sequence + 2:end]), "retirement_launch_event_conflict")
+            retirement_sequences.add(sequence + 1)
+    require(retirement_sequences == {event["sequence"] for event in events
+                                    if event["kind"] == "submission_retired_unlaunched"}, "retirement_event_mismatch")
+    require(state["status"] != "completed" or len(settled) + len(retirement_sequences) == len(plan["entries"]),
+            "incomplete_completed_experiment")
     return state
 
 
@@ -698,6 +745,11 @@ def report(plan, directory, *, inspector=inspect_attempt, metrics=verified_metri
             observed = inspector(plan, entry)
             if entry["attempt_id"] not in submissions:
                 require(observed["status"] == "missing", "unowned_attempt")
+            elif "retirement" in submissions[entry["attempt_id"]]:
+                require(observed["status"] == "missing" and not os.path.lexists(
+                    Path(plan["runner"]["state_root"]) / entry["attempt_id"]), "retired_attempt_appeared")
+                row.update(status=UNLAUNCHED, retirement=copy.deepcopy(submissions[entry["attempt_id"]]["retirement"]),
+                           score_verification="not_applicable_unlaunched")
             else:
                 row["runner_status"] = observed["status"] if observed["status"] in STATUSES else None
                 row["status"] = observed["status"] if observed["status"] in STATUSES else "submitted_unresolved"
@@ -732,6 +784,7 @@ def report(plan, directory, *, inspector=inspect_attempt, metrics=verified_metri
                 "population": "completed_attempts_with_verified_persistence", "ranked": False})
     return {"schema_version": 1, "experiment_id": plan["experiment_id"], "plan_sha256": digest(plan),
         "scope": "entire_declared_attempt_set", "planned": len(rows), "submitted": len(submissions),
+        "retired_unlaunched": sum("retirement" in item for item in submissions.values()),
         "experiment_status": state["status"] if state else "not_started", "balance": plan["balance"],
         "publication_status": "not_evaluated", "ranked": False, "attempts": rows, "groups": groups}
 

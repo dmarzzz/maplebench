@@ -201,6 +201,10 @@ running, failed or interrupted attempts remain unresolved; an absent journal
 after submission is **not** proof that no request happened. Only a completed or
 explicitly recovered attempt with matching identity, clean backend, cleanup and
 final quiet-status receipts permits advancing to future unsubmitted entries.
+The exception is a durable `retired_unlaunched` receipt created by the same
+invocation that refused admission after fsync, before entering the launcher.
+An explicit resume can advance past that receipt while the attempt directory
+remains absent. Missing evidence alone never creates this exception.
 Already submitted IDs are never invoked again. Observed terminal receipt hashes
 are pinned; subsequent changes refuse continuation. Recovered attempts remain
 invalid and visible in the report.
@@ -211,8 +215,11 @@ The original wall deadline survives resume and includes paused time. A backwards
 clock refuses execution; monotonic time also bounds each active invocation.
 Admission requires the full trial time plus a one-second launch margin, checked
 again after submission-intent fsync. A nearly expired experiment cannot start a
-partial trial. If time expires at the fsync boundary, that submitted ID remains
-unresolved and is never replayed. Quarantine cleanup and an already uncertain
+partial trial. A synchronous deadline refusal at the fsync boundary retires that
+ID with zero actual API/token usage while retaining its full reservation and
+declared position. A crash without the durable retirement receipt, or any
+exception after launcher entry, leaves the ID unresolved. Neither case permits
+replaying the ID. Quarantine cleanup and an already uncertain
 provider call may outlast active execution while retaining the existing locks;
 this does not authorize another request or another trial.
 Budget exhaustion, an unknown owner or unresolved attempt is an operator stop,
@@ -221,7 +228,9 @@ never permission to reset state, take over locks or silently select another ID.
 ## Complete-plan report
 
 Reports enumerate every planned entry in declared order, including unsubmitted,
-unresolved, failed, recovered and invalid-evidence cases. There is no recent-row
+retired before launch, unresolved, failed, recovered and invalid-evidence cases.
+Retired entries have no XP or no-op metrics and remain outside scored samples.
+There is no recent-row
 limit and no selection of the best attempt. Invalid or missing XP stays unknown;
 it does not become zero. A model-generated zero score or negative persisted XP
 remains a numeric outcome.

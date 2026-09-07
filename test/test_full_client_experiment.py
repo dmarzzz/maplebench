@@ -45,7 +45,7 @@ class ExperimentTests(unittest.TestCase):
         path.chmod(0o600)
         return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
 
-    def config(self, *, models=None, repetitions=1, fixtures=1):
+    def config(self, *, models=None, repetitions=1, fixtures=1, fixture_seconds=None):
         models = list(models or experiment.MODELS[:2])
         self.attempts = self.root / "attempts"
         self.attempts.mkdir(mode=0o700, exist_ok=True)
@@ -62,7 +62,8 @@ class ExperimentTests(unittest.TestCase):
         values = []
         for index in range(fixtures):
             name = f"fixture{index}"
-            scenario = self.write(name + "-scenario.json", {"id": name, "trial_budgets": budgets,
+            fixture_budgets = dict(budgets, total_seconds=fixture_seconds[index] if fixture_seconds else 120)
+            scenario = self.write(name + "-scenario.json", {"id": name, "trial_budgets": fixture_budgets,
                 "readiness_policy": {"schema_version": 1, "expected_map_id": 240040511,
                     "min_monsters": 1, "min_samples": 3, "min_span_ms": 1000, "timeout_ms": 10000}})
             baseline = self.write(name + "-baseline.sql", b"synthetic database baseline")
@@ -78,7 +79,7 @@ class ExperimentTests(unittest.TestCase):
             adapter = self.write(name + "-adapter.json", {"argv": [runner["python"]["path"], backend["path"],
                 "--config", configuration["path"]], "dependencies": []})
             values.append({"id": name, "scenario": scenario, "baseline": baseline, "runtime_manifest": runtime,
-                           "adapter_config": adapter, "budgets": copy.deepcopy(budgets)})
+                           "adapter_config": adapter, "budgets": fixture_budgets})
         count = len(models) * repetitions * fixtures
         return {"schema_version": 1, "experiment_id": "synthetic-experiment", "models": models,
                 "repetitions": repetitions, "fixtures": values, "runner": runner,
@@ -104,8 +105,8 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(state["submissions"][-1]["reservation"]["total_tokens"], 30000)
         self.assertEqual(hashlib.sha256(request_path.read_bytes()).hexdigest(), entry["spec_sha256"])
         self.assertGreater(timeout, 0)
-        self.assertGreaterEqual(timeout, 121)
-        self.assertLessEqual(timeout, 125)
+        self.assertGreaterEqual(timeout, entry["spec"]["budgets"]["total_seconds"] + 1)
+        self.assertLessEqual(timeout, entry["spec"]["budgets"]["total_seconds"] + experiment.LAUNCH_GRACE_SECONDS)
         self.calls.append(entry["attempt_id"])
         self.completed(entry)
         return 0
@@ -263,6 +264,143 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         value = experiment.report(plan, self.root / "experiment", inspector=self.inspect)
         self.assertEqual([r["status"] for r in value["attempts"]], ["submitted_unresolved", "unsubmitted"])
+
+    def retire_after_slow_intent(self, plan, *, seconds=130):
+        write = experiment.write_json
+        def slow_intent(path, value, **kwargs):
+            write(path, value, **kwargs)  # Real atomic private file and fsync.
+            if path.name == "coordinator.json" and value["events"][-1]["kind"] == "submission_intent":
+                self.clock.value += seconds  # Deterministic elapsed I/O time; no sleep.
+        with patch.object(experiment, "write_json", side_effect=slow_intent):
+            with self.assertRaisesRegex(experiment.ExperimentError, "insufficient_time_for_full_trial"):
+                self.coordinator(plan).run()
+        return json.loads((self.root / "experiment/coordinator.json").read_text())
+
+    def test_known_prelaunch_refusal_retires_id_and_resume_only_advances(self):
+        # A shorter later fixture can still fit the original wall deadline.
+        # The first ID's full reservation remains charged despite zero usage.
+        plan = self.plan(models=[experiment.MODELS[0]], fixtures=2, fixture_seconds=[120, 90])
+        state = self.retire_after_slow_intent(plan)
+        first, second = plan["entries"]
+        submission = state["submissions"][0]
+        self.assertEqual(self.calls, [])
+        self.assertEqual(state["status"], "stopped")
+        self.assertEqual(submission["attempt_id"], first["attempt_id"])
+        self.assertEqual(submission["ordinal"], 0)
+        self.assertEqual(submission["retirement"], {"status": "retired_unlaunched",
+            "reason": "insufficient_time_for_full_trial", "launcher_invoked": False,
+            "actual_usage": {"api_requests": 0, "total_tokens": 0}, "intent_sequence": 2})
+        self.assertEqual(submission["reservation"], {"api_requests": 1, "total_tokens": 30000, "wall_seconds": 125})
+        self.assertIsNone(submission["returncode"])
+        self.assertEqual(state["settled"], {})
+        experiment.validate_state(copy.deepcopy(state), plan)
+        report = experiment.report(plan, self.root / "experiment", inspector=self.inspect)
+        self.assertEqual([row["status"] for row in report["attempts"]], ["retired_unlaunched", "unsubmitted"])
+        self.assertIsNone(report["attempts"][0]["metrics"])
+        self.assertEqual(report["attempts"][0]["score_verification"], "not_applicable_unlaunched")
+        self.assertEqual(report["groups"][0]["verified_n"], 0)
+        self.assertEqual(report["groups"][0]["no_op_count"], 0)
+        self.assertEqual(report["retired_unlaunched"], 1)
+        with self.assertRaisesRegex(experiment.ExperimentError, "explicit_resume_required"):
+            self.coordinator(plan).run()
+        resumed = self.coordinator(plan)
+        result = resumed.run(resume=True)
+        self.assertEqual(self.calls, [second["attempt_id"]])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual((result["submitted"], result["settled"], result["retired_unlaunched"]), (2, 1, 1))
+        self.assertEqual(resumed.state["deadline_at_ms"], state["deadline_at_ms"])
+        self.assertEqual(resumed.reconcile(), {"api_requests": 2, "total_tokens": 60000, "wall_seconds": 220})
+        self.coordinator(plan).run(resume=True)
+        self.assertEqual(self.calls, [second["attempt_id"]])
+
+    def test_retired_final_entry_completes_only_on_explicit_resume_without_a_trial(self):
+        plan = self.plan(models=[experiment.MODELS[0]])
+        state = self.retire_after_slow_intent(plan, seconds=5)
+        result = self.coordinator(plan).run(resume=True)
+        self.assertEqual((result["status"], result["settled"], result["retired_unlaunched"]), ("completed", 0, 1))
+        saved = json.loads((self.root / "experiment/coordinator.json").read_text())
+        self.assertEqual(saved["deadline_at_ms"], state["deadline_at_ms"])
+        experiment.validate_state(saved, plan)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(list(self.attempts.iterdir()), [])
+
+    def test_launcher_refusal_with_identical_code_remains_uncertain(self):
+        plan = self.plan()
+        def refusal(*args):
+            self.calls.append(args[1]["attempt_id"])
+            raise experiment.ExperimentError("insufficient_time_for_full_trial")
+        with self.assertRaisesRegex(experiment.ExperimentError, "insufficient_time_for_full_trial"):
+            self.coordinator(plan, launcher=refusal).run()
+        state = json.loads((self.root / "experiment/coordinator.json").read_text())
+        self.assertNotIn("retirement", state["submissions"][0])
+        with self.assertRaisesRegex(experiment.ExperimentError, "submitted_attempt_unresolved"):
+            self.coordinator(plan).run(resume=True)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_missing_durable_retirement_never_infers_zero_usage_from_absence(self):
+        plan = self.plan()
+        write = experiment.write_json
+        def failing_retirement(path, value, **kwargs):
+            if path.name == "coordinator.json" and any("retirement" in row for row in value["submissions"]):
+                raise OSError("synthetic persistence unavailable")
+            write(path, value, **kwargs)
+            if path.name == "coordinator.json" and value["events"][-1]["kind"] == "submission_intent":
+                self.clock.value += 130
+        with patch.object(experiment, "write_json", side_effect=failing_retirement):
+            with self.assertRaises(OSError):
+                self.coordinator(plan).run()
+        state = json.loads((self.root / "experiment/coordinator.json").read_text())
+        self.assertEqual(state["events"][-1]["kind"], "submission_intent")
+        self.assertNotIn("retirement", state["submissions"][0])
+        with self.assertRaisesRegex(experiment.ExperimentError, "submitted_attempt_unresolved"):
+            self.coordinator(plan).run(resume=True)
+        self.assertEqual(self.calls, [])
+
+    def test_retired_id_cannot_adopt_a_later_attempt_directory(self):
+        plan = self.plan()
+        self.retire_after_slow_intent(plan)
+        (self.attempts / plan["entries"][0]["attempt_id"]).mkdir(mode=0o700)
+        with self.assertRaisesRegex(experiment.ExperimentError, "retired_attempt_appeared"):
+            self.coordinator(plan).run(resume=True)
+        report = experiment.report(plan, self.root / "experiment", inspector=self.inspect)
+        self.assertEqual(report["attempts"][0]["status"], "invalid_receipts")
+        self.assertIsNone(report["attempts"][0]["metrics"])
+        self.assertEqual(self.calls, [])
+
+    def test_retirement_receipt_requires_matching_event_and_exact_zero_usage(self):
+        plan = self.plan()
+        state = self.retire_after_slow_intent(plan)
+        def returned(value):value["submissions"][0]["returncode"] = 0
+        def settled(value):value["settled"][plan["entries"][0]["attempt_id"]] = {
+            "status": "completed", "journal_sha256": "a" * 64, "backend_sha256": "b" * 64}
+        def without_receipt(value):del value["submissions"][0]["retirement"]
+        def missing_event(value):value["events"][3]["kind"] = "child_returned"
+        mutations = [returned, settled, without_receipt, missing_event]
+        for field, new in (("launcher_invoked", True), ("reason", "arbitrary_private_text"),
+                          ("actual_usage", {"api_requests": False, "total_tokens": 0}),
+                          ("actual_usage", {"api_requests": 0, "total_tokens": 1}),
+                          ("intent_sequence", 0), ("intent_sequence", True)):
+            mutations.append(lambda value, field=field, new=new: value["submissions"][0]["retirement"].update({field: new}))
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                changed = copy.deepcopy(state);mutate(changed)
+                with self.assertRaises(experiment.ExperimentError):
+                    experiment.validate_state(changed, plan)
+
+    def test_retired_submission_rejects_later_child_events_before_next_intent(self):
+        plan = self.plan()
+        state = self.retire_after_slow_intent(plan)
+        for kind in ("child_returned", "attempt_settled"):
+            with self.subTest(kind=kind):
+                changed = copy.deepcopy(state)
+                changed["events"].append({"sequence": len(changed["events"]),
+                    "at_ms": changed["updated_at_ms"], "kind": kind})
+                # A syntactically valid event cannot contradict the zero-usage
+                # receipt, even without a return code or settled hash record.
+                self.assertIsNone(changed["submissions"][0]["returncode"])
+                self.assertEqual(changed["settled"], {})
+                with self.assertRaisesRegex(experiment.ExperimentError, "retirement_launch_event_conflict"):
+                    experiment.validate_state(changed, plan)
 
     def test_failed_attempt_stops_and_explicit_recovery_allows_only_future_ids(self):
         plan = self.plan()
