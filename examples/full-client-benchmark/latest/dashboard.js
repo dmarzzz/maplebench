@@ -102,18 +102,18 @@
   }
   function renderLive(){
     const rows=snapshot.attempts;
-    const row=rows.find(item=>item.id===snapshot.featured_run_id&&item.status==='completed')||rows.find(item=>['running','recovering','requesting'].includes(item.status))||rows[0];
+    const row=rows.find(item=>['running','recovering','requesting'].includes(item.status))||rows[0];
     if(!row)return;
     const liveBadge=badge(row.status);
     if(row.status==='completed')liveBadge.textContent='Completed · saved result';
     $('live-badge').replaceWith(Object.assign(liveBadge,{id:'live-badge'}));
     $('live-id').textContent=row.id;
-    $('live-title').textContent=row.requested_model?`${row.status==='completed'?'Latest verified result: ':''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
+    $('live-title').textContent=row.requested_model?`${row.status==='completed'?'Latest result: ':''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
     const phase=phases.find(([key])=>key===row.phase)?.[1]||'Preparing';
     const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
     const expectsRenderer=['running','requesting'].includes(row.status)&&['login','run_controller'].includes(row.phase);
     $('live-description').textContent=row.failure_code?`${failedPhase}: ${row.failure_code.replaceAll('_',' ')}.${row.api_response_saved?' The API response was saved; this attempt has no verified persisted score.':''}`
-      :row.status==='completed'?'This verified run is featured for sharing. More recent failed attempts, if any, remain in the history below.'
+      :row.status==='completed'?'The latest saved run completed. Every group of frozen inputs appears below.'
       :`${phase}${expectsRenderer&&row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
     const current=phases.findIndex(([key])=>key===row.phase);$('phases').replaceChildren();
     for(const [index,[key,label]]of phases.entries()){const node=el('li',label),state=row.phase_states?.[key];if(state==='failed'){node.textContent=`${label}: failed`;node.className='phase-failed';}else if(row.status==='completed'||state==='returned')node.className='done';else if(index===current)node.className='current';$('phases').append(node);}
@@ -160,7 +160,7 @@
       if(row.kind==='integration')state.append(el('small','Unranked integration'));
       scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');inputDetails(cell(tr,null,'input-summary'),row);publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
     }
-    $('scope').textContent='Saved unranked results. No runs are started from this page.';
+    $('scope').textContent='Selected recorded run · unranked. No runs are started from this page.';
   }
   function freshness(){
     if(!snapshot)return;
