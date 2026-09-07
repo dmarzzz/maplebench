@@ -211,6 +211,87 @@ class FullClientTests(unittest.TestCase):
                 bridge.frame(body)
                 self.assertFalse(bridge.fresh())  # No age-only fallback for trial.
 
+    def saved_readiness_run(self, folder):
+        root=Path(folder); path=root/('a'*32); path.mkdir()
+        write_json(path/'controller.json',{'id':path.name,'status':'completed','workerActive':False,
+            'evidenceStatus':'saved','recordingStatus':'saved','readinessPolicy':self.policy(),
+            'captureClockAccepted':'b'*32,'captureReady':True})
+        write_json(path/'recording.json',{'status':'completed','sha256':'c'*64})
+        write_json(path/'capture-clock.json',{'id':'b'*32,'client_sent_ms':1000,
+            'server_received_ms':1000,'server_sent_ms':1000})
+        return root,path
+
+    def test_restarted_settled_readiness_run_accepts_login_without_changing_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root,path=self.saved_readiness_run(folder)
+            original={p.name:p.read_bytes() for p in path.iterdir()}
+            bridge=FullClientBridge(root)
+            self.assertEqual(bridge.run['captureClockAccepted'],'b'*32)
+            self.assertIsNone(bridge.capture_clock)
+            self.assertIsNone(bridge.capture_clock_received_ms)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                response=bridge.frame(self.frame(ageMs=20,renderAgeMs=3,clientSentAtMs=2000,
+                    captureState='idle',capture=None))
+                self.assertTrue(bridge.fresh())
+                self.assertEqual(bridge._snapshot()['ageMs'],20)
+                self.assertEqual(bridge._snapshot()['renderAgeMs'],3)
+                self.assertIsNone(response['clock'])
+                self.assertIsNone(response['command'])
+                self.assertFalse(response['run']['captureReady'])
+                # Historical proof cannot waive ordinary native-frame freshness.
+                bridge.frame(self.frame(renderAgeMs=1500,clientSentAtMs=2100,captureState='idle'))
+                self.assertFalse(bridge.fresh())
+            self.assertEqual({p.name:p.read_bytes() for p in path.iterdir()},original)
+
+    def test_active_or_unsettled_history_still_requires_capture_transit_proof(self):
+        cases=('requesting','running','worker_flag','worker_event','input','lease','lease_flag',
+               'release_ack_pending','evidence_pending','recording_pending','recording_missing','failed',
+               'capture_recording','capture_saving','capture_failed',
+               'failure_ack_without_release','quarantined')
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as folder, tempfile.TemporaryFile() as lease:
+                root,path=self.saved_readiness_run(folder)
+                bridge=FullClientBridge(root); run_id=bridge.run['id']
+                if case in ('requesting','running'):
+                    bridge.run['status']=case
+                elif case=='worker_flag': bridge.run['workerActive']=True
+                elif case=='worker_event': bridge.cancel_events[run_id]=threading.Event()
+                elif case=='input': bridge.pending={'id':'d'*32,'runId':run_id,'deadline':102}
+                elif case=='lease': bridge.leases[run_id]=[lease.fileno()]
+                elif case=='lease_flag': bridge.run['leaseReleasePending']=True
+                elif case=='release_ack_pending':
+                    (root/'cancellations').mkdir()
+                    write_json(root/'cancellations'/f'{run_id}.json',{'runId':run_id})
+                elif case=='evidence_pending': bridge.run['evidenceStatus']='pending'
+                elif case=='recording_pending': bridge.run['recordingStatus']='pending'
+                elif case=='recording_missing': (path/'recording.json').unlink()
+                elif case=='failed': bridge.run['status']='failed'
+                elif case=='failure_ack_without_release':
+                    bridge.run.update(status='failed',failureAcknowledged=True)
+                elif case=='quarantined': bridge.quarantines[run_id]='e'*32
+                with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                    response=bridge.frame(self.frame(ageMs=20,renderAgeMs=3,clientSentAtMs=2000,
+                        captureState=case.removeprefix('capture_') if case.startswith('capture_') else 'idle',capture=None))
+                    self.assertFalse(bridge.fresh())
+                    self.assertIsNone(response['command'])
+                    with self.assertRaisesRegex(ControlError,'client_state_stale'):
+                        bridge._snapshot()
+                os.fstat(lease.fileno())
+
+    def test_explicitly_released_failure_can_receive_ordinary_login_frames(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root,path=self.saved_readiness_run(folder)
+            controller=json.loads((path/'controller.json').read_text())
+            controller.update(status='failed',evidenceStatus='failed',failureAcknowledged=True)
+            write_json(path/'controller.json',controller)
+            write_json(path/'release.json',{'runId':path.name,'reason':'operator_acknowledged_failure'})
+            original={p.name:p.read_bytes() for p in path.iterdir()}
+            bridge=FullClientBridge(root)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                bridge.frame(self.frame(clientSentAtMs=2000,captureState='idle'))
+                self.assertTrue(bridge.fresh())
+            self.assertEqual({p.name:p.read_bytes() for p in path.iterdir()},original)
+
     def test_dispatch_does_not_count_initial_server_residence_twice(self):
         with tempfile.TemporaryDirectory() as folder:
             bridge,run,clock,post,wake=self.readiness_window(folder,[(0,1),(.5,2),(.5,3)])

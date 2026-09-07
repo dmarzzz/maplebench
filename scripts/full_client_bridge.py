@@ -438,6 +438,20 @@ class FullClientBridge:
             if self.client not in (None, client) and (active or now - self.last_seen < 3):
                 raise ControlError('client_already_connected')
             self.client = client
+            run_id = self.run.get('id')
+            # A restored terminal record is historical evidence, not a live
+            # capture-clock session. Ordinary login must work before start()
+            # creates the next run and its new recorder/clock handshake.
+            settled_history = bool(run_id) and body.get('captureState') == 'idle' and not (
+                active or self.cancel_events or self.run.get('leaseReleasePending') or self.quarantines
+                or self._cancelled(run_id) and run_id not in self.release_acks
+            ) and (
+                self.run['status'] == 'completed' and self.run.get('evidenceStatus') == 'saved'
+                and self.run.get('recordingStatus') == 'saved'
+                and (self.output/run_id/'recording.json').is_file()
+                or self.run['status'] == 'failed' and self.run.get('failureAcknowledged') is True
+                and (self.output/run_id/'release.json').is_file()
+            )
             valid_frame = obs['ready'] and max(age, render_age) < 1500
             hud = body.get('renderedHud')
             hud = {k:hud[k] for k in ('hp', 'mp', 'maxHp', 'maxMp')} if isinstance(hud, dict) and all(
@@ -446,7 +460,7 @@ class FullClientBridge:
             self.last_seen = now
             self.fresh_until = now + (1500-max(age, render_age))/1000 if valid_frame else now
             capture=body.get('capture')
-            self.run['captureReady']=bool(self.run.get('id') and valid_frame and isinstance(capture,dict)
+            self.run['captureReady']=bool(not settled_history and self.run.get('id') and valid_frame and isinstance(capture,dict)
                 and capture.get('runId')==self.run.get('id') and capture.get('started') is True
                 and type(capture.get('renderedFrames')) is int and 0<capture['renderedFrames']<=100000
                 and capture.get('interrupted') is False and body.get('captureState')=='recording')
@@ -455,7 +469,7 @@ class FullClientBridge:
                 write_json(self.output/self.run['id']/'capture-ready.json',
                     {'runId':self.run['id'],'serverReceivedAtMs':server_received_ms,'renderedFrames':capture['renderedFrames']})
             if self.run['captureReady']: self.lock.notify_all()
-            if self.run.get('id') and _number(body.get('clientSentAtMs')):
+            if not settled_history and self.run.get('id') and _number(body.get('clientSentAtMs')):
                 if not self.run.get('captureClockAccepted'):
                     if self.capture_clock and body.get('captureClockAck')==self.capture_clock['id']:
                         received=body.get('captureClockReceivedAtMs')
@@ -470,7 +484,7 @@ class FullClientBridge:
                     else:
                         self.capture_clock={'id':uuid.uuid4().hex,'client_sent_ms':body['clientSentAtMs'],
                             'server_received_ms':server_received_ms,'server_sent_ms':round(time.time()*1000)}
-            if self.run.get('readinessPolicy'):
+            if self.run.get('readinessPolicy') and not settled_history:
                 # The recorded handshake gives an offset interval, not equal
                 # clocks. Its lower endpoint conservatively bounds POST transit.
                 clock=self.capture_clock
@@ -493,8 +507,11 @@ class FullClientBridge:
                 self.observation=obs | {'ageMs':age,'renderAgeMs':render_age,'renderedHud':hud} if valid_frame else {'ready':False}
                 self.fresh_until=now+(1500-max(age,render_age))/1000 if valid_frame else now
                 self.run['captureReady']=self.run['captureReady'] and valid_frame
-            self._record_readiness_frame(capture,server_received_ms,now)
-            if (self.run.get('id') and (self.output/self.run['id']).is_dir()
+            if settled_history:
+                self.frame_transit=None
+            else:
+                self._record_readiness_frame(capture,server_received_ms,now)
+            if (not settled_history and self.run.get('id') and (self.output/self.run['id']).is_dir()
                     and self.run['status'] in ('completed','failed') and not self.run.get('captureTerminal')):
                 self.run['captureTerminal']={'id':uuid.uuid4().hex,'serverIssuedAtMs':server_received_ms}
                 write_json(self.output/self.run['id']/'capture-terminal.json',self.run['captureTerminal'])
