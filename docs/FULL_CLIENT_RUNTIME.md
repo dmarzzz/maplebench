@@ -192,6 +192,16 @@ runner dies. No phase opens a replacement lock and calls that ownership.
    status are retained before `release_failed_run` allows ordinary navigation;
    original bridge recordings remain in place, including failed recordings.
 
+Cleanup journals the exact owned drop-in path/hash before removing the file,
+fsyncs its directory, and checkpoints the required systemd reload. Explicit
+recovery after an interrupted removal repeats only that reload. A missing file
+alone does not authorize reloading unknown configuration. Both clean cleanup
+and subsequent ready status require no trial file, no effective trial drop-in
+or native trial environment, and `NeedDaemonReload=no`. A successful reload
+command alone is insufficient. The checkpoint is verified before returning
+clean, so a crash between unlink and reload cannot expose cached trial settings
+to the next attempt.
+
 The native variables are `MAPLEBENCH_TRIAL_ID`,
 `MAPLEBENCH_SERVER_INSTANCE_ID`, `MAPLEBENCH_PERSIST_CHARACTER_ID`,
 `MAPLEBENCH_PERSIST_ACCOUNT_ID`, and `MAPLEBENCH_SAVE_JOURNAL`. The native journal

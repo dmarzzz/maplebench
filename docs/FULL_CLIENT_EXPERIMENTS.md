@@ -27,7 +27,11 @@ The next scenario version adds `readiness_policy` with the following exact
 contract. The shared validator is `scripts/full_client_readiness.py`; collection
 and request gating live in the bridge/runtime, with independent publication
 checks in `scripts/full_client_publish.py`. Automated coverage exercises readiness
-failure and publication checks; a separate live acceptance is still required.
+failure and publication checks. Release `2a93db5` completed a separate live
+single-entry acceptance; repeated-model acceptance remains outstanding. Its
+complete-plan report independently recomputed +9,000 persisted XP and 25
+acknowledged actions over the entire one-entry plan, with `ranked:false` and no
+confidence interval. See [the acceptance record](FULL_CLIENT_ACCEPTANCE.md).
 
 | Policy field | Required value |
 | --- | --- |
@@ -228,10 +232,14 @@ also checks fixture hashes, exact requested/returned model, API identity/usage,
 executed runtime image and the schema-2 Docker binding. A journal score or
 `artifacts_verified` flag alone is insufficient. These checks establish
 consistency inside a trusted runtime, not authentication of a malicious collector.
+Required journal, receipt, result and provider JSON envelopes must be objects,
+even when their file hashes match. A malformed envelope makes that attempt
+`invalid_receipts`; the report still includes every other planned entry.
 
 Action/no-op claims additionally require matching attempted, acknowledged and
 controller action counts with complete accepted action receipts. If those
-execution counters are incomplete, signed persisted XP can remain reportable
+optional execution counters are absent or contradictory within valid envelopes,
+signed persisted XP can remain reportable
 while actions/no-op stay unknown. The report does not run publication validation
 or infer that a video was reviewed.
 
@@ -258,12 +266,13 @@ synthetic persisted bundles with signed XP and corruption. They do not call an
 API or run a database/game service. Run them only through the repository's
 serialized, capped validation workflow.
 
-Before using the coordinator for a live experiment, freeze a separately approved
-finite plan, verify existing runtime prerequisites, exercise one full declared
-execution and explicit-stop/resume path, inspect its recordings, and independently
-validate its publication evidence. The next readiness/prompt version additionally
-needs a saved pre-API qualifying window and a timeout case with zero provider
-requests. Historical 22/60-second protocols and evidence remain unchanged; the
-new contract needs its own frozen release and acceptance before live use.
+Release `2a93db5` passed a frozen single-entry plan with a saved qualifying
+pre-API window and reviewed publication evidence. Before repeated or unattended
+use, freeze a finite plan, verify existing runtime prerequisites, exercise the
+whole repeated plan and explicit-stop/resume path, inspect its recordings, and
+independently validate its publication evidence. A live readiness-timeout case
+must also demonstrate zero provider requests. Historical 22/60-second protocols
+and evidence remain unchanged; a later source revision needs its own frozen
+release and acceptance before deployment.
 A ten-minute fixed-clock protocol, native XP cutoff ledger, other classes,
 replanning and party objectives remain separate work.

@@ -614,7 +614,9 @@ class CommandAdapterTests(unittest.TestCase):
 
     def test_known_error_protocol_is_exact_bounded_and_not_a_lexical_allowlist(self):
         for code in ('inventory_timeout','runtime_manifest_drift','docker_executable_changed',
-                     'docker_binding_required','recorder_not_ready','client_busy_or_not_ready'):
+                     'docker_binding_required','recorder_not_ready','client_busy_or_not_ready',
+                     'cleanup_dropin_removal_unowned','cleanup_configuration_still_loaded',
+                     'cleanup_checkpoint_invalid'):
             self.assertEqual(adapter_failure_code(json.dumps({'error':code}).encode()),code)
         known = b'{"error":"server_jar_command_mismatch"}'
         self.assertEqual(adapter_failure_code(known), "server_jar_command_mismatch")

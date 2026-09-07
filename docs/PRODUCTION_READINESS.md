@@ -130,10 +130,12 @@ passing full publication validation. The original four-model comparison is
 unchanged. This early-finishing program did not exercise the live deadline-tail
 boundary; focused tests cover that boundary.
 
-The next source revision introduces a frozen local Docker execution binding and
-an explicit finite experiment coordinator. These changes require a new manifest
-and separate release acceptance; they do not retroactively change the deployed
-`9dd7d98` contract or any historical result. The deployment check found no
+Release `2a93db5` deployed a frozen local Docker execution binding, an explicit
+finite experiment coordinator, populated post-render readiness checks and an
+explicit async-body prompt. Its separate single-entry Astra acceptance passed:
+25 acknowledged actions, +9,000 persisted net XP, ordinary logout, reviewed
+recording and independently validated publication evidence. It does not
+retroactively change the `9dd7d98` contract or any historical result. The deployment check found no
 alternate Docker endpoint in those runs. Installed third-party Python package
 bytes and all import roots remain a trusted-host assumption; the new Docker
 binding does not close that separate reproducibility gap.
@@ -152,11 +154,22 @@ the failed restoration journal, and started only the original worker after
 closing the existing locks. The old queue worker then restarted that healthy
 server on its first empty-queue iteration. The source fix preserves an active
 world when there is no batch override to remove, starts a stopped normal service,
-and keeps restart/reload for actual batch cleanup. This source change still
-needs deployment; the observed restart remains in the operational evidence.
+and keeps restart/reload for actual batch cleanup. Release `2a93db5` deployed
+that fix; its normal worker reached its first idle state without restarting the
+restored server. The earlier restart remains in the operational evidence.
 A successful command exit or HTTP response alone is
 insufficient readiness evidence. An uncertain start must be reconciled against
 the existing instance before another start is considered.
+
+Restoration after the `2a93db5` acceptance also preserved an early readiness
+verification failure. Its wrapper discarded the underlying refusal code, so the
+original cause cannot be established. Independent checks subsequently proved
+the same server instance ready. A worker-only finalizer exposed a concrete
+1,024-descriptor inspection limit below the server's stable 1,566 descriptors,
+mostly Netty selectors. Bounded streaming inspection with a 4,096-descriptor cap
+passed, and only the worker was started. Neither recovery replayed an API call
+or restarted the already-running server. These operational findings remain
+relevant to longer unattended acceptance.
 
 Real integration exposed two launch/evidence issues that synthetic phases did
 not reveal: systemd requires an unquoted scalar WorkingDirectory, and Chrome
@@ -169,7 +182,10 @@ benchmark attempt if any subsequent evidence check fails.
 The subsequent source hardening passed 355 focused Python tests in 30.116 seconds
 on one capped runtime job, including a real local Docker invocation and actual
 stdlib child-process timeout/parent-death checks. These checks do not spend model
-API credits, reset a live database, or replace release acceptance. The source
-changes and finite experiment coordinator have not yet been deployed. After
+API credits, reset a live database, or replace release acceptance. After
 aligning plan admission with the backend's actual file-size limits, all 23
-experiment tests passed again in 1.481 seconds.
+experiment tests passed again in 1.481 seconds. The subsequent readiness release
+passed 375 focused tests, including real Docker execution, and both JavaScript
+files passed Node 22 syntax checks before deployment. Its single-entry live
+acceptance is recorded above; repeated trials and longer operational acceptance
+remain outstanding.

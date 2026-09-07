@@ -611,6 +611,35 @@ class PersistedPublicationTests(unittest.TestCase):
             self.assertEqual(manifest, before)
             self.assertEqual((Path(directory) / manifest["artifacts"]["result"]["path"]).read_bytes(), result_bytes)
 
+    def test_rehashed_present_action_counters_cannot_hide_unacknowledged_attempts(self):
+        for section, key in (("program", "actionAttempts"), ("controller", "actions")):
+            for value in (0, 2, None, True, "1", 1.0, -1):
+                with self.subTest(section=section, value=value), tempfile.TemporaryDirectory() as directory:
+                    manifest = persisted_manifest(directory, readiness=True)
+                    manifest["result"][section][key] = value
+                    # Preserve the altered result's byte reference: the counter
+                    # inconsistency itself, not a stale digest, must block it.
+                    write_artifact(directory, manifest["artifacts"], "result", manifest["result"])
+                    with patch("full_client_publish._probe_video", return_value=PROBE | {"duration_ms": 6100}):
+                        verdict = validate_manifest(manifest, directory)
+                    self.assertFalse(verdict["ready"], verdict)
+                    self.assertTrue(any(f"result.{section}.{key}" in reason for reason in verdict["reasons"]), verdict)
+
+    def test_optional_action_counters_preserve_historical_absence_and_consistent_values(self):
+        for readiness in (False, True):
+            for counters in ((), (("program", "actionAttempts"),), (("controller", "actions"),),
+                             (("program", "actionAttempts"), ("controller", "actions"))):
+                with self.subTest(readiness=readiness, counters=counters), tempfile.TemporaryDirectory() as directory:
+                    manifest = persisted_manifest(directory, readiness=readiness)
+                    for section, key in counters:
+                        manifest["result"][section][key] = manifest["result"]["program"]["actions"]
+                    write_artifact(directory, manifest["artifacts"], "result", manifest["result"])
+                    before = copy.deepcopy(manifest)
+                    probe = PROBE | {"duration_ms": 6100} if readiness else PROBE
+                    with patch("full_client_publish._probe_video", return_value=probe):
+                        self.assertEqual(validate_manifest(manifest, directory), {"ready": True, "reasons": []})
+                    self.assertEqual(manifest, before)
+
     def test_actual_observations_and_acknowledgments_are_required_without_timeline_attestations(self):
         paths = [("initial",), ("final",), ("program", "steps", 0, "result"),
                  ("program", "steps", 1, "result", "observation")]

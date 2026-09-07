@@ -1,19 +1,21 @@
 # MapleBench
 
-**Status: live preliminary full-client comparison verified across four models.**
+**Status: live full-client trials verified; model ranking remains preliminary.**
 The durable adapter restores a frozen offline baseline, runs one real browser
 through ordinary login and bounded API control, then verifies persisted net XP
 after normal logout. The results dashboard shows exact model attribution,
-actions, survival and saved gameplay. The first four trials used the same inputs;
-one attempt per model is preliminary and does not establish a ranking. See the
+actions, survival and saved gameplay. Matching frozen inputs did not produce
+equivalent live starting scenes in the first four trials; those attempts do not
+establish a ranking. See the
 [acceptance evidence](docs/FULL_CLIENT_ACCEPTANCE.md),
 [results dashboard](docs/FULL_CLIENT_DASHBOARD.md) and
 [full-client control](docs/FULL_CLIENT.md).
 
-A separate acceptance of the updated controller completed with 29 acknowledged
-Astra actions and +9,500 persisted net XP; its exact recording and full evidence
-validation passed. Its versioned scenario remains separate from the original
-four-model comparison. Class/task coverage is described in the
+The latest separate release acceptance completed with 25 acknowledged Astra
+actions and +9,000 persisted net XP. Fresh populated render frames were verified
+before the API request; its saved recording and publication evidence passed.
+It remains separate from the earlier +9,500 Astra acceptance and original
+four-model trials. Class/task coverage is described in the
 [benchmark design](docs/CLASS_BENCHMARK_DESIGN.md).
 
 Moving to another computer? See [the laptop handoff](docs/LAPTOP_HANDOFF.md) to
@@ -29,8 +31,8 @@ publication evidence. Repeated trials, balanced model order and longer operation
 acceptance remain necessary before a dependable public ranking. The new
 [finite experiment coordinator](docs/FULL_CLIENT_EXPERIMENTS.md) implements
 predeclared repeated plans, explicit resume without API replay, and complete-plan
-reports. It is awaiting separate deployment acceptance; it has not generated
-additional benchmark results.
+reports. Its single-entry live acceptance passed; repeated-model and unattended
+operation still require acceptance.
 
 MapleBench is an experimental benchmark for evaluating coding agents in a persistent MapleStory-like game environment, beginning with simple XP optimization and progressing toward multi-agent party-quest coordination.
 

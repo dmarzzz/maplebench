@@ -196,6 +196,13 @@ def _validate_structure(manifest):
                 held_ms += receipt["waitedMs"]
     require(_integer(program.get("actions")) and program.get("actions") == action_count,
             "result.program.actions: count must match the complete input receipt list.")
+    # Older receipts omit these counters. When recorded, they cannot contradict
+    # the acknowledged inputs or hide an attempted input without a receipt.
+    for section, key, label in ((program, "actionAttempts", "program.actionAttempts"),
+                                (controller, "actions", "controller.actions")):
+        if key in section:
+            require(_integer(section[key]) and section[key] == action_count,
+                    f"result.{label}: recorded count must match the complete acknowledged input receipt list.")
 
     require(_text(api.get("id")) and api.get("status") == "completed",
             "result.api: preserve the completed API response ID and status.")

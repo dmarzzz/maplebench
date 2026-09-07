@@ -17,6 +17,7 @@ from pathlib import Path
 import pwd
 import re
 import resource
+import shlex
 import socket
 import sqlite3
 import stat
@@ -136,7 +137,8 @@ class Host:
     def unit(self, systemctl, unit):
         raw = self.command([systemctl, "show", unit, "--no-pager",
                             "--property=LoadState,ActiveState,SubState,MainPID,User,Group,"
-                            "WorkingDirectory,InvocationID,ExecMainStartTimestampMonotonic,Environment"])
+                            "WorkingDirectory,InvocationID,ExecMainStartTimestampMonotonic,Environment,"
+                            "DropInPaths,NeedDaemonReload"])
         return dict(line.split("=", 1) for line in raw.decode().splitlines() if "=" in line)
 
     def admin(self, path, request, *, lock_fds=()):
@@ -491,10 +493,27 @@ class CosmicRuntime:
 
     def owned_dropin(self):
         require(self.state.get("dropin"), "dropin_owner_missing")
-        expected = Path(self.config["dropin_root"]) / (self.config["services"]["cosmic"] + ".d") / "zz-maplebench-trial.conf"
+        expected = self.trial_dropin_path()
         require(Path(self.state["dropin"]) == expected, "dropin_owner_path_mismatch")
         raw = self.read_stable(expected, 16384)
         require(hashlib.sha256(raw).hexdigest() == self.state["dropin_sha256"], "dropin_ownership_lost")
+
+    def trial_dropin_path(self):
+        return Path(self.config["dropin_root"]) / (self.config["services"]["cosmic"] + ".d") / "zz-maplebench-trial.conf"
+
+    def trial_configuration_absent(self, unit):
+        """A removed file does not prove systemd has discarded its cached values."""
+        if (os.path.lexists(self.trial_dropin_path()) or unit.get("NeedDaemonReload") != "no"
+                or not isinstance(unit.get("DropInPaths"), str)
+                or not isinstance(unit.get("Environment"), str)):
+            return False
+        try:
+            paths = shlex.split(unit["DropInPaths"])
+            environment = shlex.split(unit["Environment"])
+        except ValueError:
+            return False
+        return (not any(Path(path).name == "zz-maplebench-trial.conf" for path in paths)
+                and not any(item.split("=", 1)[0] in ENV_NAMES for item in environment))
 
     def validate_process(self, unit):
         user = pwd.getpwnam(unit.get("User", ""))
@@ -559,7 +578,8 @@ class CosmicRuntime:
         queue = (self.stopped(world) and self.stopped(worker)
                  and self.host.queue_count(self.config["queue_database"]) == 0)
         offline = self.account_state() == 0
-        return {"ready": queue and stopped and offline and idle and waiting and not conflict,
+        return {"ready": queue and stopped and offline and idle and waiting and not conflict
+                         and self.trial_configuration_absent(cosmic),
                 "queue_idle": queue, "server_stopped": stopped, "account_offline": offline,
                 "controller_idle": idle, "ownership_conflict": conflict}
 
@@ -1072,6 +1092,56 @@ class CosmicRuntime:
             self.state["failure_evidence_preserved"] = True
             self.persist()
 
+    def remove_trial_configuration(self):
+        """Recover only a recorded owned removal; reloading cached state is idempotent.
+
+        The checkpoint is durable before unlink. An explicit recovery may find
+        the file absent while systemd still holds the old drop-in in memory, or
+        may find that reload succeeded before its response/checkpoint was saved.
+        Both cases repeat reload, never a server start or baseline operation.
+        """
+        path = self.trial_dropin_path()
+        require(Path(self.state["dropin"]) == path, "dropin_owner_path_mismatch")
+        owner = {"path": str(path), "sha256": self.state["dropin_sha256"]}
+        checkpoint = self.state.get("configuration_cleanup")
+        if checkpoint is not None:
+            require(isinstance(checkpoint, dict) and set(checkpoint) == {"path", "sha256", "phase"}
+                    and all(checkpoint.get(k) == v for k, v in owner.items())
+                    and checkpoint.get("phase") in ("remove_pending", "removed", "reload_pending", "verified"),
+                    "cleanup_checkpoint_invalid")
+        self.state["clean"] = False
+        if checkpoint and checkpoint["phase"] == "verified":
+            require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_configuration_still_loaded")
+            return
+        if os.path.lexists(path):
+            self.owned_dropin()
+            self.state["configuration_cleanup"] = owner | {"phase": "remove_pending"}
+            self.persist()
+            path.unlink()
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            self.state["configuration_cleanup"]["phase"] = "removed"
+            self.persist()
+        elif checkpoint is None:
+            # start_server can fail before creating its owned file. An absent
+            # file without a removal checkpoint grants no right to reload an
+            # unknown cached configuration.
+            require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_dropin_removal_unowned")
+            self.state["configuration_cleanup"] = owner | {"phase": "verified"}
+            self.persist()
+            return
+        require(self.stopped(self.unit("cosmic")) and self.account_state() == 0,
+                "cleanup_requires_stopped_offline")
+        self.state["configuration_cleanup"]["phase"] = "reload_pending"
+        self.persist()
+        self.host.command([self.config["systemctl"], "daemon-reload"])
+        require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_configuration_still_loaded")
+        self.state["configuration_cleanup"]["phase"] = "verified"
+        self.persist()
+
     def cleanup(self):
         # Recovery can encounter a start whose response was lost. Native env plus
         # the exact recorded drop-in is required before adopting that invocation.
@@ -1097,12 +1167,8 @@ class CosmicRuntime:
                 "cleanup_requires_stopped_offline")
         self.preserve_failure_evidence()
         if self.state.get("dropin"):
-            path = absolute(self.state["dropin"])
-            if path.exists():
-                raw = self.read_stable(path, 16384)
-                require(hashlib.sha256(raw).hexdigest() == self.state["dropin_sha256"], "dropin_ownership_lost")
-                path.unlink()
-                self.host.command([self.config["systemctl"], "daemon-reload"])
+            self.remove_trial_configuration()
+        require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_configuration_still_loaded")
         self.state["clean"] = True
         return {"clean": True}
 

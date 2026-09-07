@@ -148,6 +148,46 @@ It remains a separate, unranked release acceptance. The dashboard keeps its
 group separate from the original four-model comparison; it does not replace
 any earlier attempt or establish that Astra improved relative to another model.
 
+## Readiness and coordinator release acceptance
+
+Release `2a93db5` completed the separately declared Astra API attempt
+`a154c7a1b7fa4799ad884e89a07190be` on September 7, 2026 UTC. The finite
+coordinator submitted exactly one attempt without an API retry. Requested,
+returned and recorded-overlay model identities were all `gpt-6-astra`.
+Its single request used 1,580 tokens (951 input and 629 output).
+
+Before API dispatch, ten distinct post-render samples spanning 1,059 ms each
+showed at least 17 monsters in the expected map. The frozen readiness policy
+and its raw evidence passed independent publication validation. This addresses
+the earlier Astra attempt's empty observations; it does not retroactively make
+the original starting scenes equivalent. Sol and Luna's original zero-action
+programs remain visible as uninvoked function declarations. The revised prompt
+requires an async function body and does not repair returned programs.
+
+The executed program completed normally in 20.235 seconds within its 22-second
+budget: 25 attempted inputs, 25 acknowledged inputs, and no SDK errors.
+Persisted EXP increased from 73,250 to 82,250: **+9,000 net XP**, matching
+diagnostic client XP. The character remained level 180 and was alive at ordinary
+logout with HP 10,771. Native save evidence, offline state, settlement, clean
+cleanup and coordinator completion were checked.
+
+The saved recording is 17,721,856 bytes; encoded-media probing measured 35.344
+seconds. Visual review sampled its start, active Brandish combat and terminal
+HUD. It did not establish the lifecycle of a particular monster or inspect
+every frame. Video SHA256:
+`9c96443d9841365b7c00b225bac23f02608b7948ceaf3460b5a48c56896b3b79`.
+The publication validator passed with no refusal reasons. Original evidence
+remains unchanged; no external publication or ranking occurred.
+
+The scenario fingerprint is
+`cec445d1fb261cc438c232df399cd9adf3e7618881acc6d6d741ae02656e47e0`;
+the runtime inventory fingerprint is
+`a34f137cdb01ee3b795b703fbf6244df710b52a684e8893b536dee63d2834be0`.
+The dashboard preserves all seven earlier attempts and displays this acceptance
+as a separate frozen-input group. This proves one successful coordinator entry,
+not repeated-model fairness, a live deadline-boundary test, or unattended
+production availability.
+
 ## Limits before a public ranking
 
 - Run a declared, finite repeated-trial experiment with balanced model order,

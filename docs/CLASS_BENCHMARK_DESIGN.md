@@ -2,8 +2,9 @@
 
 Status: proposed experiment design. Short Hero full-client trials have completed
 across the supported models, but the historical checks did not prove a populated
-scene at the first model observation. The new readiness/prompt contract and live
-repeated-trial coordination are not accepted yet. The other classes and longer
+scene at the first model observation. The new readiness/prompt contract passed a
+separate single-entry Astra acceptance; live repeated-trial coordination remains
+unaccepted. The other classes and longer
 tasks below are not implemented or benchmarked.
 
 A useful benchmark should show which kinds of gameplay a model can handle. A
@@ -36,13 +37,13 @@ manifest. Verify actual movement and skill effects; a key acknowledgment alone
 cannot qualify a fixture. The runtime, assets, scenario, prompt and budget hashes
 remain part of the comparison identity.
 
-Equal fixture hashes alone do not establish equal live scenes. The next Hero
-protocol adds a pre-API check for three distinct post-render frames spanning at
+Equal fixture hashes alone do not establish equal live scenes. The accepted Hero
+readiness protocol adds a pre-API check for three distinct post-render frames spanning at
 least one second, with fresh observations, a living character on the baseline
 map and at least one monster. The ten-second readiness deadline and revised
 async-body prompt must be frozen before any model call. The one-API cap stays
-fixed; the future run envelope is `program_seconds + 63` seconds, including the
-new readiness allowance. This contract still requires a separate live acceptance;
+fixed; the run envelope is `program_seconds + 63` seconds, including the
+new readiness allowance. Its single-entry acceptance does not validate other fixtures;
 see [the exact policy](FULL_CLIENT_EXPERIMENTS.md#scene-readiness-and-the-next-protocol-version).
 It establishes minimum scene population, not controlled monster positions,
 reachable targets or deterministic combat. Other class fixtures need their own

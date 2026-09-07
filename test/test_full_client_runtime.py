@@ -19,6 +19,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import full_client_runtime as runtime
 
 
+class CachedSystemd:
+    """Disk edits dirty the manager; only reload changes its cached properties."""
+    def __init__(self, dropin, normal):
+        self.dropin = dropin
+        self.loaded = dropin.read_bytes()
+        self.normal = normal
+        self.reload_calls = 0
+        self.fail_before_reload = False
+        self.fail_after_reload = False
+        self.apply_reload = True
+
+    def disk(self):
+        return self.dropin.read_bytes() if self.dropin.exists() else None
+
+    def unit(self, systemctl, name):
+        if name != "cosmic.service":
+            return dict(self.normal)
+        return self.normal | {"NeedDaemonReload": "yes" if self.disk() != self.loaded else "no",
+            "DropInPaths": str(self.dropin) if self.loaded is not None else "",
+            "Environment": "MAPLEBENCH_ENABLED=false MAPLEBENCH_TRIAL_ID=synthetic"
+                           if self.loaded is not None else "MAPLEBENCH_ENABLED=true"}
+
+    def command(self, argv, **kwargs):
+        if argv == ["/usr/bin/systemctl", "daemon-reload"]:
+            self.reload_calls += 1
+            if self.fail_before_reload:
+                raise SystemExit("synthetic crash before manager reload")
+            if self.apply_reload:
+                self.loaded = self.disk()
+            if self.fail_after_reload:
+                raise SystemExit("synthetic crash after manager reload")
+            return b""
+        if argv[0] == "/usr/bin/mysql":
+            return b"0\n"
+        raise AssertionError("unexpected service operation in cleanup fixture")
+
+
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -53,7 +90,8 @@ class RuntimeTests(unittest.TestCase):
         self.backend.quiet = MagicMock()
         self.backend.frozen = MagicMock()
         self.backend.online_identity = MagicMock()
-        self.offline_unit = {"LoadState": "loaded", "ActiveState": "inactive", "MainPID": "0"}
+        self.offline_unit = {"LoadState": "loaded", "ActiveState": "inactive", "MainPID": "0",
+                             "DropInPaths": "", "Environment": "", "NeedDaemonReload": "no"}
         self.host.unit.return_value = self.offline_unit
         self.host.admin.return_value = {"session": {"state": "waiting", "fresh": True, "pinned": True,
                                                     "artifactsSettled": True}, "bridge": {"run": None}}
@@ -169,6 +207,101 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(runtime.RuntimeErrorCode, "cleanup_requires_stopped_offline"):
             self.backend.cleanup()
         self.assertNotIn("clean", self.backend.state)
+
+    def cleanup_configuration_fixture(self):
+        dropin = self.backend.trial_dropin_path()
+        dropin.parent.mkdir(parents=True)
+        raw = b'[Service]\nEnvironment="MAPLEBENCH_TRIAL_ID=synthetic"\n'
+        dropin.write_bytes(raw)
+        self.backend.state.update(dropin=str(dropin), dropin_sha256=hashlib.sha256(raw).hexdigest())
+        manager = CachedSystemd(dropin, self.offline_unit)
+        self.host.unit.side_effect = manager.unit
+        self.host.command.side_effect = manager.command
+        self.backend.settle_owned_controller = MagicMock()
+        self.backend.preserve_failure_evidence = MagicMock()
+        return dropin, manager
+
+    def test_cleanup_crash_after_unlink_reloads_cached_configuration_on_recovery(self):
+        dropin, manager = self.cleanup_configuration_fixture()
+        manager.fail_before_reload = True
+        original_unlink = Path.unlink
+        def checked_unlink(path, *args, **kwargs):
+            checkpoint = json.loads((self.directory / "backend-state.json").read_text())["configuration_cleanup"]
+            self.assertEqual(checkpoint, {"path": str(dropin), "sha256": self.backend.state["dropin_sha256"],
+                                          "phase": "remove_pending"})
+            return original_unlink(path, *args, **kwargs)
+        with patch.object(Path, "unlink", checked_unlink), self.assertRaises(SystemExit):
+            self.backend.cleanup()
+        self.assertFalse(dropin.exists())
+        self.assertIsNotNone(manager.loaded)
+        stored = json.loads((self.directory / "backend-state.json").read_text())
+        self.assertEqual(stored["configuration_cleanup"]["phase"], "reload_pending")
+        self.assertFalse(stored["clean"])
+        self.assertFalse(self.backend.status()["ready"])
+        self.backend.state = stored  # New backend invocation reads only durable state.
+        manager.fail_before_reload = False
+        self.assertEqual(self.backend.cleanup(), {"clean": True})
+        self.assertEqual(manager.reload_calls, 2)
+        self.assertIsNone(manager.loaded)
+        self.assertEqual(self.backend.state["configuration_cleanup"]["phase"], "verified")
+        self.assertTrue(self.backend.status()["ready"])
+
+    def test_cleanup_repeats_reload_after_response_lost_without_recreating_dropin(self):
+        dropin, manager = self.cleanup_configuration_fixture()
+        manager.fail_after_reload = True
+        with self.assertRaises(SystemExit):
+            self.backend.cleanup()
+        self.assertFalse(dropin.exists())
+        self.assertIsNone(manager.loaded)
+        self.backend.state = json.loads((self.directory / "backend-state.json").read_text())
+        self.assertEqual(self.backend.state["configuration_cleanup"]["phase"], "reload_pending")
+        manager.fail_after_reload = False
+        self.assertEqual(self.backend.cleanup(), {"clean": True})
+        self.assertEqual(manager.reload_calls, 2)
+        self.assertFalse(dropin.exists())
+
+    def test_cleanup_zero_exit_reload_must_remove_effective_trial_settings(self):
+        dropin, manager = self.cleanup_configuration_fixture()
+        manager.apply_reload = False
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "cleanup_configuration_still_loaded"):
+            self.backend.cleanup()
+        self.assertFalse(dropin.exists())
+        self.assertIsNotNone(manager.loaded)
+        self.assertFalse(self.backend.state["clean"])
+        self.assertFalse(self.backend.status()["ready"])
+        self.assertEqual(self.backend.state["configuration_cleanup"]["phase"], "reload_pending")
+
+    def test_cleanup_missing_file_without_owned_removal_cannot_reload_cached_trial(self):
+        dropin, manager = self.cleanup_configuration_fixture()
+        dropin.unlink()
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "cleanup_dropin_removal_unowned"):
+            self.backend.cleanup()
+        self.assertEqual(manager.reload_calls, 0)
+        self.assertIsNotNone(manager.loaded)
+        self.assertFalse(self.backend.status()["ready"])
+
+    def test_cleanup_changed_owned_file_or_checkpoint_never_unlinks_or_reloads(self):
+        dropin, manager = self.cleanup_configuration_fixture()
+        dropin.write_bytes(b"unrelated replacement")
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "dropin_ownership_lost"):
+            self.backend.cleanup()
+        self.assertEqual(dropin.read_bytes(), b"unrelated replacement")
+        self.assertEqual(manager.reload_calls, 0)
+        self.backend.state["configuration_cleanup"] = {"path": str(dropin), "sha256": "0" * 64, "phase": "removed"}
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "cleanup_checkpoint_invalid"):
+            self.backend.cleanup()
+        self.assertEqual(manager.reload_calls, 0)
+
+    def test_status_requires_absent_effective_trial_config_even_with_stopped_server(self):
+        changes = [{"Environment": name + "=synthetic"} for name in runtime.ENV_NAMES]
+        changes += [{"DropInPaths": str(self.backend.trial_dropin_path())}, {"NeedDaemonReload": "yes"},
+                    {"DropInPaths": None}, {"Environment": None}, {"Environment": '"unterminated'}]
+        for values in changes:
+            with self.subTest(values=values):
+                self.host.unit.return_value = self.offline_unit | values
+                result = self.backend.status()
+                self.assertTrue(result["server_stopped"])
+                self.assertFalse(result["ready"])
 
     def test_offline_without_native_commit_is_not_successful_logout(self):
         self.backend.owned_server = MagicMock()

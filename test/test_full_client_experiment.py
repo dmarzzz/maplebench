@@ -467,6 +467,70 @@ class ExperimentTests(unittest.TestCase):
             with self.assertRaises(experiment.ExperimentError):
                 experiment.verified_metrics(plan, entry, observed)
 
+    def malformed_bundle_report(self, mutate):
+        # Real hashes and persistence verification: only the affected attempt's
+        # JSON shape is malformed, not an injected metrics implementation.
+        self.root = Path(tempfile.mkdtemp(prefix="report-case-", dir=self.root)).resolve()
+        plan = self.plan(models=[experiment.MODELS[0]], repetitions=4)
+        def launch(plan, entry, request_path, timeout):
+            if entry["ordinal"] == 2:
+                raise RuntimeError("synthetic child did not publish an attempt")
+            folder, refs, journal = self.actual_bundle(plan, entry, delta=-25 if entry["ordinal"] == 0 else 50)
+            if entry["ordinal"] == 1:
+                journal = mutate(folder, refs, journal)
+                (folder / "journal.json").write_bytes(experiment.encoded(journal))
+            return 0
+        coordinator = experiment.Experiment(plan, self.root / "experiment", launcher=launch,
+            verify=lambda _: None, wall_time=self.clock, monotonic=self.clock)
+        with self.assertRaises((RuntimeError, experiment.ExperimentError)):
+            coordinator.run()
+        value = experiment.report(plan, self.root / "experiment")
+        self.assertEqual(len(value["attempts"]), 4)
+        self.assertEqual(value["attempts"][0]["status"], "completed")
+        self.assertEqual(value["attempts"][0]["metrics"]["net_xp"], -25)
+        self.assertTrue(value["attempts"][0]["metrics"]["no_op"])
+        self.assertEqual(value["attempts"][1]["status"], "invalid_receipts")
+        self.assertIsNone(value["attempts"][1]["metrics"])
+        self.assertEqual(value["groups"][0]["planned_n"], 4)
+        self.assertEqual(value["groups"][0]["verified_n"], 1)
+        self.assertEqual(value["groups"][0]["net_xp"]["mean"], -25)
+        self.assertFalse(value["ranked"])
+        self.assertNotIn("private-report-content", json.dumps(value))
+        return value
+
+    def test_malformed_hashed_artifact_shapes_preserve_the_complete_report(self):
+        cases = [(name, None) for name in ("persistence", "score", "result", "api_request", "api_response")]
+        cases += [("result", field) for field in ("controller", "api", "program")]
+        cases += [(name, "metadata") for name in ("api_request", "api_response")]
+        for name, field in cases:
+            with self.subTest(artifact=name, field=field):
+                def mutate(folder, refs, journal):
+                    value = ["private-report-content"]
+                    if field is not None:
+                        value = json.loads((folder / refs[name]["path"]).read_text())
+                        value[field] = ["private-report-content"]
+                    write_artifact(folder, refs, name, value)
+                    return journal
+                value = self.malformed_bundle_report(mutate)
+                self.assertEqual([row["status"] for row in value["attempts"]],
+                    ["completed", "invalid_receipts", "submitted_unresolved", "unsubmitted"])
+
+    def test_malformed_terminal_journal_envelopes_preserve_other_attempts(self):
+        for field in ("journal", "backend", "receipts", "status", "collect_final"):
+            with self.subTest(field=field):
+                def mutate(folder, refs, journal):
+                    bad = ["private-report-content"]
+                    if field == "journal":
+                        return bad
+                    if field == "backend":
+                        (folder / "backend-state.json").write_bytes(experiment.encoded(bad))
+                    elif field == "receipts":
+                        journal["receipts"] = bad
+                    else:
+                        journal["receipts"][field] = bad
+                    return journal
+                self.malformed_bundle_report(mutate)
+
     @unittest.skipUnless(sys.platform.startswith("linux"), "Linux production launcher")
     def test_actual_stdlib_child_gets_exact_argv_and_minimal_environment(self):
         plan = self.plan(models=[experiment.MODELS[0]])

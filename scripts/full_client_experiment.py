@@ -371,6 +371,7 @@ def inspect_attempt(plan, entry):
     private_directory(folder)
     raw, journal_sha = read_file(folder / "journal.json", private=True)
     journal = decode(raw)
+    require(isinstance(journal, dict), "invalid_attempt_journal")
     fixture = fixture_for(plan, entry)
     require(journal.get("schema_version") == 1 and journal.get("attempt_id") == entry["attempt_id"]
             and journal.get("status") in STATUSES and scoring.same_json(journal.get("request"), entry["spec"])
@@ -388,8 +389,10 @@ def inspect_attempt(plan, entry):
     if journal["status"] in TERMINAL:
         raw, backend_sha = read_file(folder / "backend-state.json", private=True)
         backend = decode(raw)
-        receipts = journal.get("receipts", {})
-        final = receipts.get("status", {})
+        receipts = journal.get("receipts")
+        require(isinstance(backend, dict) and isinstance(receipts, dict), "invalid_attempt_receipts")
+        final = receipts.get("status")
+        require(isinstance(final, dict), "invalid_attempt_receipts")
         require(journal.get("phase") == "status" and journal.get("phase_status") == "returned"
                 and receipts.get("cleanup") == {"attempt_id": entry["attempt_id"], "clean": True}
                 and backend.get("attempt_id") == entry["attempt_id"] and backend.get("clean") is True
@@ -619,21 +622,31 @@ def validate_state(state, plan):
 def verified_metrics(plan, entry, observed):
     """Reverify actual persisted artifacts; never trust a journal score flag."""
     journal, folder = observed["journal"], observed["folder"]
+    require(isinstance(journal, dict), "invalid_attempt_journal")
     require(journal["status"] == "completed" and observed["terminal_clean"], "score_requires_completion")
-    refs = journal.get("receipts", {}).get("collect_final", {}).get("artifacts")
+    receipts = journal.get("receipts")
+    require(isinstance(receipts, dict), "invalid_attempt_receipts")
+    collected = receipts.get("collect_final")
+    require(isinstance(collected, dict), "invalid_attempt_receipts")
+    refs = collected.get("artifacts")
     require(isinstance(refs, dict), "missing_score_artifacts")
     def artifact(name):
-        return scoring.parse_json(scoring.read_artifact_bytes(folder, refs.get(name), name,
+        value = scoring.parse_json(scoring.read_artifact_bytes(folder, refs.get(name), name,
             maximum=MAX_MANIFEST if name == "runtime_manifest" else scoring.JSON_LIMIT))
+        require(isinstance(value, dict), "invalid_score_artifact")
+        return value
     fixture = fixture_for(plan, entry)
     require(all(isinstance(refs.get(name), dict) and refs[name].get("sha256") == fixture[name]["sha256"]
                 for name in ("scenario", "baseline", "runtime_manifest")), "score_fixture_mismatch")
     evidence = artifact("persistence")
-    require(scoring.same_json(evidence, journal["receipts"]["collect_final"].get("evidence")), "persistence_receipt_mismatch")
+    require(scoring.same_json(evidence, collected.get("evidence")), "persistence_receipt_mismatch")
     recomputed = scoring.verify_trial_bundle(evidence, folder, refs)
     saved, result, runtime = artifact("score"), artifact("result"), artifact("runtime_manifest")
     request, response = artifact("api_request"), artifact("api_response")
-    controller, api = result.get("controller", {}), result.get("api", {})
+    controller, api, program = result.get("controller"), result.get("api"), result.get("program")
+    request_metadata, response_metadata = request.get("metadata"), response.get("metadata")
+    require(all(isinstance(value, dict) for value in
+                (controller, api, program, request_metadata, response_metadata)), "invalid_score_envelope")
     context = {"scenario_fingerprint": entry["spec"]["scenario_fingerprint"], "baseline_sha256": entry["spec"]["baseline_sha256"]}
     require(scoring.same_json(saved, recomputed) and scoring.same_json(journal.get("score"), recomputed)
             and recomputed.get("run_id") == entry["attempt_id"]
@@ -647,16 +660,15 @@ def verified_metrics(plan, entry, observed):
             and api.get("status") == response.get("status") == "completed"
             and isinstance(api.get("id"), str) and api["id"] == response.get("id")
             and isinstance(api.get("usage"), dict) and scoring.same_json(api["usage"], response.get("usage"))
-            and request.get("metadata", {}).get("maplebench_run_id") == entry["attempt_id"]
-            and response.get("metadata", {}).get("maplebench_run_id") == entry["attempt_id"]
+            and request_metadata.get("maplebench_run_id") == entry["attempt_id"]
+            and response_metadata.get("maplebench_run_id") == entry["attempt_id"]
             and controller.get("dockerImageId") == runtime.get("docker_image_id"), "score_model_or_receipt_mismatch")
     if runtime.get("schema_version") == 2:
         binding = docker.validate_binding(runtime.get("docker_binding"), verify_files=False)
         require(scoring.same_json(controller.get("dockerBinding"), binding), "score_docker_binding_mismatch")
-    actions = result.get("program", {}).get("actions")
+    actions = program.get("actions")
     value = recomputed.get("metrics", {}).get("net_xp")
     require(type(value) is int and -(2**63) <= value < 2**63, "invalid_score_metrics")
-    program = result.get("program", {})
     steps = program.get("steps")
     presses = [step for step in steps if isinstance(step, dict) and step.get("method") == "pressKeys"] if isinstance(steps, list) else []
     execution_verified = (integer(actions, 0, entry["spec"]["budgets"]["max_actions"])
