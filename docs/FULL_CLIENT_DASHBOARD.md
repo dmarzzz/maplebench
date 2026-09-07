@@ -44,6 +44,32 @@ the exact saved video's SHA-256 digest. A URL alone is insufficient. Copy and
 verify a recording before adding that mapping; never symlink the private trial
 directory into the gallery. A replay link does not imply publication approval.
 
+For automatic uploads after each successful run, use the separate opt-in gallery
+exporter. Select the fresh group IDs explicitly and keep any previously approved
+recording map. Run one exporter per output directory; stop an older snapshot
+watcher first so it cannot overwrite the new recording links.
+
+```sh
+python3 scripts/full_client_gallery.py \
+  --attempt-root /private/trials --relay-root /private/relay/runs \
+  --admin-socket /private/control.sock \
+  --output-directory /public/gallery/full-client-benchmark \
+  --recording-map /private/recording-map.json \
+  --recording-prefix /full-client-benchmark/recordings/ \
+  --run-id SELECTED_32_HEX_ATTEMPT_ID --watch-seconds 600
+```
+
+Repeat `--run-id` for each selected attempt, up to 32. The exporter waits for a
+completed runner and consistent score receipts, verifies the video hash while
+copying it, and exposes the replay only after the complete file is available.
+It updates results every two seconds without waiting for the rest of the group.
+Zero and negative scores remain visible. Failed attempts retain their failure
+rows; a missing or corrupt clip does not hide an otherwise verified score or
+delay another success. Existing conflicting video files are never overwritten.
+Only videos and the public results projection are copied. Private evidence,
+accounts and game assets stay outside the gallery. This does not grant visual
+review or ranked publication status, start trials, or deploy the site to GitHub.
+
 Replays with verified action and synchronized capture receipts open near the
 first acknowledged input. The cue includes a short lead-in; the original video
 is unchanged and **Full recording** returns to its beginning. Historical runs
