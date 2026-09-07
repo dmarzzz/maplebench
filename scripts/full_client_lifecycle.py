@@ -33,6 +33,8 @@ import tempfile
 import time
 
 import full_client_collect
+import full_client_docker
+import full_client_freeze
 import full_client_score
 import full_client_trial
 from full_client_trial import atomic_json, existing_lock, publish_attempt, sync_directory
@@ -44,7 +46,7 @@ UNIT = re.compile(r"[A-Za-z0-9_.@-]+\.service\Z")
 CONFIG_PROPERTIES = {"User", "Group", "WorkingDirectory", "MemoryMax", "MemorySwapMax",
                      "CPUQuotaPerSecUSec", "Restart", "KillMode", "RuntimeMaxUSec", "TimeoutStopUSec"}
 PROPERTIES = sorted(CONFIG_PROPERTIES | {"LoadState", "ActiveState", "SubState", "MainPID", "InvocationID",
-                    "ExecStart", "Environment", "DropInPaths", "NeedDaemonReload"})
+                    "ExecStart", "Environment", "DropInPaths", "FragmentPath", "NeedDaemonReload"})
 TRIAL_ENV = ("MAPLEBENCH_TRIAL_ID", "MAPLEBENCH_SERVER_INSTANCE_ID", "MAPLEBENCH_PERSIST_CHARACTER_ID",
              "MAPLEBENCH_PERSIST_ACCOUNT_ID", "MAPLEBENCH_SAVE_JOURNAL")
 JSON_LIMIT = 16 * 1024 * 1024
@@ -171,6 +173,16 @@ def native_offset(info, raw, boundary, intent_at_ms, birth_at_ms=None):
     return 0
 
 
+def verify_launch_executable(service):
+    """Keep the launch spelling while binding aliases to the frozen executable."""
+    try:
+        launch = Path(service["argv"][0])
+        require(launch.is_absolute() and launch.resolve(strict=True) == Path(service["executable"]["path"]),
+                "launch_executable_changed")
+    except (OSError, RuntimeError):
+        raise LifecycleError("launch_executable_changed") from None
+
+
 def validate_config(config):
     object_fields(config, ("schema_version", "state_root", "locks", "services", "source_files", "commands",
         "mysql", "queue_database", "attempt_root", "admin_socket", "native", "min_available_bytes",
@@ -205,6 +217,7 @@ def validate_config(config):
         require(isinstance(service["argv"], list) and 2 <= len(service["argv"]) <= 64
                 and all(isinstance(v, str) and v and not any(ord(c) < 32 for c in v) for v in service["argv"])
                 and Path(service["argv"][0]).is_absolute(), "invalid_service_argv")
+        verify_launch_executable(service)
         object_fields(service["properties"], CONFIG_PROPERTIES, "invalid_service_properties")
         require(all(isinstance(v, str) for v in service["properties"].values()), "invalid_service_properties")
         absolute(service["properties"]["WorkingDirectory"])
@@ -218,14 +231,17 @@ def validate_config(config):
         require(isinstance(service["files"], list) and 1 <= len(service["files"]) <= 128, "invalid_service_files")
         for value in service["files"]:
             ref(value)
+        require(set(service["dropins"]) <= {value["path"] for value in service["files"]},
+                "service_dropin_pin_missing")
     require(len(names) == 4, "distinct_services_required")
     worker = config["services"]["worker"]
     require(config["services"]["cosmic"]["unit"] == "maplebench-cosmic.service", "unsupported_worker_cosmic_target")
     require(worker["environment"].get("MAPLEBENCH_LIFECYCLE_RECEIPT_DIR") == config["worker_receipt_directory"]
             and worker["argv"][1] in {v["path"] for v in worker["files"]}, "worker_hook_not_configured")
     required_sources = {str(Path(module.__file__).resolve()) for module in
-                        (sys.modules[__name__], full_client_trial, full_client_collect, full_client_score)}
-    require(isinstance(config["source_files"], list) and 4 <= len(config["source_files"]) <= 32, "invalid_source_files")
+                        (sys.modules[__name__], full_client_trial, full_client_collect, full_client_score,
+                         full_client_freeze, full_client_docker)}
+    require(isinstance(config["source_files"], list) and 6 <= len(config["source_files"]) <= 32, "invalid_source_files")
     for value in config["source_files"]:
         ref(value)
     require(required_sources <= {v["path"] for v in config["source_files"]}, "lifecycle_source_pin_missing")
@@ -538,12 +554,19 @@ class NormalLifecycle:
         require(self.stopped(unit) and unit.get("InvocationID") == self.request["stopped_invocations"][role],
                 "stopped_instance_changed")
 
-    def settings(self):
-        for role in ("cosmic", "worker", "web"):
+    def settings(self, roles=("cosmic", "worker", "web")):
+        for role in roles:
             expected = self.config["services"][role]
             unit = self.unit(role)
             require(unit.get("LoadState") == "loaded" and unit.get("NeedDaemonReload") == "no"
                     and all(unit.get(k) == v for k, v in expected["properties"].items()), "service_configuration_changed")
+            fragment = unit.get("FragmentPath")
+            require(isinstance(fragment, str) and Path(fragment).is_absolute(), "service_fragment_pin_missing")
+            try:
+                fragment = str(Path(fragment).resolve(strict=True))
+            except (OSError, RuntimeError):
+                raise LifecycleError("service_fragment_pin_missing") from None
+            require(fragment in {value["path"] for value in expected["files"]}, "service_fragment_pin_missing")
             try:
                 paths = shlex.split(unit.get("DropInPaths", ""))
                 environment = dict(value.split("=", 1) for value in shlex.split(unit.get("Environment", "")))
@@ -579,10 +602,11 @@ class NormalLifecycle:
     def same_cosmic(self):
         require(self.process_identity("cosmic") == self.state.get("cosmic"), "cosmic_instance_changed")
 
-    def verify_files(self):
+    def verify_files(self, roles=("cosmic", "worker", "web")):
         require(read_ref(self.config_ref, uid=self.owner_uid) == self.config, "configuration_changed")
         refs = [(value, self.owner_uid) for value in self.config["source_files"] + list(self.config["commands"].values())]
-        for service in (self.config["services"][key] for key in ("cosmic", "worker", "web")):
+        for service in (self.config["services"][key] for key in roles):
+            verify_launch_executable(service)
             refs += [(value, service["uid"]) for value in [service["executable"], *service["files"]]]
         total = 0
         for value, service_uid in refs:
@@ -735,6 +759,12 @@ class NormalLifecycle:
         else:
             self.verify_world_locks()
             self.same_cosmic()
+        # Readiness can take time after preflight. Rebind the selected service's
+        # executable, fragments and hooks, plus shared command/source pins,
+        # before an intent permits systemd to execute any start hook.
+        self.verify_files((role,))
+        self.settings((role,))
+        self.host.remaining()
         self.state["service_starts"][role] = 1
         self.persist(role + "_start_pending", **{role + "_start": {"intent_at_ms": self.host.now(),
                      "previous_invocation_id": self.request["stopped_invocations"][role]}})

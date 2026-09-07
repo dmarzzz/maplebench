@@ -39,6 +39,8 @@ class FakeHost:
         self.clock = 100000; self.started = []; self.crash_after = None
         self.memory_bytes = 16 * 1024**3; self.worker_receipt_mutation = None
         self.identities = {"web": request["web_instance"]}
+        self.fragments = {role: str(Path(config["state_root"]).parent / (role + ".service"))
+                          for role in ("cosmic", "worker", "web")}
         self.engine = None
 
     def now(self):
@@ -59,7 +61,8 @@ class FakeHost:
         role = next(key for key in ("cosmic", "worker", "web") if self.config["services"][key]["unit"] == unit)
         service = self.config["services"][role]
         identity = self.identities.get(role)
-        value = dict(service["properties"], LoadState="loaded", NeedDaemonReload="no", DropInPaths="",
+        value = dict(service["properties"], LoadState="loaded", NeedDaemonReload="no",
+            DropInPaths=" ".join(shlex.quote(path) for path in service["dropins"]), FragmentPath=self.fragments[role],
             Environment=" ".join(shlex.quote(key + "=" + val) for key, val in service["environment"].items()),
             ExecStart="{ path=" + service["argv"][0] + " ; argv[]=" + shlex.join(service["argv"]) +
                       " ; ignore_errors=no ; pid=0 ; }")
@@ -143,12 +146,15 @@ class LifecycleTests(unittest.TestCase):
         services = {"world": "world.service"}
         for role in ("cosmic", "worker", "web"):
             props = {name: "fixed" for name in lifecycle.CONFIG_PROPERTIES}; props["WorkingDirectory"] = str(self.root / "work")
+            fragment = self.root / (role + ".service")
+            fragment.write_bytes(b"[Service]\nExecStart=/synthetic\n"); fragment.chmod(0o600)
             services[role] = {"unit": "maplebench-cosmic.service" if role == "cosmic" else role + ".service", "uid": self.uid,
                 "argv": [str(executable), str(worker_source)], "executable": file_ref(executable), "properties": props,
                 "dropins": [], "environment": {"MAPLEBENCH_LIFECYCLE_RECEIPT_DIR": str(self.root / "receipts")} if role == "worker" else {},
-                "files": [file_ref(worker_source)]}
+                "files": [file_ref(worker_source), file_ref(fragment)]}
         sources = [file_ref(Path(module.__file__).resolve()) for module in
-                   (lifecycle, lifecycle.full_client_trial, lifecycle.full_client_collect, lifecycle.full_client_score)]
+                   (lifecycle, lifecycle.full_client_trial, lifecycle.full_client_collect, lifecycle.full_client_score,
+                    lifecycle.full_client_freeze, lifecycle.full_client_docker)]
         self.config = {"schema_version": 1, "state_root": str(self.root / "state"), "locks": locks, "services": services,
             "source_files": sources, "commands": {name: file_ref(executable) for name in ("mysql", "systemctl")},
             "mysql": {"database": "synthetic", "defaults_file": None, "character_id": 10, "account_id": 20},
@@ -179,6 +185,14 @@ class LifecycleTests(unittest.TestCase):
         engine = lifecycle.NormalLifecycle(self.config, self.config_ref, self.host, owner_uid=os.geteuid())
         self.host.engine = engine
         return engine
+
+    def configure(self, config):
+        self.config = config
+        self.config_ref = write_json(self.root / "config.json", config)
+        self.request["config_sha256"] = self.config_ref["sha256"]
+        self.request_ref = write_json(self.root / "request.json", self.request)
+        self.host = FakeHost(config, self.snapshot, self.request)
+        self.engine = self.fresh_engine()
 
     def journal_ref(self):
         return file_ref(self.root / "state" / ("b" * 32) / "journal.json")
@@ -265,6 +279,190 @@ class LifecycleTests(unittest.TestCase):
                        lambda c: c["native"].update(max_fds=65536)):
             value = copy.deepcopy(self.config); mutate(value)
             with self.assertRaises(lifecycle.LifecycleError): lifecycle.validate_config(value)
+
+    def test_transitive_import_pin_omission_refuses_before_service_intent(self):
+        for module in (lifecycle.full_client_freeze, lifecycle.full_client_docker):
+            with self.subTest(module=module.__name__):
+                value = copy.deepcopy(self.config)
+                path = str(Path(module.__file__).resolve())
+                value["source_files"] = [pin for pin in value["source_files"] if pin["path"] != path]
+                # Keep the minimum count: pinning an unrelated file cannot
+                # substitute for the actual imported dependency's resolved path.
+                value["source_files"].append(file_ref(Path(value["services"]["worker"]["argv"][1])))
+                with self.assertRaisesRegex(lifecycle.LifecycleError, "lifecycle_source_pin_missing"):
+                    lifecycle.NormalLifecycle(value, self.config_ref, self.host, owner_uid=os.geteuid())
+                self.assertEqual(self.host.started, [])
+                self.assertFalse((self.root / "state" / ("b" * 32)).exists())
+
+    def test_transitive_import_pin_drift_refuses_before_service_intent(self):
+        for module in (lifecycle.full_client_freeze, lifecycle.full_client_docker):
+            with self.subTest(module=module.__name__):
+                value = copy.deepcopy(self.config)
+                path = str(Path(module.__file__).resolve())
+                next(pin for pin in value["source_files"] if pin["path"] == path)["sha256"] = "0" * 64
+                config_ref = write_json(self.root / "config.json", value)
+                request = copy.deepcopy(self.request)
+                request["config_sha256"] = config_ref["sha256"]
+                request_ref = write_json(self.root / "request.json", request)
+                engine = lifecycle.NormalLifecycle(value, config_ref, self.host, owner_uid=os.geteuid())
+                self.host.engine = engine
+                with self.assertRaisesRegex(lifecycle.LifecycleError, "frozen_service_file_changed"):
+                    engine.start(request_ref)
+                self.assertEqual(self.host.started, [])
+                self.assertFalse((self.root / "state" / ("b" * 32)).exists())
+
+    def test_launch_alias_keeps_original_argv_and_pinned_canonical_executable(self):
+        target = self.config["services"]["cosmic"]["executable"]["path"]
+        alias = self.root / "launch-alias"
+        alias.symlink_to(target)
+        value = copy.deepcopy(self.config)
+        for role in ("cosmic", "worker", "web"):
+            value["services"][role]["argv"][0] = str(alias)
+        self.configure(value)
+        self.assertEqual(self.engine.start(self.request_ref)["status"], "completed")
+        for role in ("cosmic", "worker", "web"):
+            self.assertEqual(self.engine.config["services"][role]["argv"][0], str(alias))
+            self.assertEqual(self.engine.config["services"][role]["executable"]["path"], target)
+
+    def test_missing_or_retargeted_launch_alias_refuses_before_intent(self):
+        for change in ("missing", "retargeted"):
+            with self.subTest(change=change):
+                alias = self.root / ("alias-" + change)
+                alias.symlink_to(self.config["services"]["cosmic"]["executable"]["path"])
+                value = copy.deepcopy(self.config)
+                value["services"]["cosmic"]["argv"][0] = str(alias)
+                self.configure(value)
+                alias.unlink()
+                if change == "retargeted":
+                    other = self.root / "unapproved-executable"
+                    other.write_bytes(b"not the frozen executable")
+                    alias.symlink_to(other)
+                with self.assertRaisesRegex(lifecycle.LifecycleError, "launch_executable_changed"):
+                    lifecycle.validate_config(value)
+                with self.assertRaisesRegex(lifecycle.LifecycleError, "launch_executable_changed"):
+                    self.engine.start(self.request_ref)
+                self.assertEqual(self.host.started, [])
+                self.assertFalse((self.root / "state" / ("b" * 32)).exists())
+
+    def test_alias_is_rechecked_at_service_intent_after_preflight(self):
+        alias = self.root / "launch-alias"
+        alias.symlink_to(self.config["services"]["cosmic"]["executable"]["path"])
+        value = copy.deepcopy(self.config)
+        value["services"]["cosmic"]["argv"][0] = str(alias)
+        self.configure(value)
+        start_service = self.engine.start_service
+        def remove_after_preflight(role):
+            alias.unlink()
+            return start_service(role)
+        self.engine.start_service = remove_after_preflight
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "launch_executable_changed"):
+            self.engine.start(self.request_ref)
+        saved = json.loads(Path(self.journal_ref()["path"]).read_text())
+        self.assertEqual(saved["service_starts"], {"cosmic": 0, "worker": 0})
+        self.assertNotIn("cosmic_start", saved)
+        self.assertEqual(self.host.started, [])
+
+    def test_declared_dropin_requires_a_pin_and_changed_bytes_refuse_intent(self):
+        dropin = self.root / "normal.conf"
+        dropin.write_bytes(b"[Service]\nExecStartPre=/approved\n"); dropin.chmod(0o600)
+        value = copy.deepcopy(self.config)
+        value["services"]["cosmic"]["dropins"] = [str(dropin)]
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "service_dropin_pin_missing"):
+            lifecycle.validate_config(value)
+        value["services"]["cosmic"]["files"].append(file_ref(dropin))
+        self.configure(value)
+        self.assertTrue(self.engine.start(self.request_ref, check_only=True)["ready"])
+        dropin.write_bytes(b"[Service]\nExecStartPre=/changed\n")
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "frozen_service_file_changed"):
+            self.engine.start(self.request_ref)
+        self.assertEqual(self.host.started, [])
+        self.assertFalse((self.root / "state" / ("b" * 32)).exists())
+
+    def test_unpinned_or_changed_loaded_fragment_refuses_before_intent(self):
+        original = copy.deepcopy(self.config)
+        for change in ("omitted_pin", "changed_path", "missing_path"):
+            with self.subTest(change=change):
+                value = copy.deepcopy(original)
+                if change == "omitted_pin":
+                    value["services"]["cosmic"]["files"] = [pin for pin in value["services"]["cosmic"]["files"]
+                        if pin["path"] != str(self.root / "cosmic.service")]
+                self.configure(value)
+                if change == "changed_path":
+                    other = self.root / "different.service"
+                    other.write_bytes(b"[Service]\nExecStartPre=/unapproved\n")
+                    self.host.fragments["cosmic"] = str(other)
+                elif change == "missing_path":
+                    self.host.fragments["cosmic"] = ""
+                with self.assertRaisesRegex(lifecycle.LifecycleError, "service_fragment_pin_missing"):
+                    self.engine.start(self.request_ref)
+                self.assertEqual(self.host.started, [])
+                self.assertFalse((self.root / "state" / ("b" * 32)).exists())
+
+    def test_changed_fragment_hook_bytes_refuse_even_with_matching_properties(self):
+        fragment = self.root / "cosmic.service"
+        fragment.write_bytes(fragment.read_bytes() + b"ExecStartPre=/unapproved\n")
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "frozen_service_file_changed"):
+            self.engine.start(self.request_ref)
+        self.assertEqual(self.host.started, [])
+        self.assertFalse((self.root / "state" / ("b" * 32)).exists())
+
+    def assert_worker_refused_before_intent(self, code):
+        with self.assertRaisesRegex(lifecycle.LifecycleError, code):
+            self.engine.start(self.request_ref)
+        self.assertEqual(self.host.started, ["cosmic"])
+        saved = json.loads(Path(self.journal_ref()["path"]).read_text())
+        self.assertEqual(saved["status"], "failed")
+        self.assertEqual(saved["failure"]["code"], code)
+        self.assertEqual(saved["service_starts"], {"cosmic": 1, "worker": 0})
+        self.assertNotIn("worker_start", saved)
+        self.assertFalse(any(event["phase"] == "worker_start_pending" for event in saved["events"]))
+
+    def change_file_after_native_readiness(self, path):
+        native = self.host.native
+        def changed(*args):
+            result = native(*args)
+            path.write_bytes(path.read_bytes() + b"\nchanged after readiness\n")
+            return result
+        self.host.native = changed
+
+    def test_worker_fragment_changed_after_native_readiness_never_starts(self):
+        self.change_file_after_native_readiness(self.root / "worker.service")
+        self.assert_worker_refused_before_intent("frozen_service_file_changed")
+
+    def test_worker_dropin_changed_after_native_readiness_never_starts(self):
+        dropin = self.root / "worker-normal.conf"
+        dropin.write_bytes(b"[Service]\nExecStartPre=/approved\n"); dropin.chmod(0o600)
+        value = copy.deepcopy(self.config)
+        value["services"]["worker"]["dropins"] = [str(dropin)]
+        value["services"]["worker"]["files"].append(file_ref(dropin))
+        self.configure(value)
+        self.change_file_after_native_readiness(dropin)
+        self.assert_worker_refused_before_intent("frozen_service_file_changed")
+
+    def test_worker_executable_changed_after_native_readiness_never_starts(self):
+        executable = self.root / "worker-executable"
+        executable.write_bytes(b"frozen worker executable"); executable.chmod(0o700)
+        value = copy.deepcopy(self.config)
+        value["services"]["worker"]["argv"][0] = str(executable)
+        value["services"]["worker"]["executable"] = file_ref(executable)
+        self.configure(value)
+        self.change_file_after_native_readiness(executable)
+        self.assert_worker_refused_before_intent("frozen_service_file_changed")
+
+    def test_worker_loaded_settings_are_rechecked_at_intent_after_quiet(self):
+        start_service = self.engine.start_service
+        unit = self.host.unit
+        def change_at_start(role):
+            if role == "worker":
+                def changed(systemctl, name):
+                    current = unit(systemctl, name)
+                    if name == self.config["services"]["worker"]["unit"]:
+                        current["MemoryMax"] = "unexpected after quiet"
+                    return current
+                self.host.unit = changed
+            return start_service(role)
+        self.engine.start_service = change_at_start
+        self.assert_worker_refused_before_intent("service_configuration_changed")
 
 
 class NativeBoundaryTests(unittest.TestCase):

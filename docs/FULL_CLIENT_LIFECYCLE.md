@@ -49,6 +49,59 @@ terminal attempt journals/backend states, offline snapshot, stopped invocation
 IDs, web instance and browser run ID. It cannot authorize a different machine
 boot, configuration, inventory or active character session.
 
+Source pins cover the lifecycle module and its trial, collection, scoring,
+freeze and Docker dependencies at their actual resolved import paths. Service
+file pins must include each loaded unit fragment and every declared drop-in;
+effective properties alone do not identify start hooks. A launch alias such as
+`/usr/bin/java` may retain its spelling in `argv`, but it must resolve to the
+pinned executable during configuration validation, file verification and
+immediately before recording start intent. Changed aliases or unit files refuse
+the handoff.
+The selected service's pinned executable, unit and hook files and loaded
+settings are checked again before each start intent, including worker startup
+after native readiness. Late changes leave the worker unstarted and the failure
+journaled.
+
+## Preparing append-only native evidence
+
+The normal logger's startup rollover can destroy the pre-start byte prefix.
+`scripts/full_client_lifecycle_log.py` derives an external Log4j configuration
+from the exact SHA256-bound original XML. It preserves ordinary logging and
+adds a separate nonrolling `File` appender with `append=true` and
+`immediateFlush=true`, using the existing main-log layout and logger routes.
+
+```text
+full_client_lifecycle_log.py --original ORIGINAL_XML --original-sha256 ORIGINAL_HASH --output PRIVATE_XML --log-path PRIVATE_LOG --log-owner-uid SERVICE_UID --working-directory SERVICE_CWD
+```
+
+The output parent must already be private to the operator; the log parent must
+already be private to the service user. Both require mode 0700. Output publication
+is create-only, mode 0600, with complete bytes flushed before publication. The
+tool validates supported XML, routes and path separation. It does not create or
+write the log or change a service.
+
+The deployed archive format's whole-directory deferred dates, `yyyy-MM` and
+`yyyy-MM-dd`, are supported only beneath a static directory prefix. Both new
+destinations must remain outside that entire prefix tree, including future
+dated directories. Other dynamic directory lookups and unbounded paths refuse
+preparation; the original archive pattern is retained.
+
+During a separately reviewed stopped-service configuration change, prepare the
+private log as a single-link mode-0600 regular file owned by the service user,
+pin the generated XML and exact Java configuration argument, and point
+`native.path` to that file. Keep the private configuration and evidence paths
+outside ordinary log and archive directories. Include the changed unit/drop-in
+in service file pins. The lifecycle consumer still requires preserved prefix,
+exact invocation, JVM-owned descriptor and owned listening ports; an added log
+file alone is not startup proof.
+
+The evidence file has no automatic rotation. Its configured byte bound remains
+an admission limit; perform any maintenance explicitly with the service stopped
+and establish a new reviewed boundary. Do not truncate it to make a failed
+readiness check pass. The server's current online marker precedes some later
+initialization work: marker plus owned ports proves this documented readiness
+condition, not completion of every startup subsystem.
+
 ## Durable transitions
 
 Before starting Cosmic, the command records its intent and previous invocation.

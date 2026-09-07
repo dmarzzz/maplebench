@@ -20,7 +20,8 @@ yet ready to claim unattended production operation.
 | Resource and ownership safeguards | Bounded trials, guarded subprocesses, existing world/queue locks, no lock takeover, frozen local Docker invocation and bounded evidence readers. | Shared-host capacity and longer service operation are not established by a short acceptance. See workspace gaps below. |
 | Normal-worker health | Explicit schema-2 probes verify actual process bindings, owned listeners, worker-held lock inodes, queue and private relay quiescence; fresh waiting is distinct from rendering. | An operational snapshot, not trial authorization. Durable trials retain their trusted runner/account checks. Rollout acceptance remains outstanding. |
 | First-idle restoration evidence | The opt-in worker hook records zero claimed trials, exact Cosmic/worker instances, source hash and held lock identities in a create-only receipt. | Replacement/unlocked descriptors fail; the lifecycle consumer must independently verify the receipt. |
-| Explicit normal-service lifecycle | `full_client_lifecycle.py` validates a private handoff, journals start intent, proves exact native/worker instances and reconciles interrupted responses without replaying starts. | New offline tests include real process death/descendant cleanup; this command has not been deployed or accepted against the normal logger. |
+| Explicit normal-service lifecycle | `full_client_lifecycle.py` validates a private handoff, pins imported dependencies and loaded unit files, rechecks executable/configuration bytes before each start intent, and reconciles interrupted responses without replaying starts. | Offline tests include real process death/descendant cleanup and late worker configuration changes. Live rollout acceptance remains outstanding. |
+| Append-only startup evidence | `full_client_lifecycle_log.py` preserves ordinary logging and derives a separate, private append-only logger from exact original XML. | Two isolated invocations using the actual server JAR preserved the prefix and all expected routes. Service configuration and lifecycle acceptance remain separate. |
 | Startup diagnostics | Native log/marker/listener observations are retained for the owned invocation. Incomplete probes preserve their deadline; byte/FD/deadline bounds constrain process evidence reads. | No unrelated-log fallback or assertion about the earlier discarded inner failure. |
 | Focused validation | 234 tests passed over runtime, runner, publisher, scorer, experiments and dashboard in one serialized, capped Linux job. | The immutable test snapshot covers the implementation fixes below. No API or live game/database operation was used by this test job. |
 
@@ -72,6 +73,23 @@ change between those two test jobs. The successful snapshot SHA256 is
 Tests used the same serialized 768 MiB/two-CPU/180-second job bounds and made no
 live service, database or API calls.
 
+The final lifecycle/logging snapshot passed 48 focused tests (26 lifecycle and
+22 logger) in 0.893 seconds. New cases cover missing dependency/unit pins,
+changed executable aliases, worker file and loaded-setting changes after
+native readiness, output/log/archive collisions and bounded deferred-date
+archive paths. Two log-only JVM invocations then used the server's exact packaged
+Log4j implementation: the original private prefix and inode were preserved,
+each of six route markers appeared once, and ordinary logging remained active.
+No game server was started. The complete job took 3.704 seconds under a
+2,300 MiB memory/address-space cap, no swap, two CPUs and a 180-second wall
+limit; compiler and Java invocations used 128 MiB heaps and ran sequentially.
+The snapshot SHA256 is
+`070fe1b32fd90338974e388205534ed34884cc7a560dc1fa19fe62dcaebde6d0`.
+Earlier jobs exposed a malformed synthetic XML closing tag and the real
+configuration's unsupported dated archive directories; both were corrected
+before this successful run. All failed validation records remain private and
+intact. No live service, database or API operation occurred.
+
 ## Remaining integration and operational work
 
 Normal-worker health, first-idle receipts, invocation-bound startup diagnostics
@@ -82,8 +100,10 @@ runner/account context; that existing context remains authoritative.
 The lifecycle still needs a reviewed private configuration and rollout
 acceptance against the existing normal services. In particular, its native
 log-generation contract refuses ambiguous reuse of an old online marker,
-including a same-inode rewrite by the normal logger. Accept a provable new
-generation or preserved append boundary before using this command for recovery.
+including a same-inode rewrite by the normal logger. The separate append-only
+configuration now passes packaged-library acceptance; deploy its exact private
+configuration and verify the normal service's preserved append boundary before
+using this command for recovery.
 Do not treat these source tests as permission to replay old private helpers or
 as live restoration evidence. The legacy worker retains its existing batch
 cleanup behavior; the new supported handoff requires the opt-in receipt and an
