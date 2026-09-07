@@ -12,6 +12,7 @@ import shlex
 import shutil
 import signal
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
@@ -470,23 +471,149 @@ def recover_renders(queue,batch,work):
             finish_render(queue,t,work)
 
 
+def worker_process_identity(pid, invocation_id):
+    if type(pid) is not int or pid <= 1 or not re.fullmatch(r'[a-f0-9]{32}', invocation_id or ''):
+        raise RuntimeError('worker_receipt_process_identity_unavailable')
+    fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+    if len(fields) <= 19 or not fields[19].isdigit():
+        raise RuntimeError('worker_receipt_process_identity_unavailable')
+    return {'pid': pid, 'start_ticks': fields[19], 'invocation_id': invocation_id}
+
+
+def worker_cosmic_identity():
+    probe = subprocess.run(['/usr/bin/systemctl', 'show', 'maplebench-cosmic.service', '--no-pager',
+                            '--property=MainPID,InvocationID,ActiveState,SubState'],
+                           check=True, timeout=10, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, text=True)
+    if len(probe.stdout) > 16384:
+        raise RuntimeError('worker_receipt_cosmic_identity_unavailable')
+    values = dict(line.split('=', 1) for line in probe.stdout.splitlines() if '=' in line)
+    if (set(values) != {'MainPID', 'InvocationID', 'ActiveState', 'SubState'}
+            or values['ActiveState'] != 'active' or values['SubState'] != 'running'
+            or not values['MainPID'].isdigit()):
+        raise RuntimeError('worker_receipt_cosmic_identity_unavailable')
+    return worker_process_identity(int(values['MainPID']), values['InvocationID'])
+
+
+def worker_lock_identities(work, descriptors):
+    if (not isinstance(descriptors, dict) or set(descriptors) != {'world', 'queue'}
+            or any(type(fd) is not int or fd <= 2 for fd in descriptors.values())
+            or len(set(descriptors.values())) != 2):
+        raise RuntimeError('worker_receipt_existing_lock_required')
+    locks = {}
+    for name, path in (('world', work/'private/maplebench-world.lock'),
+                       ('queue', work/'maplebench/artifacts/.cosmic-queue.lock')):
+        descriptor = descriptors[name]
+        held = os.fstat(descriptor)
+        current = path.lstat()
+        if (not stat.S_ISREG(held.st_mode) or not stat.S_ISREG(current.st_mode)
+                or path.resolve(strict=True) != path
+                or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+            raise RuntimeError('worker_receipt_existing_lock_required')
+        fdinfo = Path(f'/proc/self/fdinfo/{descriptor}').read_text()
+        if not re.search(r'^lock:\s+\d+:\s+FLOCK\s+ADVISORY\s+WRITE\s+'
+                         + str(os.getpid()) + r'\s', fdinfo, re.MULTILINE):
+            raise RuntimeError('worker_receipt_existing_lock_required')
+        locks[name] = {'path': str(path), 'device': held.st_dev, 'inode': held.st_ino}
+    if len({(value['device'], value['inode']) for value in locks.values()}) != 2:
+        raise RuntimeError('worker_receipt_existing_lock_required')
+    return locks
+
+
+def worker_first_idle_receipt(queue, work, cosmic_before, cosmic_after, *, lock_fds):
+    """Optional operator proof; never enable this from a model or batch request."""
+    configured = os.environ.get('MAPLEBENCH_LIFECYCLE_RECEIPT_DIR')
+    if configured is None:
+        return
+    directory = Path(configured)
+    if not directory.is_absolute() or directory.resolve(strict=True) != directory:
+        raise RuntimeError('worker_receipt_private_directory_required')
+    info = directory.stat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise RuntimeError('worker_receipt_private_directory_required')
+    if cosmic_before != cosmic_after:
+        raise RuntimeError('worker_receipt_cosmic_changed')
+    identity = worker_process_identity(os.getpid(), os.environ.get('INVOCATION_ID'))
+    boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    if not re.fullmatch(r'[a-f0-9-]{36}', boot_id):
+        raise RuntimeError('worker_receipt_boot_identity_unavailable')
+    pending = queue.db.execute("SELECT count(*) FROM trials WHERE status IN ('queued','running','rendering')").fetchone()[0]
+    if pending != 0:
+        raise RuntimeError('worker_receipt_queue_not_idle')
+    locks = worker_lock_identities(work, lock_fds)
+    source = Path(__file__).resolve(strict=True)
+    before = source.stat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size > 2 * 1024 * 1024:
+        raise RuntimeError('worker_receipt_source_unavailable')
+    source_hash = digest(source)
+    after = source.stat()
+    if any(getattr(before, key) != getattr(after, key) for key in
+           ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')):
+        raise RuntimeError('worker_receipt_source_changed')
+    value = {'schema_version': 1, 'kind': 'normal_worker_first_idle', 'boot_id': boot_id,
+             'worker': identity, 'cosmic_before': cosmic_before, 'cosmic_after': cosmic_after,
+             'worker_source_sha256': source_hash, 'locks': locks, 'queue_pending': 0,
+             'trials_claimed': 0, 'observed_at_ms': time.time_ns() // 1000000}
+    path = directory / (identity['invocation_id'] + '.json')
+    descriptor, temporary = tempfile.mkstemp(prefix='.worker-idle-', dir=directory)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(value, stream, sort_keys=True, allow_nan=False)
+            stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+        if worker_lock_identities(work, lock_fds) != locks:
+            raise RuntimeError('worker_receipt_existing_lock_required')
+        os.link(temporary, path, follow_symlinks=False)
+        parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try: os.fsync(parent)
+        finally: os.close(parent)
+    finally:
+        os.unlink(temporary)
+
+
+@contextlib.contextmanager
+def worker_existing_lock(path):
+    if path.resolve(strict=True) != path:
+        raise RuntimeError('worker_existing_lock_required')
+    descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(descriptor)
+        current = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+            raise RuntimeError('worker_existing_lock_required')
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
 def worker(queue,batch,work,watch=False):
-    lock=(work/'private/maplebench-world.lock').open('a')
-    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    legacy=(work/'maplebench/artifacts/.cosmic-queue.lock').open('a')
-    fcntl.flock(legacy,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    with worker_existing_lock(work/'private/maplebench-world.lock') as world_fd, \
+            worker_existing_lock(work/'maplebench/artifacts/.cosmic-queue.lock') as queue_fd:
+        worker_loop(queue, batch, work, watch, lock_fds={'world': world_fd, 'queue': queue_fd})
+
+
+def worker_loop(queue,batch,work,watch=False,*,lock_fds):
     queue.recover()
     recover_renders(queue,batch,work)
     restored=False
+    trials_claimed=0
+    receipt_enabled='MAPLEBENCH_LIFECYCLE_RECEIPT_DIR' in os.environ
     while True:
         t=queue.claim(batch)
         if not t:
             for row in queue.db.execute('SELECT id FROM batches'): queue.publish(row['id'])
             if not restored:
-                restore_world(); restored=True
+                before = worker_cosmic_identity() if receipt_enabled and trials_claimed == 0 else None
+                restore_world()
+                if receipt_enabled and trials_claimed == 0:
+                    worker_first_idle_receipt(queue, work, before, worker_cosmic_identity(), lock_fds=lock_fds)
+                restored=True
             if not watch: break
             time.sleep(3); continue
         restored=False
+        trials_claimed += 1
         batch_dir=queue.root/t['batch_id']
         queue.publish(t['batch_id'])
         print(json.dumps({'trial':t['id'],'attempt':t['attempt'],'status':'running'}),flush=True)

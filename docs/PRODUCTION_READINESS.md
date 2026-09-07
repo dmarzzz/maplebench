@@ -48,11 +48,13 @@ and party objectives remain a design; they are not claimed as running benchmarks
 - `scripts/full_client_collect.py`: minimal offline database export through a
   consistent read-only transaction. It cannot restore a database or certify a
   trial by itself.
-- `scripts/full_client_health.py`: read-only service/process, lock, memory,
-  remaining lease, relay freshness, and recording/evidence checks. Run on the
-  Linux runtime host using private host configuration. This checks the leased
-  integration preview. Production attempts use the durable runner's preflight
-  and the runtime backend's continuous ownership checks instead.
+- `scripts/full_client_health.py`: read-only health with explicit modes. Schema
+  1 checks the leased integration preview. Schema 2 checks the normal worker's
+  actual processes, owned listeners and lock inodes, empty queue, private relay
+  quiescence and fresh waiting/rendering state. Run on Linux with private host
+  configuration; see [operational health](FULL_CLIENT_HEALTH.md). Durable trials
+  use the runner's preflight and runtime ownership checks, which also establish
+  account and frozen-input evidence unavailable to the standalone health probe.
 - `scripts/full_client_freeze.py`: read-only inventory and drift verification
   for existing server/client builds, configuration, scripts, WZ and sandbox
   image. It does not create a database baseline or copy game assets.

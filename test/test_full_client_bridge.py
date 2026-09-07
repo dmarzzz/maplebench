@@ -31,6 +31,36 @@ class FullClientTests(unittest.TestCase):
         return {'schema_version':1,'expected_map_id':1,'min_monsters':1,
                 'min_samples':3,'min_span_ms':1000,'timeout_ms':10000}
 
+    def test_cold_idle_status_proves_quiescence_without_a_first_api_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge=FullClientBridge(folder)
+            original=dict(bridge.run)
+            for private in (False,True):
+                status=bridge.status(private=private)
+                self.assertIs(status['run']['workerActive'],False)
+                self.assertIs(status['run']['leaseReleasePending'],False)
+                self.assertIs(status['browserReleasePending'],False)
+            self.assertEqual(bridge.run,original)
+
+    def test_status_cannot_hide_live_worker_pending_input_or_retained_lease(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge=FullClientBridge(folder)
+            bridge.run.update(workerActive=False,leaseReleasePending=False)
+            bridge.cancel_events['a'*32]=threading.Event()
+            self.assertIs(bridge.status()['run']['workerActive'],True)
+            bridge.cancel_events.clear()
+            bridge.pending={'id':'pending'}
+            self.assertIs(bridge.status()['run']['workerActive'],True)
+            bridge.pending=None
+            with tempfile.TemporaryFile() as lease:
+                bridge.leases['a'*32]=[lease.fileno()]
+                self.assertIs(bridge.status()['run']['leaseReleasePending'],True)
+                self.assertFalse(lease.closed)
+                bridge.leases.clear()
+            bridge.run.update(client='private-client',dockerBinding={'private':'path'})
+            self.assertNotIn('client',bridge.status()['run'])
+            self.assertNotIn('dockerBinding',bridge.status()['run'])
+
     @contextmanager
     def mock_readiness(self, bridge):
         # These tests isolate Docker/cancellation; real frame gating is covered below.

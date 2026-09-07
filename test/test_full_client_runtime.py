@@ -775,6 +775,106 @@ class RuntimeTests(unittest.TestCase):
             self.backend.login()
         self.host.admin.assert_not_called()
 
+    def test_startup_timeout_retains_specific_last_observation_without_log_contents(self):
+        self.backend.owned_server = MagicMock(return_value={"MainPID": "123"})
+        self.backend.state["invocation_id"] = "c" * 32
+        self.backend.config["game_ports"] = [8484, 7575]
+        initialized = b"MapleBench persistence journal initialized\n"
+        online = b"Cosmic is now online after 20 ms.\n"
+        cases = [(b"", {8484, 7575}, "native_log_unavailable"),
+                 (b"private unrelated content\n", {8484, 7575}, "native_journal_initialization_missing"),
+                 (initialized, {8484, 7575}, "native_online_marker_missing"),
+                 (initialized + online, {8484}, "native_listener_unavailable")]
+        self.host.sleep.side_effect = runtime.RuntimeErrorCode("operation_deadline")
+        for logs, ports, code in cases:
+            with self.subTest(code=code):
+                self.host.command.return_value = logs
+                self.host.listening_ports.return_value = ports
+                with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^" + code + "$"):
+                    self.backend.wait_for_server_ready()
+                saved = json.loads((self.directory / "backend-state.json").read_text())["startup_readiness"]
+                self.assertEqual(saved["invocation_id"], "c" * 32)
+                self.assertEqual(saved["log_bytes"], len(logs))
+                self.assertNotIn("private unrelated", json.dumps(saved))
+                self.assertIn("_SYSTEMD_INVOCATION_ID=" + "c" * 32, self.host.command.call_args.args[0])
+
+    def test_startup_does_not_mask_owned_instance_failure_or_stale_diagnostics(self):
+        self.backend.state["invocation_id"] = "c" * 32
+        self.backend.state["startup_readiness"] = {"invocation_id": "d" * 32, "log_bytes": 0}
+        self.backend.owned_server = MagicMock(side_effect=runtime.RuntimeErrorCode("operation_deadline"))
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^operation_deadline$"):
+            self.backend.wait_for_server_ready()
+        self.backend.owned_server.side_effect = runtime.RuntimeErrorCode("server_instance_ownership_lost")
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^server_instance_ownership_lost$"):
+            self.backend.wait_for_server_ready()
+
+    def test_incomplete_next_probe_does_not_reclassify_previous_missing_evidence(self):
+        self.backend.owned_server = MagicMock(return_value={"MainPID": "123"})
+        self.backend.state["invocation_id"] = "c" * 32
+        self.backend.config["game_ports"] = [8484]
+        self.host.listening_ports.return_value = set()
+        self.host.command.side_effect = [b"", runtime.RuntimeErrorCode("operation_deadline")]
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^operation_deadline$"):
+            self.backend.wait_for_server_ready()
+        self.assertEqual(self.backend.state["startup_readiness"]["log_bytes"], 0)
+        self.host.sleep.assert_called_once_with()
+
+    def test_startup_ambiguous_markers_fail_without_waiting_or_login(self):
+        self.backend.owned_server = MagicMock(return_value={"MainPID": "123"})
+        self.backend.state["invocation_id"] = "c" * 32
+        self.host.command.return_value = b"MapleBench persistence journal initialized\n" * 2
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^native_startup_markers_ambiguous$"):
+            self.backend.wait_for_server_ready()
+        self.host.sleep.assert_not_called()
+        self.host.admin.assert_not_called()
+
+    def test_native_diagnostic_persistence_changes_only_with_observations(self):
+        self.backend.owned_server = MagicMock(return_value={"MainPID": "123"})
+        self.backend.state["invocation_id"] = "c" * 32
+        self.backend.config["game_ports"] = [8484]
+        self.host.command.return_value = b""
+        self.host.listening_ports.return_value = set()
+        with patch.object(self.backend, "persist", wraps=self.backend.persist) as persist:
+            self.assertFalse(self.backend.server_ready())
+            self.assertFalse(self.backend.server_ready())
+            self.assertEqual(persist.call_count, 1)
+            self.host.command.return_value = b"MapleBench persistence journal initialized\n"
+            self.assertFalse(self.backend.server_ready())
+            self.assertEqual(persist.call_count, 2)
+
+    def test_proc_reader_is_byte_bounded_and_checks_deadline(self):
+        host = runtime.Host()
+        host.remaining = MagicMock(return_value=1)
+        stream = io.BytesIO(b"x" * 34)
+        with patch.object(runtime, "JSON_LIMIT", 32), patch.object(Path, "open", return_value=stream):
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^proc_output_limit$"):
+                host.proc(123, "net/tcp")
+        host.remaining.side_effect = runtime.RuntimeErrorCode("operation_deadline")
+        with patch.object(Path, "open") as opening:
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^operation_deadline$"):
+                host.proc(123, "status")
+            opening.assert_not_called()
+
+    def test_native_socket_scan_stops_before_reading_excess_descriptors(self):
+        host = runtime.Host()
+        host.remaining = MagicMock(return_value=1)
+        host.proc = MagicMock(return_value=b"")
+        entries = [MagicMock(path="/synthetic/fd/" + str(i)) for i in range(4)]
+        with patch.object(runtime, "MAX_PROCESS_FDS", 2), \
+                patch.object(runtime.os, "scandir", return_value=contextlib.nullcontext(iter(entries))), \
+                patch.object(runtime.os, "readlink", return_value="socket:[1]") as readlink:
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^server_descriptor_limit$"):
+                host.listening_ports(123)
+            self.assertEqual(readlink.call_count, 2)
+            host.proc.assert_not_called()
+
+    def test_host_command_timeout_is_safe_deadline_code(self):
+        host = runtime.Host()
+        host.remaining = MagicMock(return_value=1)
+        with patch.object(runtime.subprocess, "run", side_effect=subprocess.TimeoutExpired("private", 1)):
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode, "^operation_deadline$"):
+                host.command(["/synthetic/command"])
+
     def test_cleanup_cancels_then_preserves_failure_before_acknowledging(self):
         statuses = [
             {"bridge": {"run": {"id": self.run_id, "status": "running", "workerActive": True}, "browserReleasePending": False}},
@@ -924,7 +1024,7 @@ class RuntimeTests(unittest.TestCase):
         self.backend.manifest = {"wz_path": str(self.root / "wz"), "working_directory": str(self.root),
                                  "server_jar": {"path": str(self.root / "Server.jar")}}
         self.backend.validate_process = MagicMock()
-        self.backend.wait_for = MagicMock(return_value=True)
+        self.backend.wait_for_server_ready = MagicMock(return_value=True)
         with patch.object(runtime.pwd, "getpwnam", return_value=user), patch.object(runtime.os, "chown"):
             self.backend.start_server()
         dropin = Path(self.backend.state["dropin"]).read_text()

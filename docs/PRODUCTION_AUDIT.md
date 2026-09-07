@@ -18,6 +18,9 @@ yet ready to claim unattended production operation.
 | Complete reporting | The report covers the entire plan, including missing, failed, recovered and invalid rows, with explicit denominators and no ranking or fabricated confidence interval. | The deployed single-entry report independently recomputed +9,000 XP and 25 inputs. Report aggregates verify persistence; publication/protocol acceptance is separate. |
 | Interrupted trial cleanup | Removal/reload checkpoints now preserve an owned drop-in cleanup across process interruption. Clean/ready requires the effective systemd configuration to have lost its trial settings. | New regressions model manager-cached configuration independently of the file. This source change requires rollout acceptance. |
 | Resource and ownership safeguards | Bounded trials, guarded subprocesses, existing world/queue locks, no lock takeover, frozen local Docker invocation and bounded evidence readers. | Shared-host capacity and longer service operation are not established by a short acceptance. See workspace gaps below. |
+| Normal-worker health | Explicit schema-2 probes verify actual process bindings, owned listeners, worker-held lock inodes, queue and private relay quiescence; fresh waiting is distinct from rendering. | An operational snapshot, not trial authorization. Durable trials retain their trusted runner/account checks. Rollout acceptance remains outstanding. |
+| First-idle restoration evidence | The opt-in worker hook records zero claimed trials, exact Cosmic/worker instances, source hash and held lock identities in a create-only receipt. | Replacement/unlocked descriptors fail; the lifecycle consumer must independently verify the receipt. |
+| Startup diagnostics | Native log/marker/listener observations are retained for the owned invocation. Incomplete probes preserve their deadline; byte/FD/deadline bounds constrain process evidence reads. | No unrelated-log fallback or assertion about the earlier discarded inner failure. |
 | Focused validation | 234 tests passed over runtime, runner, publisher, scorer, experiments and dashboard in one serialized, capped Linux job. | The immutable test snapshot covers the implementation fixes below. No API or live game/database operation was used by this test job. |
 
 ## Corrections from this audit
@@ -45,6 +48,16 @@ swap, two CPUs and a 180-second wall limit. Runtime artifacts and host-specific
 receipts remain private. The earlier deployed `2a93db5` release separately passed
 375 focused tests and its recorded live acceptance.
 
+The subsequent operational core covers 213 focused cases across runtime,
+runner, health, bridge/session, worker receipts, worker restoration and batch
+queue tests. Its first capped Linux job ran 213 in 6.612 seconds with one error
+in a new SQLite test wrapper's parameter name. After correcting that fixture,
+all 20 health tests passed in 0.027 seconds in a separate serialized capped job;
+the other 193 cases had already passed and their source/tests were unchanged.
+The successful source snapshot SHA256 is
+`95c38b508417ec82a26eb85dd6ff24caeef8be8b7cfe267d601a42f573d773b0`.
+These jobs issued no API requests or live game/database mutations.
+
 ## Remaining workspace implementation
 
 These are local implementation gaps, not completed work or external approvals:
@@ -55,16 +68,15 @@ These are local implementation gaps, not completed work or external approvals:
    proof used by the private recovery helpers. Move that supported lifecycle into
    a reusable explicit workspace command. Keep full-client trial cleanup stopped
    and do not let the legacy worker reinterpret trial ownership.
-2. **Mode-aware health:** `full_client_health.py` checks the leased integration
-   helper mode. Add explicit normal-worker and durable-trial modes, including
-   actual process/lock ownership and controller/lease/browser-release quiescence.
-   An active HTTP server or a terminal controller status alone is insufficient.
-3. **Native startup diagnostics:** repository readiness still depends on
-   `journalctl` under inherited resource limits. Empty successful output becomes
-   a generic wait timeout. Preserve safe, specific missing-evidence diagnostics
-   and a bounded native log acquisition contract tied to the exact instance.
-   The private recovery's earlier inner failure was discarded and remains
-   unproven; the later descriptor-limit failure was directly observed.
+
+Normal-worker health and invocation-bound startup diagnostics are implemented
+and covered above. The standalone health tool explicitly refuses durable-trial
+mode because it lacks the trusted runner/account context; that existing context
+remains authoritative. The normal-service lifecycle still needs its independent
+crash review and focused validation. Its native log-generation contract must
+refuse ambiguous reuse of an old online marker, including unsupported same-inode
+rewrites. The private recovery's earlier discarded inner error remains unproven;
+the later descriptor-limit failure was directly observed.
 
 ## External release gates
 

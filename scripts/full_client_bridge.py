@@ -561,7 +561,14 @@ class FullClientBridge:
 
     def status(self, *, private=False):
         with self.lock:
-            return {'run':{k:v for k,v in self.run.items() if k != 'client' and (private or k != 'dockerBinding')},
+            run={k:v for k,v in self.run.items() if k != 'client' and (private or k != 'dockerBinding')}
+            # Include explicit quiescence for a cold idle bridge. Inspect live
+            # bookkeeping too, so an outstanding worker/input/lease cannot be
+            # hidden by an older or prematurely terminal controller record.
+            run['workerActive']=(bool(self.cancel_events) or self.pending is not None
+                or bool(self.run.get('workerActive')) or self.run.get('status') in ('requesting','running'))
+            run['leaseReleasePending']=bool(self.leases) or bool(self.run.get('leaseReleasePending'))
+            return {'run':run,
                     'quarantinedRuns':sorted(self.quarantines),
                     'fresh':self.fresh(), 'rendererConnected':self.client is not None and time.monotonic()-self.last_seen < 3,
                     'browserReleasePending':self._cancelled(self.run.get('id')) and self.run.get('id') not in self.release_acks,

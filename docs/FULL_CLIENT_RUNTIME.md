@@ -161,6 +161,17 @@ runner dies. No phase opens a replacement lock and calls that ownership.
    Before ordinary login it also requires the fresh invocation's native journal
    initialization and Cosmic online marker plus every configured listening port
    owned by that exact JVM PID; Type=simple process activation is insufficient.
+   Startup observations retain only invocation-bound byte/marker counts and
+   listener readiness in the private backend journal. A deadline reports the
+   last missing evidence (native log, journal initialization, online marker or
+   owned listener) when the wait expires after a complete observation. A timeout
+   inside an incomplete probe retains `operation_deadline`. These
+   codes describe observed evidence, not an inferred underlying server cause.
+   Duplicate startup markers fail as ambiguous. `journalctl` still reads only
+   the owned invocation under the command output/time limits; there is no
+   fallback to an unrelated log. Process tables are byte-bounded and native
+   socket enumeration stops at 4,096 descriptors, checking the deadline while
+   traversing descriptors and network rows.
 4. `login` uses the private socket's ordinary `connect` navigation, then observes
    fresh rendered gameplay and actual account state 2 before recording login.
 5. `run_controller` validates the frozen prompt/budgets and sends exactly one

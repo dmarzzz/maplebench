@@ -43,6 +43,7 @@ UNIT = re.compile(r"[A-Za-z0-9_.@-]+\.service\Z")
 NATIVE_CLASS = "server/bots/MapleBenchPersistence.class"
 MAX_SQL = 64 * 1024 * 1024
 MAX_VIDEO = 512 * 1024 * 1024
+MAX_PROCESS_FDS = 4096
 ENV_NAMES = ("MAPLEBENCH_TRIAL_ID", "MAPLEBENCH_SERVER_INSTANCE_ID",
              "MAPLEBENCH_PERSIST_CHARACTER_ID", "MAPLEBENCH_PERSIST_ACCOUNT_ID",
              "MAPLEBENCH_SAVE_JOURNAL")
@@ -126,9 +127,12 @@ class Host:
         def cap_output():
             resource.setrlimit(resource.RLIMIT_FSIZE, (maximum, maximum))
         with tempfile.TemporaryFile() as output:
-            result = subprocess.run(argv, input=data, stdout=output, stderr=subprocess.DEVNULL,
-                                    timeout=self.remaining(), check=False, preexec_fn=cap_output,
-                                    env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
+            try:
+                result = subprocess.run(argv, input=data, stdout=output, stderr=subprocess.DEVNULL,
+                                        timeout=self.remaining(), check=False, preexec_fn=cap_output,
+                                        env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
+            except subprocess.TimeoutExpired:
+                raise RuntimeErrorCode("operation_deadline") from None
             require(result.returncode == 0, "host_command_failed")
             require(output.tell() < maximum, "host_output_limit")
             output.seek(0)
@@ -170,7 +174,15 @@ class Host:
         return response["result"]
 
     def proc(self, pid, name):
-        return Path(f"/proc/{pid}/{name}").read_bytes()
+        return self.proc_file(Path(f"/proc/{pid}/{name}"))
+
+    def proc_file(self, path):
+        self.remaining()
+        with path.open("rb") as source:
+            raw = source.read(JSON_LIMIT + 1)
+        require(len(raw) <= JSON_LIMIT, "proc_output_limit")
+        self.remaining()
+        return raw
 
     def executable(self, pid):
         return str(Path(f"/proc/{pid}/exe").resolve(strict=True))
@@ -178,28 +190,32 @@ class Host:
     def process_started_ms(self, pid):
         fields = self.proc(pid, "stat").decode().rsplit(")", 1)[1].split()
         started = int(fields[19]) / os.sysconf("SC_CLK_TCK")
-        uptime = float(Path("/proc/uptime").read_text().split()[0])
+        uptime = float(self.proc_file(Path("/proc/uptime")).split()[0])
         return self.now() - (uptime - started) * 1000
 
     def listening_ports(self, pid):
         inodes = set()
-        for item in Path(f"/proc/{pid}/fd").iterdir():
-            try:
-                match = re.fullmatch(r"socket:\[(\d+)\]", os.readlink(item))
-                if match:
-                    inodes.add(match[1])
-            except FileNotFoundError:
-                continue
+        with os.scandir(f"/proc/{pid}/fd") as entries:
+            for count, item in enumerate(entries, 1):
+                self.remaining()
+                require(count <= MAX_PROCESS_FDS, "server_descriptor_limit")
+                try:
+                    match = re.fullmatch(r"socket:\[(\d+)\]", os.readlink(item.path))
+                    if match:
+                        inodes.add(match[1])
+                except FileNotFoundError:
+                    continue
         ports = set()
         for name in ("tcp", "tcp6"):
             for line in self.proc(pid, "net/" + name).decode().splitlines()[1:]:
+                self.remaining()
                 values = line.split()
                 if len(values) > 9 and values[3] == "0A" and values[9] in inodes:
                     ports.add(int(values[1].rsplit(":", 1)[1], 16))
         return ports
 
     def locks(self):
-        return Path("/proc/locks").read_text()
+        return self.proc_file(Path("/proc/locks")).decode()
 
     def queue_count(self, path):
         path = absolute(path)
@@ -671,7 +687,7 @@ class CosmicRuntime:
         self.state["invocation_id"] = unit["InvocationID"]
         self.persist()
         self.validate_process(unit)
-        self.wait_for(self.server_ready)
+        self.wait_for_server_ready()
         self.state["session"]["server_started_at_ms"] = self.state["server_start_requested_at_ms"]
         self.event("server_started", self.state["session"]["server_started_at_ms"])
         return {"server_instance_id": self.state["server_instance_id"], "invocation_id": unit["InvocationID"]}
@@ -682,9 +698,45 @@ class CosmicRuntime:
                                   "_SYSTEMD_INVOCATION_ID=" + self.state["invocation_id"]])
         require(b"MapleBench persistence journal failed" not in logs and b"Error saving chr" not in logs,
                 "native_startup_or_save_failed")
-        return (logs.count(b"MapleBench persistence journal initialized") == 1
-                and logs.count(b"Cosmic is now online after ") == 1
-                and set(self.config["game_ports"]) <= self.host.listening_ports(int(unit["MainPID"])))
+        initialized = logs.count(b"MapleBench persistence journal initialized")
+        online = logs.count(b"Cosmic is now online after ")
+        require(initialized <= 1 and online <= 1, "native_startup_markers_ambiguous")
+        ports_ready = set(self.config["game_ports"]) <= self.host.listening_ports(int(unit["MainPID"]))
+        diagnostics = {"invocation_id": self.state["invocation_id"], "log_bytes": len(logs),
+                       "journal_initializations": initialized, "online_markers": online,
+                       "listeners_ready": ports_ready}
+        # Keep only safe counts for the exact owned instance. Persist changes so
+        # a timeout remains inspectable without copying native log contents.
+        if self.state.get("startup_readiness") != diagnostics:
+            self.state["startup_readiness"] = diagnostics
+            self.persist()
+        return initialized == 1 and online == 1 and ports_ready
+
+    def wait_for_server_ready(self):
+        while True:
+            self.ownership()
+            self.quiet()
+            if self.server_ready():
+                return True
+            try:
+                self.host.sleep()
+                self.host.remaining()
+            except RuntimeErrorCode as error:
+                if str(error) != "operation_deadline":
+                    raise
+                # Only classify a deadline after a complete observation. A
+                # timeout inside the next ownership/log/socket probe retains
+                # operation_deadline, even if a previous observation exists.
+                diagnostic = self.state["startup_readiness"]
+                if not diagnostic["log_bytes"]:
+                    code = "native_log_unavailable"
+                elif diagnostic["journal_initializations"] != 1:
+                    code = "native_journal_initialization_missing"
+                elif diagnostic["online_markers"] != 1:
+                    code = "native_online_marker_missing"
+                else:
+                    code = "native_listener_unavailable"
+                raise RuntimeErrorCode(code) from None
 
     def login(self):
         self.owned_server()
