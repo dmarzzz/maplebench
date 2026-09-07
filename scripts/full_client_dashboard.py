@@ -196,7 +196,7 @@ def action_evidence(result,action_limit):
     this function, and no raw SDK arguments/errors are exported.
     """
     value={'actions':None,'acknowledged_actions':None,'action_attempts':None,
-           'action_verification':'receipts_incomplete','no_op':None}
+           'action_verification':'receipts_incomplete','no_op':None,'sdk_calls':None}
     program=mapping(result.get('program')); controller=mapping(result.get('controller'))
     if integer(action_limit,10000) is None or action_limit<1: return value
     reported=integer(program.get('actions'),action_limit)
@@ -243,8 +243,40 @@ def action_evidence(result,action_limit):
         and integer(controller.get('actions'),action_limit)==reported
         and reported is not None and attempts is not None and reported==attempts==presses==acknowledged)
     if complete:
-        value.update(action_verification='receipts_rechecked',no_op=attempts==0)
+        value.update(action_verification='receipts_rechecked',no_op=attempts==0,sdk_calls=len(steps))
     return value
+
+
+def playback_cue(result,recording,actions):
+    """Map verified controller timing to the original, untrimmed recording.
+
+    Older receipts locate program launch, not its first input. Never invent an
+    input timestamp from API latency, a counter, or a no-op result.
+    """
+    if actions.get('action_verification')!='receipts_rechecked' or not actions.get('actions'):
+        return None
+    timeline=mapping(result.get('timeline'))
+    start=recording.get('start_ms'); end=recording.get('end_ms')
+    duration=recording.get('duration_ms'); uncertainty=recording.get('timing_uncertainty_ms')
+    program_start=timeline.get('program_started_ms'); program_end=timeline.get('program_ended_ms')
+    if (recording.get('interrupted') is not False or recording.get('post_render_capture') is not True
+            or recording.get('timing_method')!='browser_monotonic_duration_with_measured_clock_offset'
+            or not number(start,-125000,125000) or not number(end,0,250000)
+            or not number(duration,1,125000) or not number(uncertainty,0,100)
+            or not number(program_start,0,125000) or not number(program_end,program_start,125000)
+            or not start<=program_start<program_end<=end
+            or abs((end-start)-duration)>100):
+        return None
+    target=program_start; basis='program_start'
+    if 'first_input_started_ms' in timeline or 'first_input_acked_ms' in timeline:
+        target=timeline.get('first_input_started_ms'); ack=timeline.get('first_input_acked_ms')
+        if not number(target,program_start,program_end) or not number(ack,target,program_end):
+            return None
+        basis='first_acknowledged_input'
+    offset=target-start
+    if not 0<=offset<duration: return None
+    return {'start_ms':round(max(0,offset-250)), 'basis':basis,
+            'timing_uncertainty_ms':uncertainty}
 
 
 def publication_evidence(reader,folder,run_id,refs,result,score,recording,now_ms):
@@ -430,6 +462,9 @@ def project_attempt(reader,run_id,folder,relay_folder,live,recording_map,now_ms,
                 and mapping(recording.get('overlay')).get('model')==row['requested_model']
                 and mapping(recording.get('overlay')).get('mode')==row['mode']):
             row['recording']={'url':url,'sha256':approved['sha256'],'reviewed':recording.get('reviewed') is True}
+            if row['score_verification']=='runner_verified_receipts_rechecked':
+                cue=playback_cue(result,recording,row)
+                if cue is not None: row['recording']['playback']=cue
     except (ValueError,OSError,TypeError,KeyError,RecursionError):
         row.update(status='unavailable',failure_code='evidence_unavailable',persisted_xp=None,
                    score_verification='unverified',comparison_group=None,

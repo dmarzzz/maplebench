@@ -22,7 +22,7 @@
     pill.className='pill';if(status.tone)pill.classList.add(status.tone);node.append(pill);
     if(status.detail)node.append(el('small',status.detail));
   }
-  let replayFocus=null,replayRunId=null,replaySection=null;
+  let replayFocus=null,replayRunId=null,replaySection=null,replayCue=null,replayStart=0;
   const replay=$('replay'),player=$('replay-video');
   function stopReplay(){player.pause();player.removeAttribute('src');player.load();}
   function replayVerification(row){
@@ -39,12 +39,31 @@
     replayFocus=trigger;replayRunId=row.id;replaySection=trigger.closest('tbody')?.id;
     $('replay-title').textContent=`${row.returned_model||row.requested_model||'Script / no evaluated model'} · ${row.id.slice(0,12)}`;
     replayVerification(row);
+    const cue=row.recording?.playback;
+    replayCue=cue&&Number.isFinite(cue.start_ms)&&cue.start_ms>=0&&cue.start_ms<125000
+      &&['first_acknowledged_input','program_start'].includes(cue.basis)?cue:null;
+    replayStart=replayCue?replayCue.start_ms/1000:0;
+    $('replay-agent').hidden=!replayCue;
+    $('replay-agent').textContent=replayCue?.basis==='first_acknowledged_input'?'First input':'Program start';
+    $('replay-timing').textContent=(Number.isFinite(row.timing?.api_ms)?`API wait: ${seconds(row.timing.api_ms)}. `:'')
+      +(row.no_op===true?(row.sdk_calls===0?'The program exited without any SDK calls. ':'No input actions were executed in this run. ')+'Showing the full recording.'
+      :replayCue?`Opens near ${replayCue.basis==='first_acknowledged_input'?'the first confirmed input':'program start; first-input timing was not recorded'}. Full recording includes the opening wait.`
+      :'Showing the full recording; a verified playback cue is unavailable.');
     $('replay-playback-status').textContent='Loading recording…';
     stopReplay();player.src=url.href;
     if(!replay.open)replay.showModal();
     $('replay-close').focus();
-    player.play().catch(()=>{if(replay.open&&player.src===url.href)$('replay-playback-status').textContent='Use Play to start the recording.';});
   }
+  function playFrom(seconds){
+    replayStart=seconds;
+    if(!replay.open||player.readyState<1)return;
+    try{player.currentTime=Number.isFinite(player.duration)&&seconds>=player.duration?0:seconds;}
+    catch{$('replay-playback-status').textContent='Seeking is unavailable. Use the video controls.';return;}
+    player.play().catch(()=>{if(replay.open)$('replay-playback-status').textContent='Use Play to start the recording.';});
+  }
+  player.addEventListener('loadedmetadata',()=>playFrom(replayStart));
+  $('replay-agent').addEventListener('click',()=>{if(replayCue)playFrom(replayCue.start_ms/1000);});
+  $('replay-full').addEventListener('click',()=>playFrom(0));
   $('replay-close').addEventListener('click',()=>replay.close());
   replay.addEventListener('close',()=>{
     stopReplay();
@@ -77,7 +96,7 @@
     }
     node.replaceChildren(el('span',`${format(row.acknowledged_actions)} acknowledged`));
     if(Number.isFinite(row.action_attempts))node.append(el('small',`${format(row.action_attempts)} attempted`));
-    if(row.no_op===true)node.append(el('small','No input actions executed'));
+    if(row.no_op===true)node.append(el('small',row.sdk_calls===0?'Exited without SDK calls':'No input actions executed'));
     else if(row.action_verification==='receipts_incomplete')node.append(el('small','Action evidence incomplete'));
     else if(row.action_verification!=='receipts_rechecked')node.append(el('small','Action receipts not verified'));
   }

@@ -61,7 +61,12 @@
       "recording": {
         "url": "./recordings/a154c7a1b7fa4799ad884e89a07190be.webm",
         "sha256": "9c96443d9841365b7c00b225bac23f02608b7948ceaf3460b5a48c56896b3b79",
-        "reviewed": false
+        "reviewed": false,
+        "playback": {
+          "start_ms": 14222,
+          "basis": "program_start",
+          "timing_uncertainty_ms": 6.5
+        }
       },
       "phase_states": {
         "restore_baseline": "returned",
@@ -72,7 +77,8 @@
         "collect_final": "returned",
         "cleanup": "returned"
       },
-      "controller_status": "completed"
+      "controller_status": "completed",
+      "sdk_calls": 46
     },
     {
       "id": "c8370d4f4cbf46c2aa757d5f79821bdc",
@@ -176,7 +182,12 @@
       "recording": {
         "url": "./recordings/aad11d7ace5c4070a72568e2cf40e62c.webm",
         "sha256": "6154604e38266e70bc79a1479e1e6e7401395c87c7ecf3bf08c33c68a1d24f15",
-        "reviewed": false
+        "reviewed": false,
+        "playback": {
+          "start_ms": 10728,
+          "basis": "program_start",
+          "timing_uncertainty_ms": 5.5
+        }
       },
       "phase_states": {
         "restore_baseline": "returned",
@@ -187,7 +198,8 @@
         "collect_final": "returned",
         "cleanup": "returned"
       },
-      "controller_status": "completed"
+      "controller_status": "completed",
+      "sdk_calls": 54
     },
     {
       "id": "a88b83dc537d4805ac3a0062429a1df7",
@@ -254,7 +266,8 @@
         "collect_final": "returned",
         "cleanup": "returned"
       },
-      "controller_status": "completed"
+      "controller_status": "completed",
+      "sdk_calls": 0
     },
     {
       "id": "332112a3a8ee4694bbe8854b292dbe8b",
@@ -321,7 +334,8 @@
         "collect_final": "returned",
         "cleanup": "returned"
       },
-      "controller_status": "completed"
+      "controller_status": "completed",
+      "sdk_calls": null
     },
     {
       "id": "219403efd71e4f899ec2217f419a98e2",
@@ -388,7 +402,8 @@
         "collect_final": "returned",
         "cleanup": "returned"
       },
-      "controller_status": "completed"
+      "controller_status": "completed",
+      "sdk_calls": 0
     },
     {
       "id": "feb1b38a0df741c6b6d04e9df10d04ba",
@@ -444,7 +459,12 @@
       "recording": {
         "url": "./recordings/feb1b38a0df741c6b6d04e9df10d04ba.webm",
         "sha256": "eb8522c6310d8b8d75bcb8fb5a02edb8ac7e82299db7e6726bc11b1fdb1179e8",
-        "reviewed": false
+        "reviewed": false,
+        "playback": {
+          "start_ms": 11192,
+          "basis": "program_start",
+          "timing_uncertainty_ms": 6.5
+        }
       },
       "phase_states": {
         "restore_baseline": "returned",
@@ -455,7 +475,8 @@
         "collect_final": "returned",
         "cleanup": "returned"
       },
-      "controller_status": "completed"
+      "controller_status": "completed",
+      "sdk_calls": 51
     },
     {
       "id": "fea8f53216be4b4190fba50fcff961c1",

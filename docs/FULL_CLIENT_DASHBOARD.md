@@ -44,6 +44,15 @@ the exact saved video's SHA-256 digest. A URL alone is insufficient. Copy and
 verify a recording before adding that mapping; never symlink the private trial
 directory into the gallery. A replay link does not imply publication approval.
 
+Replays with verified action and synchronized capture receipts open near the
+first acknowledged input. The cue includes a short lead-in; the original video
+is unchanged and **Full recording** returns to its beginning. Historical runs
+without first-input timestamps can open at **Program start**, labeled separately.
+API wait time remains visible. Missing or invalid timing falls back to the full
+video. Zero-action runs are never given a gameplay cue. When complete receipts
+prove there were no SDK calls, the page says the program exited without SDK calls;
+that is distinct from a program that observed or waited but sent no inputs.
+
 A separate publication-evidence column shows the trusted validator's checked,
 blocked or awaiting-review status. The exporter discovers a bounded set of
 versioned verdict receipts, binds the latest verdict to the exact reviewed
