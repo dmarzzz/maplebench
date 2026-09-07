@@ -513,6 +513,9 @@ class Experiment:
             if resume:
                 require(path.exists(), "experiment_not_started")
                 self.load()
+                # Sealing is a permanent withdrawal of future submissions. This
+                # check precedes any event write, verification or child launch.
+                require("closure" not in self.state, "experiment_sealed")
                 self.now()
             else:
                 require(not os.path.lexists(path), "explicit_resume_required")
@@ -587,19 +590,53 @@ class Experiment:
                 self.persist("operator_attention_required")
                 raise
 
+    def seal(self, expected_state_sha):
+        """Withdraw future entries after exact, terminal-clean reconciliation.
+
+        This never launches/recover trials or restores services. An interrupted
+        write is resolved by reading the journal, not by assuming a seal exists.
+        Schema 2 deliberately makes old coordinators refuse a sealed journal.
+        """
+        require(isinstance(expected_state_sha, str) and SHA.fullmatch(expected_state_sha),
+                "invalid_coordinator_reference")
+        with self.locked():
+            self.load()
+            require(self.state_sha == expected_state_sha, "coordinator_journal_changed")
+            require("closure" not in self.state, "experiment_sealed")
+            require(len(self.state["events"]) < 2000, "coordinator_event_limit")
+            self.reconcile()
+            for entry in self.plan["entries"][len(self.state["submissions"]):]:
+                require(not os.path.lexists(Path(self.plan["runner"]["state_root"]) / entry["attempt_id"])
+                        and self.inspector(self.plan, entry)["status"] == "missing",
+                        "unsubmitted_attempt_already_exists")
+            self.state["closure"] = {"previous_status": self.state["status"],
+                "previous_journal_sha256": expected_state_sha,
+                "policy": "permanently_withdraw_future_entries"}
+            self.state["schema_version"] = 2
+            if self.state["status"] != "completed":
+                self.state["status"] = "stopped"
+            self.persist("experiment_sealed")
+            sealed_sha = self.state_sha
+            self.load()  # Return success only for the actual durable bytes.
+            require(self.state_sha == sealed_sha, "coordinator_journal_changed")
+            return self.summary()
+
     def summary(self):
         return {"schema_version": 1, "experiment_id": self.plan["experiment_id"], "status": self.state["status"],
                 "planned": len(self.plan["entries"]), "submitted": len(self.state["submissions"]),
                 "settled": len(self.state["settled"]),
-                "retired_unlaunched": sum("retirement" in item for item in self.state["submissions"]), "ranked": False}
+                "retired_unlaunched": sum("retirement" in item for item in self.state["submissions"]),
+                "sealed": "closure" in self.state, "ranked": False}
 
 
 def validate_state(state, plan):
-    require(isinstance(state, dict) and set(state) == {"schema_version", "experiment_id", "plan_sha256",
-        "started_at_ms", "updated_at_ms", "deadline_at_ms", "status", "submissions", "settled", "events"},
+    fields = {"schema_version", "experiment_id", "plan_sha256", "started_at_ms", "updated_at_ms",
+              "deadline_at_ms", "status", "submissions", "settled", "events"}
+    require(isinstance(state, dict) and type(state.get("schema_version")) is int
+            and ((state["schema_version"] == 1 and set(state) == fields)
+                 or (state["schema_version"] == 2 and set(state) == fields | {"closure"})),
         "invalid_coordinator_journal")
-    require(type(state["schema_version"]) is int and state["schema_version"] == 1
-            and state["experiment_id"] == plan["experiment_id"] and state["plan_sha256"] == digest(plan)
+    require(state["experiment_id"] == plan["experiment_id"] and state["plan_sha256"] == digest(plan)
             and state["status"] in {"running", "stopped", "completed"}, "coordinator_identity_mismatch")
     require(integer(state["started_at_ms"], 1, 2**53-1)
             and integer(state["updated_at_ms"], state["started_at_ms"], 2**53-1)
@@ -642,7 +679,7 @@ def validate_state(state, plan):
                 and integer(event["at_ms"], previous, state["updated_at_ms"])
                 and event["kind"] in {"experiment_started", "execution_admitted", "explicit_resume", "submission_intent",
                                      "submission_retired_unlaunched", "child_returned", "attempt_settled",
-                                     "operator_attention_required", "experiment_completed"},
+                                     "operator_attention_required", "experiment_completed", "experiment_sealed"},
                 "invalid_coordinator_events")
         previous = event["at_ms"]
     intents = [event for event in events if event["kind"] == "submission_intent"]
@@ -663,6 +700,22 @@ def validate_state(state, plan):
                                     if event["kind"] == "submission_retired_unlaunched"}, "retirement_event_mismatch")
     require(state["status"] != "completed" or len(settled) + len(retirement_sequences) == len(plan["entries"]),
             "incomplete_completed_experiment")
+    seals = [event for event in events if event["kind"] == "experiment_sealed"]
+    if "closure" in state:
+        closure = state["closure"]
+        require(isinstance(closure, dict) and set(closure) == {
+                "previous_status", "previous_journal_sha256", "policy"}
+                and closure["previous_status"] in {"running", "stopped", "completed"}
+                and isinstance(closure["previous_journal_sha256"], str)
+                and SHA.fullmatch(closure["previous_journal_sha256"])
+                and closure["policy"] == "permanently_withdraw_future_entries"
+                and state["status"] == ("completed" if closure["previous_status"] == "completed" else "stopped")
+                and len(seals) == 1 and seals[0] == events[-1]
+                and events[-1]["at_ms"] == state["updated_at_ms"]
+                and set(settled) == {item["attempt_id"] for item in submissions if "retirement" not in item},
+                "invalid_experiment_closure")
+    else:
+        require(not seals, "closure_event_without_receipt")
     return state
 
 
@@ -785,6 +838,7 @@ def report(plan, directory, *, inspector=inspect_attempt, metrics=verified_metri
     return {"schema_version": 1, "experiment_id": plan["experiment_id"], "plan_sha256": digest(plan),
         "scope": "entire_declared_attempt_set", "planned": len(rows), "submitted": len(submissions),
         "retired_unlaunched": sum("retirement" in item for item in submissions.values()),
+        "sealed": bool(state and "closure" in state),
         "experiment_status": state["status"] if state else "not_started", "balance": plan["balance"],
         "publication_status": "not_evaluated", "ranked": False, "attempts": rows, "groups": groups}
 
@@ -795,12 +849,14 @@ def main(argv=None):
     create = commands.add_parser("plan", help="Offline: validate inputs and write a new immutable private plan")
     create.add_argument("--config", type=Path, required=True)
     create.add_argument("--output", type=Path, required=True)
-    for name in ("run", "resume", "report"):
+    for name in ("run", "resume", "seal", "report"):
         command = commands.add_parser(name)
         command.add_argument("--plan", type=Path, required=True)
         command.add_argument("--directory", type=Path, required=True)
         if name == "report":
             command.add_argument("--output", type=Path, required=True)
+        if name == "seal":
+            command.add_argument("--journal-sha256", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
@@ -815,7 +871,9 @@ def main(argv=None):
                 result = {"status": "report_created", "planned": value["planned"], "ranked": False}
             else:
                 require(sys.platform.startswith("linux") and os.geteuid() == 0, "linux_root_required")
-                result = Experiment(plan, args.directory).run(resume=args.command == "resume")
+                coordinator = Experiment(plan, args.directory)
+                result = (coordinator.seal(args.journal_sha256) if args.command == "seal"
+                          else coordinator.run(resume=args.command == "resume"))
         print(json.dumps(result, sort_keys=True))
         return 0
     except (Exception, KeyboardInterrupt) as error:
