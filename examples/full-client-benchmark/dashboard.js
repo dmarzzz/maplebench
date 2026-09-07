@@ -35,16 +35,21 @@
     $('replay-verification').textContent+=` ${status.label}${status.detail?' ('+status.detail.toLowerCase()+')':''}.`;
     if(row.attribution==='mismatch')$('replay-verification').textContent+=` Requested model: ${row.requested_model}.`;
   }
+  function playReplay(){
+    player.play().catch(()=>{if(replay.open&&!player.error)$('replay-playback-status').textContent='Press Play recording to start.';});
+  }
   function openReplay(url,row,trigger){
     replayFocus=trigger;replayRunId=row.id;replaySection=trigger.closest('tbody')?.id;
     $('replay-title').textContent=`${row.returned_model||row.requested_model||'Script / no evaluated model'} · ${row.id.slice(0,12)}`;
     replayVerification(row);
     $('replay-playback-status').textContent='Loading recording…';
     stopReplay();player.src=url.href;
+    $('replay-direct').href=url.href;
     if(!replay.open)replay.showModal();
     $('replay-close').focus();
-    player.play().catch(()=>{if(replay.open&&player.src===url.href)$('replay-playback-status').textContent='Use Play to start the recording.';});
+    playReplay();
   }
+  $('replay-play').addEventListener('click',()=>{if(player.error)player.load();playReplay();});
   $('replay-close').addEventListener('click',()=>replay.close());
   replay.addEventListener('close',()=>{
     stopReplay();
@@ -56,12 +61,13 @@
   });
   player.addEventListener('playing',()=>{if(replay.open)$('replay-playback-status').textContent='Playing saved recording.';});
   player.addEventListener('ended',()=>{if(replay.open)$('replay-playback-status').textContent='Recording finished.';});
-  player.addEventListener('error',()=>{if(replay.open&&player.getAttribute('src'))$('replay-playback-status').textContent='The recording could not be loaded.';});
+  player.addEventListener('waiting',()=>{if(replay.open)$('replay-playback-status').textContent='Buffering recording…';});
+  player.addEventListener('error',()=>{if(replay.open&&player.getAttribute('src'))$('replay-playback-status').textContent='The player could not load this recording. Try Play recording again or open the video directly.';});
   function recording(cell,row){
     const value=row.recording;
     if(!value){cell.textContent='Not linked';return;}
     try{
-      const url=new URL(value.url,location.href);
+      const url=new URL(value.playback_url||value.url,location.href);
       if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash
           ||!/^\/(?:[A-Za-z0-9_-]+\/){0,3}recordings\/[A-Za-z0-9_./-]+\.(webm|mp4)$/.test(url.pathname)
           ||url.origin!==location.origin)throw Error();
@@ -156,7 +162,8 @@
       const response=await fetch('./results.json',{cache:'no-store',signal:AbortSignal.timeout(3000)});
       if(!response.ok)throw Error();const next=await response.json();
       if(next.schema_version!==1||!Array.isArray(next.attempts)||next.attempts.length>100||!Array.isArray(next.comparisons)||!Number.isFinite(next.generated_at_ms))throw Error();
-      snapshot=next;renderLive();renderComparisons();renderHistory();freshness();
+      const changed=!snapshot||JSON.stringify(next)!==JSON.stringify(snapshot);
+      snapshot=next;if(changed){renderLive();renderComparisons();renderHistory();}freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
     finally{if(!closed)timer=setTimeout(refresh,2000);}

@@ -2,6 +2,8 @@
 
 This self-contained dashboard snapshot includes seven original canvas recordings and nine attempt summaries. It is a saved development sample, not a live benchmark or a model ranking.
 
+For a public deployment, build the site with `python3 scripts/prepare-full-client-site.py /absolute/path/to/new-output` from the repository root (requires FFmpeg with libx264). The output must be a new directory outside the checkout. It contains the approved originals plus H.264 MP4 viewing copies with duration metadata and a fast-start index. Deploy that output directory as a static site. The player uses these MP4 copies; the original recording hashes remain unchanged in the results. `playback-manifest.json` records each viewing copy's hash, size, and source hash. Generated video files stay outside Git.
+
 Serve this directory over HTTP to use the player. From the repository root:
 
 ```sh

@@ -44,8 +44,9 @@
       <div><h2 id="replay-title">Recorded attempt</h2><p id="replay-verification"></p></div>
       <button id="replay-close" type="button" autofocus>Close replay</button>
     </div>
-    <video id="replay-video" controls playsinline preload="metadata" aria-label="Recorded full-client gameplay"></video>
+    <video id="replay-video" controls playsinline muted preload="metadata" aria-label="Recorded full-client gameplay"></video>
     <p id="replay-playback-status" role="status"></p>
+    <div class="replay-actions"><button id="replay-play" type="button">Play recording</button><a id="replay-direct" target="_blank" rel="noopener">Open video directly</a></div>
   </dialog>
 </body>
 </html>
