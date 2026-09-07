@@ -114,7 +114,7 @@ class ExperimentTests(unittest.TestCase):
     def coordinator(self, plan, **kwargs):
         return experiment.Experiment(plan, self.root / "experiment", launcher=kwargs.get("launcher", self.launcher),
             inspector=self.inspect, verify=kwargs.get("verify", lambda _: None),
-            wall_time=self.clock, monotonic=self.clock)
+            wall_time=self.clock, monotonic=self.clock, entry_admission=kwargs.get("entry_admission"))
 
     def test_rotations_are_exact_within_each_fixture_and_input_unchanged(self):
         config = self.config(models=list(experiment.MODELS), repetitions=4, fixtures=2)
@@ -396,6 +396,61 @@ class ExperimentTests(unittest.TestCase):
             with self.assertRaisesRegex(experiment.ExperimentError, "insufficient_time_for_full_trial"):
                 self.coordinator(plan).run()
         return json.loads((self.root / "experiment/coordinator.json").read_text())
+
+    def test_entry_admission_follows_durable_intent_and_remains_held_through_child(self):
+        plan = self.plan()
+        active, closed = [], []
+        dispatch = {"envelope": {"path": str(self.root / "synthetic.json"), "sha256": "a" * 64},
+                    "pass_fds": (42,)}
+        @contextlib.contextmanager
+        def admission(plan, entry, request):
+            state = json.loads((self.root / "experiment/coordinator.json").read_bytes())
+            self.assertEqual(state["events"][-1]["kind"], "submission_intent")
+            self.assertEqual(state["submissions"][-1]["attempt_id"], entry["attempt_id"])
+            active.append(entry["attempt_id"])
+            try:
+                yield dispatch
+            finally:
+                closed.append(active.pop())
+        def launch(plan, entry, request, timeout, *, operation_join):
+            self.assertEqual(active, [entry["attempt_id"]])
+            self.assertIs(operation_join, dispatch)
+            return self.launcher(plan, entry, request, timeout)
+        result = self.coordinator(plan, launcher=launch, entry_admission=admission).run()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(closed, [entry["attempt_id"] for entry in plan["entries"]])
+        self.assertEqual(active, [])
+
+    def test_slow_admission_is_charged_before_launch_and_closes_on_known_retirement(self):
+        plan = self.plan(models=[experiment.MODELS[0]])
+        closed = []
+        @contextlib.contextmanager
+        def admission(*_):
+            self.clock.value += 5
+            try:
+                yield None
+            finally:
+                closed.append(True)
+        with self.assertRaisesRegex(experiment.ExperimentError, "insufficient_time_for_full_trial"):
+            self.coordinator(plan, entry_admission=admission).run()
+        state = json.loads((self.root / "experiment/coordinator.json").read_bytes())
+        self.assertEqual(self.calls, [])
+        self.assertEqual(closed, [True])
+        self.assertFalse(state["submissions"][0]["retirement"]["launcher_invoked"])
+
+    def test_uncertain_admission_publication_never_infers_unlaunched_retirement(self):
+        plan = self.plan()
+        @contextlib.contextmanager
+        def admission(*_):
+            raise OSError("synthetic lost entry-publication reply")
+            yield
+        with self.assertRaises(OSError):
+            self.coordinator(plan, entry_admission=admission).run()
+        state = json.loads((self.root / "experiment/coordinator.json").read_bytes())
+        self.assertNotIn("retirement", state["submissions"][0])
+        with self.assertRaisesRegex(experiment.ExperimentError, "submitted_attempt_unresolved"):
+            self.coordinator(plan).run(resume=True)
+        self.assertEqual(self.calls, [])
 
     def test_known_prelaunch_refusal_retires_id_and_resume_only_advances(self):
         # A shorter later fixture can still fit the original wall deadline.

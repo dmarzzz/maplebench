@@ -9,7 +9,7 @@ Private plans/journals are trusted operator inputs, not authenticated evidence.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import copy
 import ctypes
 import fcntl
@@ -406,7 +406,7 @@ def inspect_attempt(plan, entry):
     return result
 
 
-def launch_trial(plan, entry, request_path, timeout_seconds):
+def launch_trial(plan, entry, request_path, timeout_seconds, *, operation_join=None):
     """Production launcher: leave the runner's independent lock-retaining guard alone."""
     require(sys.platform.startswith("linux") and os.geteuid() == 0, "linux_root_required")
     runner, fixture = plan["runner"], fixture_for(plan, entry)
@@ -420,10 +420,22 @@ def launch_trial(plan, entry, request_path, timeout_seconds):
             os._exit(125)
     argv = [runner["python"]["path"], runner["trial_script"]["path"],
             "--adapter-config", fixture["adapter_config"]["path"], "--state-root", runner["state_root"],
-            "--world-lock", runner["world_lock"], "--queue-lock", runner["queue_lock"],
-            "run", "--request", str(request_path), "--attempt-id", entry["attempt_id"]]
+            "--world-lock", runner["world_lock"], "--queue-lock", runner["queue_lock"]]
+    pass_fds = ()
+    if operation_join is not None:
+        require(isinstance(operation_join, dict) and set(operation_join) == {"envelope", "pass_fds"}
+                and isinstance(operation_join["pass_fds"], tuple) and len(operation_join["pass_fds"]) == 1
+                and type(operation_join["pass_fds"][0]) is int and operation_join["pass_fds"][0] >= 3,
+                "invalid_operation_dispatch")
+        reference(operation_join["envelope"])
+        pass_fds = operation_join["pass_fds"]
+        argv += ["--operation-envelope", operation_join["envelope"]["path"],
+                 "--operation-envelope-sha256", operation_join["envelope"]["sha256"],
+                 "--operation-fd", str(pass_fds[0])]
+    argv += ["run", "--request", str(request_path), "--attempt-id", entry["attempt_id"]]
     process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True, cwd="/", preexec_fn=parent_death_signal,
+        pass_fds=pass_fds,
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"})
     try:
         return process.wait(timeout=max(0, end - time.monotonic()))
@@ -440,11 +452,12 @@ def launch_trial(plan, entry, request_path, timeout_seconds):
 
 class Experiment:
     def __init__(self, plan, directory, *, launcher=launch_trial, inspector=inspect_attempt,
-                 verify=verify_inputs, wall_time=time.time, monotonic=time.monotonic):
+                 verify=verify_inputs, wall_time=time.time, monotonic=time.monotonic, entry_admission=None):
         self.plan = validate_plan(copy.deepcopy(plan))
         self.directory = absolute(str(directory))
         self.launcher, self.inspector, self.verify = launcher, inspector, verify
         self.wall_time, self.monotonic = wall_time, monotonic
+        self.entry_admission = entry_admission
         self.state = None
         self.state_sha = None
 
@@ -558,22 +571,27 @@ class Experiment:
                     self.state["submissions"].append({"ordinal": entry["ordinal"], "attempt_id": entry["attempt_id"],
                         "submitted_at_ms": self.now(), "reservation": reservation, "returncode": None})
                     self.persist("submission_intent")  # No child may exist before this fsync.
-                    timeout = min(reservation["wall_seconds"], end - self.monotonic(),
-                                  (self.state["deadline_at_ms"] - self.now()) / 1000)
-                    if timeout < entry["spec"]["budgets"]["total_seconds"] + 1:
-                        # This branch is reached only in the invocation that
-                        # fsynced the intent, before calling the launcher. Do
-                        # not infer this outcome on resume or catch exceptions
-                        # from inside the launcher, even with the same code.
-                        require(not os.path.lexists(Path(self.plan["runner"]["state_root"]) / entry["attempt_id"]),
-                                "unlaunched_attempt_appeared")
-                        self.state["submissions"][-1]["retirement"] = {
-                            "status": UNLAUNCHED, "reason": "insufficient_time_for_full_trial",
-                            "launcher_invoked": False, "actual_usage": {"api_requests": 0, "total_tokens": 0},
-                            "intent_sequence": self.state["events"][-1]["sequence"]}
-                        self.persist("submission_retired_unlaunched")
-                        raise ExperimentError("insufficient_time_for_full_trial")
-                    returncode = self.launcher(self.plan, entry, request_path, timeout)
+                    context = (self.entry_admission(self.plan, entry, request_path)
+                               if self.entry_admission is not None else nullcontext(None))
+                    with context as dispatch:
+                        # Envelope publication/ownership checks are charged too.
+                        # The parent keeps its exported description alive until
+                        # the child exits; only world/queue FDs go to the bridge.
+                        timeout = min(reservation["wall_seconds"], end - self.monotonic(),
+                                      (self.state["deadline_at_ms"] - self.now()) / 1000)
+                        if timeout < entry["spec"]["budgets"]["total_seconds"] + 1:
+                            # Only this invocation knows it never called launch.
+                            # Hook/launcher exceptions never imply retirement.
+                            require(not os.path.lexists(Path(self.plan["runner"]["state_root"]) / entry["attempt_id"]),
+                                    "unlaunched_attempt_appeared")
+                            self.state["submissions"][-1]["retirement"] = {
+                                "status": UNLAUNCHED, "reason": "insufficient_time_for_full_trial",
+                                "launcher_invoked": False, "actual_usage": {"api_requests": 0, "total_tokens": 0},
+                                "intent_sequence": self.state["events"][-1]["sequence"]}
+                            self.persist("submission_retired_unlaunched")
+                            raise ExperimentError("insufficient_time_for_full_trial")
+                        returncode = (self.launcher(self.plan, entry, request_path, timeout, operation_join=dispatch)
+                                      if dispatch is not None else self.launcher(self.plan, entry, request_path, timeout))
                     require(type(returncode) is int, "invalid_child_result")
                     self.state["submissions"][-1]["returncode"] = returncode
                     self.persist("child_returned")
@@ -844,6 +862,7 @@ def report(plan, directory, *, inspector=inspect_attempt, metrics=verified_metri
 
 
 def main(argv=None):
+    import full_client_operation_admission as admission
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     create = commands.add_parser("plan", help="Offline: validate inputs and write a new immutable private plan")
@@ -857,6 +876,8 @@ def main(argv=None):
             command.add_argument("--output", type=Path, required=True)
         if name == "seal":
             command.add_argument("--journal-sha256", required=True)
+        if name != "report":
+            admission.add_arguments(command)
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
@@ -864,20 +885,53 @@ def main(argv=None):
             write_json(args.output, plan, create=True)
             result = {"status": "plan_created", "plan_sha256": digest(plan), "entries": len(plan["entries"]), "ranked": False}
         else:
-            plan = validate_plan(decode(read_file(args.plan, private=True)[0]))
+            plan_raw, plan_sha = read_file(args.plan, private=True)
+            plan = validate_plan(decode(plan_raw))
             if args.command == "report":
                 value = report(plan, args.directory)
                 write_json(args.output, value, create=True)
                 result = {"status": "report_created", "planned": value["planned"], "ranked": False}
             else:
                 require(sys.platform.startswith("linux") and os.geteuid() == 0, "linux_root_required")
-                coordinator = Experiment(plan, args.directory)
-                result = (coordinator.seal(args.journal_sha256) if args.command == "seal"
-                          else coordinator.run(resume=args.command == "resume"))
+                authority_ref, claim_ref = admission.argument_refs(args, reconcile=args.command != "run")
+                plan_ref = {"path": str(args.plan), "sha256": plan_sha}
+                subject = {"type": "experiment", "plan": plan_ref,
+                           "experiment_directory": str(absolute(str(args.directory)))}
+                sources = (__file__, trial.__file__, scoring.__file__, docker.__file__, readiness.__file__)
+                with admission.admitted(authority_ref, subject, "finite_group", plan["runner"]["state_root"],
+                        claim_ref=claim_ref, required_sources=sources) as operation:
+                    if operation.completed:
+                        result = {"status": "operation_already_completed", "experiment_id": plan["experiment_id"],
+                                  "terminal": operation.terminal, "new_api_requests": 0, "ranked": False}
+                    else:
+                        parent_launch = admission.current_launch(operation.authority["source_files"],
+                                                                  executable_ref=plan["runner"]["python"])
+                        coordinator = Experiment(plan, args.directory,
+                            entry_admission=admission.trial_dispatch(operation, plan_ref, parent_launch))
+                        path = coordinator.directory / "coordinator.json"
+                        sealed = False
+                        if args.command != "run":
+                            with coordinator.locked():
+                                coordinator.load()
+                                if args.command == "seal":
+                                    require(coordinator.state_sha == args.journal_sha256, "coordinator_journal_changed")
+                                sealed = "closure" in coordinator.state
+                                if sealed:
+                                    coordinator.reconcile()
+                                    for entry in plan["entries"][len(coordinator.state["submissions"]):]:
+                                        require(not os.path.lexists(Path(plan["runner"]["state_root"]) / entry["attempt_id"]),
+                                                "unsubmitted_attempt_already_exists")
+                        if not sealed:
+                            if args.command != "seal":
+                                coordinator.run(resume=args.command == "resume")
+                            coordinator.seal(read_file(path, private=True)[1])
+                        result = coordinator.summary()
+                        result["operation_terminal"] = operation.finish([
+                            {"path": str(path), "sha256": read_file(path, private=True)[1]}])
         print(json.dumps(result, sort_keys=True))
         return 0
     except (Exception, KeyboardInterrupt) as error:
-        print(json.dumps({"status": "blocked", "code": str(error) if isinstance(error, ExperimentError)
+        print(json.dumps({"status": "blocked", "code": str(error) if isinstance(error, (ExperimentError, admission.gate.GateError))
                           else "experiment_failed", "ranked": False}))
         return 1
 

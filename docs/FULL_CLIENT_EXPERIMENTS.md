@@ -297,9 +297,12 @@ Closing replaces the coordinator journal, so existing consumers pinned to its
 earlier bytes must finish first or receive a separately reviewed migration.
 Historical acceptance journals are not automatically closed. This command is
 the group boundary needed by future automatic restoration; it is not restoration
-authority or exclusion across separate experiment directories. The shared
-operations admission layer must be integrated and accepted before claiming that
-larger contract.
+authority by itself. Current `run/resume/seal` CLI commands also require the
+shared [operations authority](FULL_CLIENT_OPERATIONS.md#gate-and-authority).
+Authority flags follow the experiment subcommand; resume/seal additionally bind
+the exact operation claim. A standalone completed group seals before closing its
+claim. The composed wrapper retains the gate through normal-service restoration.
+Protected rollout and live acceptance of this larger contract remain separate.
 
 ## Acceptance
 

@@ -33,6 +33,12 @@ and party objectives remain a design; they are not claimed as running benchmarks
 
 ## Components
 
+- [Operations continuity](FULL_CLIENT_OPERATIONS.md): current source integrates
+  a shared durable admission gate, verified inherited child entry, permanent
+  group closure and a composed normal-service handoff. All 222 combined offline
+  tests passed, including complete wrapper and actual root CLI integration.
+  Protected rollout and live acceptance remain separate; the runtime is unchanged.
+
 - [Finite experiments](FULL_CLIENT_EXPERIMENTS.md): a frozen complete attempt set,
   per-fixture model order, aggregate budgets, explicit resume without replay, and
   reports that retain missing, failed, zero and negative outcomes. This new

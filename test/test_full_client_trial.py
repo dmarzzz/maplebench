@@ -543,8 +543,14 @@ else:
         request.write_text(json.dumps(spec()))
         config.chmod(0o600)
         request.chmod(0o600)
+        # Exercise the real adapter failure in the trusted library. Production
+        # CLI mutation now additionally requires an operations authority; the
+        # independent CLI exception mapping must keep the same fixed code.
+        with self.assertRaisesRegex(TrialError, "server_jar_command_mismatch"):
+            self.runner(CommandAdapter([sys.executable, str(backend)], [])).run(spec(), "one")
         output = io.StringIO()
-        with contextlib.redirect_stdout(output):
+        with contextlib.redirect_stdout(output), patch("full_client_trial.TrialRunner",
+                side_effect=TrialError("server_jar_command_mismatch")):
             result = main(["--adapter-config", str(config), "--state-root", str(self.base / "attempts"),
                            "--world-lock", str(self.base / "world.lock"),
                            "--queue-lock", str(self.base / "queue.lock"), "run",

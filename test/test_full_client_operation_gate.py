@@ -421,6 +421,47 @@ with OperationGate(sys.argv[2], json.loads(sys.argv[3]), owner_uid=os.geteuid())
             with self.assertRaisesRegex(gate.GateError, "reference_changed"):
                 lease.begin(SECOND, "finite_group", self.authority)
 
+    def test_ensure_available_is_read_only_and_refuses_pending_or_malformed_registry(self):
+        with self.new_gate().locked() as lease:
+            lease.ensure_available()
+            self.assertEqual([p.name for p in self.registry.iterdir()], [".gate.lock"])
+        self.completed()
+        with self.new_gate().locked() as lease:
+            lease.ensure_available()
+            lease.begin(SECOND, "standalone_trial", self.authority)
+            with self.assertRaisesRegex(gate.GateError, "lease_already_claimed"):
+                lease.ensure_available()
+        with self.new_gate().locked() as lease:
+            with self.assertRaisesRegex(gate.GateError, "pending_operation"):
+                lease.ensure_available()
+        (self.registry / SECOND / "claim.json").write_bytes(b"bad private JSON")
+        with self.new_gate().locked() as lease:
+            with self.assertRaisesRegex(gate.GateError, "invalid_json"):
+                lease.ensure_available()
+
+    def test_local_export_requires_pending_claim_and_closes_only_its_duplicate(self):
+        with self.new_gate().locked() as lease:
+            with self.assertRaisesRegex(gate.GateError, "active_claim_required"):
+                with lease.export_active():
+                    self.fail("unclaimed lease exported")
+            claim = lease.begin(FIRST, "finite_group", self.authority)
+            with lease.export_active() as exported:
+                fd = exported["fd"]
+                self.assertNotEqual(fd, lease._fd)
+                self.assertEqual(exported["claim"], claim)
+                self.assertEqual(exported["gate_pin"], self.pin)
+                self.assertEqual(exported["attempt_root"], str(self.attempts))
+                os.fstat(fd)
+            with self.assertRaises(OSError):
+                os.fstat(fd)
+            with self.assertRaisesRegex(gate.GateError, "operation_busy"):
+                with self.new_gate().locked():
+                    self.fail("export closed the original lease")
+            self.assertFalse((self.registry / FIRST / "terminal.json").exists())
+        with self.assertRaisesRegex(gate.GateError, "lease_not_local_active"):
+            with lease.export_active():
+                self.fail("closed lease exported")
+
 
 if __name__ == "__main__":
     unittest.main()

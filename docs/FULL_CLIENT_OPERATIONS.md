@@ -1,76 +1,145 @@
-# Operations admission foundation
+# Operations admission and normal-service handoff
 
-The coordinator can now permanently close a settled group with `seal`; see
-[finite experiments](FULL_CLIENT_EXPERIMENTS.md#permanently-closing-a-group).
-`scripts/full_client_operation_gate.py` supplies the separate admission primitive
-needed to keep another operation out between trials and during restoration.
-**It is not integrated into the production commands yet.** Existing trial,
-experiment and normal-lifecycle commands do not acquire this new gate. No live
-registry has been initialized, and there is no automatic restoration wrapper.
+Current source commands acquire one shared operations gate before trial or
+lifecycle world locks. It stays held between a finite group's child trials and
+throughout restoration. `full_client_operations.py` composes the coordinator,
+permanent closure, persisted-state handoff and existing normal lifecycle.
 
-## Supported source contract
+**This is a source contract, not a deployed acceptance claim.** No live operations
+registry has been initialized. The existing protected runtime and historical
+trial journals remain unchanged. A new protected release, pinned authority and
+bounded end-to-end acceptance are required before live use.
+
+## Gate and authority
 
 Explicit `initialize_registry(existing_attempt_root)` creates only a private
-`.operations` directory beneath the existing canonical attempt root and its
-`.gate.lock`. It returns the actual gate device/inode pin. An existing or partial
-registry is refused. Production defaults require root ownership, directory mode
-0700 and file mode 0600; an explicitly supplied test owner must be the effective
-user. Setup never creates the attempt root or any world lock.
+`.operations/.gate.lock` beneath the existing canonical attempt root. It returns
+the actual device/inode pin. Existing or partial registries are refused; setup
+never creates an attempt root or world lock. Production requires root ownership,
+directory mode 0700 and file mode 0600. Test owners must equal the effective user.
 
-`OperationGate(attempt_root, pin).locked()` acquires that exact existing gate
-nonblockingly and yields a process-local lease. Separate open descriptions cannot
-enter concurrently. The lease supports three operations:
+`OperationGate(root,pin).locked()` acquires that existing gate nonblockingly.
 
 | Method | Required evidence | Result |
 | --- | --- | --- |
-| `begin(id, kind, authority_ref)` | New ID, validated private authority and no pending or malformed earlier claim | Create-only, fsynced claim reference |
-| `reconcile(claim_ref)` | Exact existing claim path and hash; no other pending claim | Pending status or the original completed marker; no replay |
-| `complete(receipt_ref)` | Active claim, matching terminal receipt and private referenced evidence | Create-only, fsynced terminal marker |
+| `begin(id,kind,authority)` | New ID, private authority, no pending/malformed claim | Create-only fsynced claim |
+| `reconcile(claim)` | Exact existing claim and no other pending claim | Pending state or original terminal marker; no replay |
+| `complete(receipt)` | Active claim and exact terminal evidence | Create-only fsynced terminal marker |
+| `ensure_available()` | Unclaimed local lease; no pending/malformed claim | Read-only admission without consuming an ID |
 
-References use `{path, sha256}`. Claims bind their operation ID, kind, authority,
-creation time and original owner. Supported kinds are `finite_group`,
-`standalone_trial` and `standalone_lifecycle`. Completed IDs cannot be reused.
-Closing the lease closes only its own descriptor; it never explicitly unlocks
-another copy of that open description.
+`full_client_operation_admission.py` validates an authority with exact fields
+`schema_version:1`, `operation_id`, `kind`, `gate`, `subject`, `source_files`.
+The ID is 32 lowercase hexadecimal characters. Gate fields are the actual
+`path`, `device`, `inode`, `uid`, `mode`. Source references use `{path,sha256}`
+and include the actual gate, join, admission, entrypoint and required dependencies.
 
-A terminal receipt names the exact operation and claim hash, states completion
-and quiescence, and binds one to sixteen private JSON evidence files. The gate
-checks their hashes and file protections. **The integrating caller must prove
-actual service, trial and renderer quiescence.** A matching JSON statement alone
-does not establish those semantics, successful gameplay, saved XP or restoration.
+| Entry point | Exact subject fields |
+| --- | --- |
+| Trial | `type:"trial"`, `attempt_id`, `adapter_config`, `request`, `state_root`, `world_lock`, `queue_lock` |
+| Standalone experiment | `type:"experiment"`, `plan`, `experiment_directory` |
+| Standalone normal lifecycle | `type:"lifecycle"`, `config`, `handoff`, `lifecycle_id` |
+| Composed operations | `schema_version:1`, `plan`, `experiment_directory`, `normal_config`, `historical_attempts`, `initial_snapshot`, `output_directory`, `restoration_operation_id`, `limits` |
 
-## Interruption and trust boundaries
+Input references use `{path,sha256}`. Standalone trial/lifecycle operation IDs
+equal their preallocated attempt/lifecycle IDs. A finite group's operation UUID
+is separate from its human-readable experiment ID; the subject pins plan bytes.
 
-A process exit releases its descriptor but leaves its pending claim. That claim
-still blocks unrelated admission. There is no owner-death retirement, timeout
-waiver, deletion, takeover or arbitrary borrowed-descriptor API. Partial claim
-publication leaves a blocked directory; corrupt or changed authority/evidence
-also blocks admission. A lost publication reply requires explicit observation
-of the existing exact claim rather than a new ID.
+Trial `run/recover`, experiment `run/resume/seal`, and lifecycle
+`check/start/reconcile` require `--operation-authority` and
+`--operation-authority-sha256`. Explicit recovery, resume, seal and reconciliation
+also require `--operation-claim` and `--operation-claim-sha256`. Initial commands
+refuse old claims. Lifecycle `check` holds the gate without writing a claim.
+Read-only trial preflight, plan creation and reporting remain ungated.
 
-The module refuses symlink, ownership, permission, hard-link and inode changes.
-Reads are bounded by file size, total bytes, inventory count and checked elapsed
-work. Integrators must also impose hard process resource limits: filesystem calls
-are not forcibly interrupted by these checks. Protected ancestor directories
-remain a trusted-host assumption.
+Global flags precede the subcommand for trial/lifecycle; experiment flags follow
+its subcommand. Earlier examples without these flags describe the older protected
+release and are insufficient authority for current mutation. Commands never
+initialize a missing registry. New rollout must freeze all updated entrypoints.
 
-## Remaining integration
+Completed standalone commands bind actual terminal evidence before closing
+their claims. Experiments are sealed first. Lost completion replies are resolved
+from actual completed bytes without replaying the trial or cleanup. Exceptions
+and owner exit leave durable pending claims blocking unrelated work. Completed
+IDs cannot be reused. Closing a lease closes only its own descriptor, never
+another copy of the open description.
 
-Every mutating entrypoint must participate in the same derived gate before this
-can provide exclusion across commands. A finite-group wrapper must hold only
-this gate while each child runner obtains its existing world/queue/runner locks.
-It must permanently close the group, verify every submitted outcome and actual
-current persisted state, then invoke the existing normal lifecycle under
-explicit restoration authority and a separately reserved deadline.
+## Child admission
 
-The real child runner needs a verified inherited-capability protocol before it
-can join the parent's operation. The current lease deliberately refuses use
-after fork and provides no such join mechanism. The bridge's existing two world
-lock descriptors must remain unchanged. Uncertain trial or service outcomes must
-still stop for exact-operation reconciliation; no automatic API retry is implied.
+`full_client_operation_join.py` duplicates only a local pending lease. The parent
+publishes a create-only envelope under its authority directory's
+`.operation-dispatch/<operation_id>/`, then passes exactly that extra FD to the
+trial CLI. Before world locks, the child independently binds its actual
+request/config/plan, current coordinator submission, protected parent
+script/interpreter, exact argv, direct parent PID/start ticks/boot and gate inode.
 
-Twenty-four focused offline tests passed on the runtime host in a serialized,
-memory- and CPU-capped job. They exercise real flocks, process exit with a surviving claim,
-close-only descriptor release, immutable completion, reference corruption,
-publication failures and resource bounds. These tests do not run a model, start
-services or establish unattended production acceptance.
+Linux `fdinfo` must prove the same exclusive FLOCK owner on both descriptions.
+Reasserting the inherited lock and refusing an independently opened description
+are both required; matching an inode alone is insufficient. Entry markers are
+create-only, and uncertainty never authorizes repeating a dispatch. The parent
+keeps its exported FD open through child completion. The bridge still receives
+exactly the original **two** world/queue FDs; the operations FD stays outside it.
+
+Envelope preparation follows the coordinator's fsynced submission intent and
+precedes its final deadline recomputation. Its time counts against the original
+budget. Only a synchronous known refusal before launcher entry can retire an
+unlaunched ID. Missing evidence is not proof that no API call occurred.
+
+## Finite group and restoration
+
+The wrapper exposes create-only `run --authority ... --sha256 ...`, exact
+`reconcile --journal ... --sha256 ...`, and read-only `report`. Its authority
+predeclares every entry and reserves admission, experiment, handoff and
+restoration time separately. Original wall and monotonic deadlines are retained;
+there is no automatic extension or model retry.
+
+After the group stops, every submitted attempt must be terminal and clean,
+settled hashes unchanged, and unsubmitted/retired IDs absent. The coordinator is
+sealed before restoration. Missing, corrupt, changed, or failed-without-recovery
+outcomes leave admission pending. Reports retain partial, zero, negative and
+no-op results.
+
+`full_client_operations_handoff.py` requires actual lifecycle serialization and
+the three existing world/queue/runner locks. It verifies the complete attempt
+inventory, actual final persisted character/keymap, offline account, stopped
+service invocations, current web process, fresh settled waiting browser, idle
+queue, capacity, pinned sources/configuration and append-only native log. It
+atomically publishes three private files: offline snapshot, handoff and preparation
+evidence. It performs no service or database mutation and renews no deadline.
+
+Expected state comes from the last actual persisted final artifact, preserving
+earned XP and HP changes. A recovered last attempt without a final persisted
+artifact requires separate restoration-only reconciliation; this version cannot
+invent one. The initial snapshot is usable only when no trial launched and the
+complete original inventory is unchanged.
+
+Preparation's world locks close before the normal lifecycle starts, while the
+operations gate remains held. Completion requires the same Cosmic through worker
+startup, actual native descriptor/listener evidence, worker first-idle receipt
+and final quiet checks. Only then may the outer claim complete. Reconciliation
+never calls experiment run/resume or trial recover. Uncertain service intents
+use the existing exact-instance observation path.
+
+## Validation and release gates
+
+The final combined serialized, memory- and CPU-capped runtime-host job passed
+**222 tests** across gate, join, admission, handoff, coordinator, trial, normal
+lifecycle, complete wrapper and root CLI integration. It included real Linux
+FLOCK/parent-child/guard checks, synthetic two-entry restoration with zero and
+negative scores, actual CLI dispatch into an unready status-only backend, lost
+service-start/completion replies, and altered recovery journals. The root CLI
+checks also prove the extra gate FD never reaches the guard/backend. All passed
+in 22.140 seconds under 1,536 MiB, two CPUs and a 270-second hard job deadline.
+These are synthetic tests: zero API calls and no live game/service changes.
+
+Remaining work includes protected rollout, explicit setup/pause authority,
+acceptance of the full finite group through restored normal service, and
+restoration-only authority when an original deadline expires or recovered
+persisted evidence is unavailable. Shared-host capacity and visual publication
+review remain independent gates.
+
+The gate checks receipt integrity; integrating callers prove terminal semantics.
+A boolean alone cannot prove gameplay, saved XP or service restoration.
+File/inventory/read-work bounds supplement hard process limits. Protected
+ancestors and imported trusted libraries remain host assumptions; this is not
+a sandbox against arbitrary root code. No timeout waiver, claim deletion,
+lock takeover or arbitrary borrowed-FD bypass exists.

@@ -1,4 +1,4 @@
-"""Private operations exclusion foundation; not wired into production entrypoints.
+"""Private operations exclusion used by admitted production entrypoints.
 
 Explicit setup: initialize_registry(existing_attempt_root) -> gate inode pin.
 Use OperationGate(attempt_root, pin).locked() as lease, then:
@@ -21,8 +21,8 @@ it does not authorize re-executing an operation or replacing its ID.
 The terminal receipt must name the operation and claim hash, attest quiescence,
 and reference actual private JSON evidence. This module checks integrity, NOT
 service/renderer/score semantics; a trusted integrating caller must verify those.
-No borrowed/inherited-FD join, pending override, deletion or ownership takeover
-API exists. Closing a lease never unlocks another copy of its open description.
+No borrowed-FD admission, pending override, deletion or ownership takeover API
+exists here. Closing a lease never unlocks another copy of its open description.
 An unfinished/malformed claim survives process death and blocks other work.
 
 Registry: <attempt_root>/.operations/{.gate.lock,<32hex>/claim.json,terminal.json}.
@@ -35,7 +35,8 @@ Protected ancestors above the supplied root and reference parents remain a host
 assumption; this component does not inventory the host filesystem.
 Integrators must pin the same attempt root and gate inode, acquire before their
 own world locks, and separately verify operation authority and evidence semantics.
-Do not pass this descriptor to a child: no authenticated joining protocol exists.
+Only full_client_operation_join may use export_active() for verified child
+admission. A raw descriptor alone never authorizes a child operation.
 Native OSError failures remain exceptions; callers must not expose their raw text.
 """
 from __future__ import annotations
@@ -321,6 +322,40 @@ class _Lease:
     def _check(self):
         require(not self._closed and os.getpid() == self._pid, "lease_not_local_active")
         self.gate.check(self._fd)
+
+    def ensure_available(self):
+        """Read-only admission check on this local lease; never creates a claim."""
+        self._check()
+        require(self._active is None, "lease_already_claimed")
+        rows = self._scan(Budget())
+        require(all(row["status"] == "completed" for row in rows.values()), "pending_operation")
+
+    @contextmanager
+    def export_active(self):
+        """Duplicate only this process's live pending claim; never join an input FD.
+
+        The caller owns no returned descriptor beyond this context. Exiting
+        closes only the duplicate and neither completes nor abandons the claim.
+        Child admission must use the independently verified join protocol.
+        """
+        self._check()
+        require(self._active is not None, "active_claim_required")
+        rows = self._scan(Budget())
+        operation_id = Path(self._active["path"]).parent.name
+        row = rows.get(operation_id)
+        require(row is not None and row["claim"] == self._active and row["status"] == "pending",
+                "active_claim_changed")
+        require(all(name == operation_id or value["status"] == "completed"
+                    for name, value in rows.items()), "other_pending_operation")
+        fd = os.dup(self._fd)
+        try:
+            self._check()
+            self.gate.check(fd)
+            yield {"fd": fd, "attempt_root": str(self.gate.root), "gate_pin": copy.deepcopy(self.gate.pin),
+                   "claim": copy.deepcopy(self._active), "authority": copy.deepcopy(row["value"]["authority"]),
+                   "owner_uid": self.gate.uid}
+        finally:
+            os.close(fd)
 
     def _scan(self, budget):
         self._check()
