@@ -72,3 +72,20 @@ Projectile effects and Hurricane's packet-specific layout still need actual
 native verification. This patch does
 not change that serializer. Keep failed class qualification evidence intact;
 do not infer a valid class benchmark from these focused tests.
+
+## Fixture attack classification
+
+Apply `0005-fixture-attack-flags.patch` after the client patches above. The
+upstream attack flag table omits Hurricane (3121004), Arrow Rain (3111004) and
+Chain Lightning (2221006). Without these flags, the normal combat dispatcher
+sends a generic skill-use packet and never selects targets or sends attack
+damage, even though the server may consume MP. This patch adds only those three
+native attack classifications; buffs and other unknown skills retain their
+existing classification.
+
+The focused regression compiles the actual upstream classification and combat
+dispatch methods with inert game/packet collaborators. It demonstrates the
+original three generic packets becoming three attack packets, with target and
+effect dispatch, while fixture buffs remain generic skill-use packets. This is
+source verification, not proof of native animation, server damage or class
+qualification. All earlier native failures remain unchanged.
