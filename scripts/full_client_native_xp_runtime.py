@@ -21,6 +21,8 @@ TOTAL_SECONDS = 900
 CLEANUP_SECONDS = 180
 LOGIN_SECONDS = 60
 START_SECONDS = 90
+MIN_EXECUTION_SECONDS = 720
+WINDOW_COLLECTION_SECONDS = 345
 CLASS_JOBS = {'hero': 112, 'bowmaster': 312, 'ice_lightning_arch_mage': 222}
 FROZEN_MODULES = ('full_client_native_xp_runtime', 'full_client_native_xp_acceptance',
     'full_client_xp_windows', 'full_client_native', 'full_client_runtime', 'full_client_publish',
@@ -30,6 +32,7 @@ FAILURE_CODES = frozenset('''native_xp_baseline_mismatch native_xp_candidate_man
 native_xp_executor_sources_not_frozen native_xp_account_not_online native_xp_renderer_or_scene_not_fresh
 native_xp_fresh_scene_required native_xp_control_failed_or_identity_changed native_xp_control_exceeded_recipe
 native_xp_short_capture_not_saved native_xp_api_evidence_forbidden native_xp_video_changed
+native_xp_window_time_insufficient native_xp_execution_time_insufficient native_xp_preflight_time_insufficient
 native_xp_header_invalid native_xp_save_log_failed native_xp_short_video_bound
 native_xp_restore_unconfirmed native_xp_initial_restore_not_started native_xp_cleanup_unconfirmed'''.split())
 
@@ -217,6 +220,7 @@ class NativeXpRuntime(CosmicRuntime):
     def native_window(self):
         """One native submission; all remaining callbacks read status only."""
         require('native_control_submit' not in self.state['intents'], 'native_xp_control_already_submitted')
+        require(self.host.remaining() >= WINDOW_COLLECTION_SECONDS, 'native_xp_window_time_insufficient')
         first = self.sample(0, before_submission=True)
         self.state['window'] = {'start_at_ms': first['wall_ms'],
                                 'deadline_at_ms': first['wall_ms'] + 300000, 'window_ms': 15000}
@@ -373,7 +377,7 @@ def execute_owned(runtime):
             and runtime.state.get('intents') == [] and runtime.state.get('clean') is False
             and runtime.state.get('events') == [] and runtime.state.get('session') == {}
             and runtime.state.get('artifacts') == {}, 'native_xp_fresh_owned_state_required')
-    require(runtime.host.remaining() >= TOTAL_SECONDS, 'native_xp_900_seconds_required')
+    require(runtime.host.remaining() >= MIN_EXECUTION_SECONDS, 'native_xp_execution_time_insufficient')
     overall = min(runtime.host.deadline, time.monotonic() + TOTAL_SECONDS)
     result, failure, phase = None, None, 'preflight'
     runtime.intent('native_xp_execution')
@@ -381,6 +385,8 @@ def execute_owned(runtime):
         runtime.host.deadline = overall - CLEANUP_SECONDS
         runtime.safe_boundary()
         runtime.frozen()
+        require(runtime.host.remaining() >= START_SECONDS + LOGIN_SECONDS + WINDOW_COLLECTION_SECONDS,
+                'native_xp_preflight_time_insufficient')
         for phase in ('restore_baseline', 'start_server', 'login', 'native_window',
                       'request_ordinary_disconnect', 'collect_final'):
             runtime.safe_boundary()
