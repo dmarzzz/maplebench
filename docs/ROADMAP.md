@@ -97,8 +97,9 @@ the historical failure. Its cloud acceptance remains separate from local tests.
 Replacement five-minute pilots reserve at most 240,000 tokens per model.
 Completion, playback and publication remain separate acceptance gates. The two
 public results above remain under their original protocol and budgets.
-Bowmaster and Ice/Lightning fixtures are prepared; native acceptance and their
-model cohorts remain pending. Native 15-second XP windows have an independently
+Bowmaster and Ice/Lightning now have reviewed native damaging-skill checks on
+the repaired client. Bow's fresh four-model cohort is running; completed cohort
+evidence remains pending. Mage's broader area-effect acceptance is still open. Native 15-second XP windows have an independently
 built candidate, but are not deployed or represented as completed research runs.
 
 The corrected cohort has now published three fresh five-minute Hero results:
@@ -323,12 +324,21 @@ transition. This short acceptance does not establish an availability SLA.
 Gate: the task measures sustained adaptation, all planned attempts are accounted
 for, and the measurements support an honest per-fixture comparison.
 
-### M5 — Representative class and task coverage: 0/4
+### M5 — Representative class and task coverage: 1/4
 
-- [ ] **M5.1 Accept a ranged fixture.** Candidate: Bowmaster. Prove native ranged
+- [x] **M5.1 Accept a ranged fixture.** Candidate: Bowmaster. Prove native ranged
   hits, positioning and resource/ammunition behavior from a frozen baseline.
+  Accepted September 8: native-v10 showed a 64-pixel jump, Soul Arrow/Sharp Eyes
+  buffs and MP cost, Hurricane damage before basic attack, and Arrow Rain
+  effects/damage. Capture, ordinary save and exact baseline restoration passed.
+  Saved net XP was zero; no kill or player-contact damage is established.
 - [ ] **M5.2 Accept a magic fixture.** Candidate: Ice/Lightning Arch Mage. Prove
   area effects, affected entities and mana use from a frozen baseline.
+  Partial evidence: native-v10 confirms Chain Lightning damage and mana use,
+  buffs, a 64-pixel jump and directional Teleport. Explicit area/multiple-entity
+  effect evidence remains open, so this item is not complete. Low observed Mage
+  damage remains a fixture observation: do not interpret raw XP differences
+  between classes as model differences; freeze and disclose fixture difficulty.
 - [ ] **M5.3 Accept two task families across the three classes.** Sustained
   hunting and navigation/objective completion produce six initial fixtures.
   Calibrate difficulty and starting scenes with separately labeled human or
