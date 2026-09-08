@@ -639,6 +639,21 @@ class RuntimeTests(unittest.TestCase):
         self.backend.status()
         self.backend.frozen.assert_not_called()
 
+    def test_long_operation_caps_inventory_at_its_own_hard_deadline(self):
+        # Adaptive operations can last 360 seconds, but the inventory contract
+        # deliberately rejects a scan budget above 300 seconds.
+        self.backend.account_state = MagicMock(return_value=0)
+        self.backend.load_pins = MagicMock()
+        self.backend.manifest = {"working_directory": str(self.root), "wz_path": str(self.root)}
+        self.backend.docker_binding = MagicMock(return_value=self.binding)
+        for remaining, expected in ((359.8, 300), (1800, 300), (120.8, 120), (1.2, 1)):
+            self.host.remaining.return_value = remaining
+            with self.subTest(remaining=remaining), patch.object(runtime, "verify_manifest",
+                    side_effect=runtime.RuntimeErrorCode("inventory_test_boundary")) as verify:
+                with self.assertRaisesRegex(runtime.RuntimeErrorCode, "inventory_test_boundary"):
+                    runtime.CosmicRuntime.frozen(self.backend)
+                self.assertEqual(verify.call_args.kwargs["limits"], {"timeout_seconds": expected})
+
     def test_full_inventory_and_large_artifact_reads_require_offline_account(self):
         self.backend.account_state = MagicMock(return_value=2)
         for operation in (lambda: runtime.CosmicRuntime.frozen(self.backend),

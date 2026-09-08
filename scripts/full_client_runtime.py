@@ -29,7 +29,7 @@ import uuid
 import zipfile
 
 from full_client_collect import collect, DATABASE
-from full_client_freeze import FreezeError, FREEZE_ERROR_CODES, verify_manifest
+from full_client_freeze import FreezeError, FREEZE_ERROR_CODES, HARD_LIMITS as FREEZE_HARD_LIMITS, verify_manifest
 from full_client_docker import DockerBindingError, configured_command, validate_binding
 from full_client_readiness import ReadinessError, observation_sha256, validate_policy
 from full_client_score import (SOURCE, JSON_LIMIT, EvidenceError, parse_json, read_artifact_bytes,
@@ -374,7 +374,8 @@ class CosmicRuntime:
         absolute(manifest["wz_path"])
         verify_manifest(manifest, docker_command=configured_command(self.docker_binding()),
                         docker_socket=self.config.get("docker_socket", "/var/run/docker.sock"),
-                        limits={"timeout_seconds": max(1, int(self.host.remaining()))})
+                        limits={"timeout_seconds": min(FREEZE_HARD_LIMITS["timeout_seconds"],
+                                                       max(1, int(self.host.remaining())))})
         jar = manifest["server_jar"]
         path = absolute(jar["path"])
         with open_verified_artifact(path.parent, {"path": path.name, "sha256": jar["sha256"]},
