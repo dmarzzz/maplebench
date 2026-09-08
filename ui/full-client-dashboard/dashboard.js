@@ -109,22 +109,57 @@
     if(row.status==='completed')liveBadge.textContent='Completed · saved result';
     $('live-badge').replaceWith(Object.assign(liveBadge,{id:'live-badge'}));
     $('live-id').textContent=row.id;
-    $('live-title').textContent=row.requested_model?`${row.status==='completed'?'Latest result: ':''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
+    const verifiedFeatured=row.id===snapshot.featured_run_id&&row.status==='completed'&&row.score_verification==='runner_verified_receipts_rechecked';
+    $('live-title').textContent=row.requested_model?`${row.status==='completed'?(verifiedFeatured?'Latest verified result: ':'Latest result: '):''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
     const phase=phases.find(([key])=>key===row.phase)?.[1]||'Preparing';
     const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
     const expectsRenderer=['running','requesting'].includes(row.status)&&['login','run_controller'].includes(row.phase);
     $('live-description').textContent=row.failure_code?`${failedPhase}: ${row.failure_code.replaceAll('_',' ')}.${row.api_response_saved?' The API response was saved; this attempt has no verified persisted score.':''}`
       :row.status==='not_started'?'This model is planned. No API request has started for this attempt.'
+      :verifiedFeatured?'This verified run is featured for sharing. More recent failed attempts, if any, remain in the history below.'
       :row.status==='completed'?'The latest saved run completed. Every group of frozen inputs appears below.'
       :`${phase}${expectsRenderer&&row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
     const current=phases.findIndex(([key])=>key===row.phase);$('phases').replaceChildren();
     for(const [index,[key,label]]of phases.entries()){const node=el('li',label),state=row.phase_states?.[key];if(state==='failed'){node.textContent=`${label}: failed`;node.className='phase-failed';}else if(row.status==='completed'||state==='returned')node.className='done';else if(index===current)node.className='current';$('phases').append(node);}
     $('live-model').textContent=row.returned_model||'Awaiting exact attribution';
     inputDetails($('live-actions'),row);
+    const featured=$('featured-recording');featured.replaceChildren();if(row.status==='completed'&&row.recording)recording(featured,row);
     const saved=Number.isFinite(row.persisted_xp);
     $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
     $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
   }
+  function renderResearch(){
+    const matrix=snapshot.research_matrix,container=$('research-matrix'),select=$('research-protocol');
+    const available=matrix?.schema_version===1&&Array.isArray(matrix.protocols)&&Array.isArray(matrix.columns)&&Array.isArray(matrix.models);
+    $('research-empty').hidden=available;container.hidden=!available;select.disabled=!available;
+    if(!available)return;
+    const selected=select.value;select.replaceChildren();
+    for(const protocol of matrix.protocols){const option=el('option',protocol.label);option.value=protocol.id;select.append(option);}
+    if(matrix.protocols.some(item=>item.id===selected))select.value=selected;
+    const protocol=matrix.protocols.find(item=>item.id===select.value),columns=matrix.columns.filter(item=>item.protocol_id===select.value);
+    $('research-protocol-detail').textContent=protocol?`${protocol.clock}. ${protocol.metric}. ${protocol.status}.`:'';
+    const table=el('table'),caption=el('caption',`${protocol?.label||'Protocol'}: model and class/task evidence`),head=el('thead'),heading=el('tr'),body=el('tbody');
+    caption.className='visually-hidden';heading.append(el('th','Exact model'));
+    for(const column of columns){const th=el('th',column.class_label);th.append(el('small',column.task_label),el('small',column.fixture_fingerprint==='undeclared'?'Fixture undeclared':`Fixture ${column.fixture_fingerprint.slice(0,10)}`));heading.append(th);}
+    head.append(heading);table.append(caption,head,body);
+    for(const model of matrix.models){
+      const tr=el('tr');cell(tr,model.model);
+      for(const column of columns){
+        const value=model.cells.find(item=>item.column_id===column.id),td=cell(tr,null,'research-cell');
+        if(!value||value.attempt_ids.length===0){td.textContent='No declared runs';continue;}
+        td.append(el('strong',Number.isFinite(value.mean)?`${xp(value.mean)} mean net XP`:'No verified score'));
+        td.append(el('small',`${value.valid} valid / ${value.attempted} attempted${value.planned==null?' · plan denominator unknown':` / ${value.planned} planned`}`));
+        td.append(el('small',`${value.failed} failed · ${value.unknown} unknown · ${value.in_progress} in progress · ${value.not_started} not started`));
+        if(value.valid>1)td.append(el('small',`Observed range ${xp(value.minimum)} to ${xp(value.maximum)}; uncertainty not estimated`));
+        else if(value.valid===1)td.append(el('small','One sample; uncertainty not estimated'));
+        if(value.no_ops)td.append(el('small',`${value.no_ops} verified no-input ${value.no_ops===1?'run':'runs'} retained`));
+        for(const id of value.attempt_ids){const row=snapshot.attempts.find(item=>item.id===id);if(row?.recording){const link=el('span');recording(link,row);td.append(link);}}
+      }
+      body.append(tr);
+    }
+    container.replaceChildren(table);
+  }
+  $('research-protocol').addEventListener('change',renderResearch);
   function renderComparisons(){
     const groups=snapshot.comparisons.map(group=>({group,rows:snapshot.attempts.filter(item=>group.attempt_ids.includes(item.id))}));
     const latest=rows=>Math.max(0,...rows.map(row=>row.created_at_ms||0));
@@ -180,10 +215,10 @@
       const response=await fetch('./results.json',{cache:'no-store',signal:AbortSignal.timeout(3000)});
       if(!response.ok)throw Error();const next=await response.json();
       if(next.schema_version!==1||!Array.isArray(next.attempts)||next.attempts.length>100||!Array.isArray(next.comparisons)||!Number.isFinite(next.generated_at_ms))throw Error();
-      snapshot=next;renderLive();renderComparisons();renderHistory();freshness();
+      snapshot=next;renderResearch();renderLive();renderComparisons();renderHistory();freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
-    finally{if(!closed)timer=setTimeout(refresh,2000);}
+    finally{if(!closed&&snapshot?.live_status_available!==false)timer=setTimeout(refresh,2000);}
   }
   window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
   refresh();

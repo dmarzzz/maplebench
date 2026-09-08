@@ -22,6 +22,7 @@ from full_client_dashboard import (Reader, ProjectionError, RUN, SHA, model,
 from full_client_gallery import copy_recording, directory
 from full_client_score import same_json
 from full_client_trial import publish_attempt, sync_directory, validate_spec
+from full_client_research import summarize, CLASSES, TASKS
 
 ASSETS = ('index.html', 'dashboard.js', 'style.css')
 MAX_VIDEO = 32 * 1024**2
@@ -192,16 +193,24 @@ def publication_state(package, expected):
     return 'unclaimed'
 
 
-def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replace_archive=False):
+def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replace_archive=False, research_profile=None):
     plan_path=Path(plan_path);attempt_root=directory(attempt_root);output_root=directory(output_root)
     for private in (attempt_root,directory(plan_path.parent)):
         require(not (output_root==private or output_root.is_relative_to(private) or private.is_relative_to(output_root)),
                 'private_inputs_must_be_outside_publication')
     plan=selected_plan(plan_path,plan_sha256)
+    profile=research_profile or {'protocol_id':'legacy-full-client-v1','class_id':'undeclared','task_id':'undeclared'}
+    require(isinstance(profile,dict) and set(profile)=={'protocol_id','class_id','task_id'}
+            and profile['protocol_id']=='legacy-full-client-v1' and profile['class_id'] in CLASSES
+            and profile['task_id'] in TASKS,'legacy_research_profile_required')
     staging=Path(tempfile.mkdtemp(prefix='.cohort-',dir=output_root));site=staging/'site';site.mkdir(mode=0o755)
     recordings=site/'recordings';recordings.mkdir(mode=0o755)
     try:
         rows=[project_member(entry,plan['fixtures'][0],attempt_root,recordings) for entry in plan['entries']]
+        fixture=plan['fixtures'][0]
+        fingerprint=digest(encoded({**{key:fixture[key]['sha256'] for key in ('scenario','baseline','runtime_manifest')},
+                                    'budgets':fixture['budgets']}))
+        for row in rows:row['research']={**profile,'fixture_fingerprint':fingerprint,'planned':True}
         groups={}
         for row in rows:
             if row.get('comparison_group') and row['score_verification']==VERIFIED:
@@ -219,6 +228,7 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
             'featured_run_id':max(completed,key=lambda r:r['updated_at_ms'] or 0)['id'] if completed else None,
             'cohort':{'id':plan_sha256,'planned':4,'verified':len(completed),'complete':complete,
                       'archive_replacement':replace_archive,'attempt_ids':[r['id'] for r in rows]}}
+        snapshot['research_matrix']=summarize(snapshot)
         ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
         for name in ASSETS:write_new(site/name,stable_bytes(ui/name,1024**2),0o644)
         videos=[{'path':p.name,'bytes':p.stat().st_size,'sha256':digest(stable_bytes(p,MAX_VIDEO))}
@@ -285,6 +295,7 @@ def main(argv=None):
     prepare=commands.add_parser('prepare')
     for name in ('plan','attempt-root','output-root'):prepare.add_argument('--'+name,type=Path,required=True)
     prepare.add_argument('--plan-sha256',required=True);prepare.add_argument('--replace-archive',action='store_true')
+    prepare.add_argument('--research-profile',type=Path);prepare.add_argument('--research-profile-sha256')
     for name in ('claim','record-deployment'):
         command=commands.add_parser(name);command.add_argument('--package',type=Path,required=True)
         command.add_argument('--content-sha256',required=True)
@@ -292,8 +303,12 @@ def main(argv=None):
             for field in ('deployment-id','url','verified-content-sha256'):command.add_argument('--'+field,required=True)
     args=parser.parse_args(argv)
     try:
-        if args.command=='prepare': result=prepare_package(args.plan,args.plan_sha256,args.attempt_root,args.output_root,
-                                                           replace_archive=args.replace_archive)
+        if args.command=='prepare':
+            require((args.research_profile is None)==(args.research_profile_sha256 is None),'research_profile_hash_required')
+            profile=None if args.research_profile is None else Reader().json(directory(args.research_profile.parent),
+                args.research_profile.name,args.research_profile_sha256)
+            result=prepare_package(args.plan,args.plan_sha256,args.attempt_root,args.output_root,
+                                   replace_archive=args.replace_archive,research_profile=profile)
         elif args.command=='claim':result=claim_publication(args.package,args.content_sha256)
         else:result=record_deployment(args.package,args.content_sha256,args.deployment_id,args.url,args.verified_content_sha256)
         print(json.dumps(result,sort_keys=True));return 0

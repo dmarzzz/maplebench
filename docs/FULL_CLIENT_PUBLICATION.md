@@ -13,6 +13,15 @@ or corrupt recording does not erase a verified score or delay another model's
 recording. A request or runtime that does not match the pinned plan cannot become
 a cohort score.
 
+The research matrix separates the legacy receipt protocol from the five-minute
+adaptive pilot. Its cells retain planned, attempted, valid, failed, unknown,
+in-progress and not-started counts. Signed mean XP and observed ranges appear only
+for accepted legacy persistence evidence; one sample never acquires an uncertainty
+estimate. Adaptive last-cycle data cannot be substituted for whole-run persistence,
+and initial/final XP cannot produce the intended 15-second peak-rate research score.
+The 30-minute strategy-discovery protocol remains an intended later research target,
+distinct from the newly requested 300-second adaptive pilot.
+
 Only the existing dashboard assets, projected results, a recording manifest,
 Vercel's static-site configuration, and the selected verified videos enter the
 public directory. Original video bytes are preserved, including their verified
@@ -39,6 +48,22 @@ Preparing unchanged evidence reuses the same package after verifying its bytes.
 New evidence creates a new package and leaves every previous package and all
 private evidence unchanged. Unexpected files, symlinks, or corrupted package
 bytes refuse reuse.
+
+Class/task labels require an explicit public profile; they are not inferred from
+a character name or map. Supply `--research-profile /private/public-profile.json`
+and its exact `--research-profile-sha256`. For the accepted legacy Hero combat
+fixture, the document is:
+
+```json
+{"protocol_id":"legacy-full-client-v1","class_id":"hero","task_id":"basic_combat"}
+```
+
+Omitting the profile reports undeclared class/task metadata. The legacy packager
+refuses an adaptive protocol label; that protocol needs its separate aggregate
+evidence adapter. The general matrix can already display adaptive attempted-set
+denominators, but deliberately cannot award an adaptive whole-run or peak score.
+Columns are separated by protocol, declared class/task and frozen fixture hashes;
+there is no cross-class average or overall winner.
 
 A progress package targets `/cohorts/<plan-digest-prefix>/`. Mount its `site`
 contents at that path in the existing deployment, retaining the existing public

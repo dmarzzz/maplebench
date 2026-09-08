@@ -175,5 +175,16 @@ class PublicationTests(unittest.TestCase):
         self.assertIsNone(row['recording']);self.assertEqual(row['persisted_xp'],0)
         self.assertEqual(secret.read_text(),'MUST STAY PRIVATE')
 
+    def test_class_profile_is_declared_and_cannot_relabel_legacy_evidence_as_adaptive(self):
+        self.attempt(0)
+        profile={'protocol_id':'legacy-full-client-v1','class_id':'hero','task_id':'basic_combat'}
+        result=self.prepare(research_profile=profile);matrix=self.snapshot(result)['research_matrix']
+        self.assertEqual(matrix['columns'][0]['class_label'],'Hero')
+        self.assertEqual(matrix['models'][0]['cells'][0]['planned'],1)
+        self.assertEqual(matrix['models'][1]['cells'][0]['not_started'],1)
+        profile['protocol_id']='full-client-adaptive-pilot-v1'
+        with self.assertRaisesRegex(ValueError,'legacy_research_profile_required'):
+            self.prepare(research_profile=profile)
+
 
 if __name__=='__main__':unittest.main()
