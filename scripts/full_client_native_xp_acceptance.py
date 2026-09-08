@@ -5,12 +5,48 @@ adaptive cycles. A separately owned executor must produce all pinned artifacts.
 """
 import hashlib
 import json
+import math
 from full_client_score import parse_json,read_artifact_bytes,read_json_artifact,same_json
 from full_client_xp_windows import (IDENTITY,WINDOW_MS,MAX_LEDGER_BYTES,score_ledger,
     validate_contract,integer,require,PROTOCOL as WINDOW_PROTOCOL)
 PROTOCOL='native-xp-ledger-acceptance-v1'
 MAX_CONTROL_START_DELAY_MS=5000
 MAX_CONTROL_MS=30000
+
+
+def verify_sdk_receipts(steps,native):
+    """Recheck original native SDK receipts with the frozen keyboard contract."""
+    from maple_agent import validate_rpc
+    require(isinstance(steps,list) and 1<=len(steps)<=native['max_sdk_requests'],'native_sdk_steps_required')
+    rpc=[];actions=0
+    def observation(value):
+        require(isinstance(value,dict) and value.get('ready') is True
+                and isinstance(value.get('character'),dict)
+                and all(type(value.get(k)) in (int,float) and math.isfinite(value[k])
+                        and 0<=value[k]<1500 for k in ('ageMs','renderAgeMs')),
+                'native_observation_not_fresh')
+    for step in steps:
+        require(isinstance(step,dict) and step.get('kind')=='sdk'
+                and step.get('method') in ('observe','pressKeys','wait'), 'invalid_native_sdk_step')
+        try:
+            method,argument=validate_rpc({'type':'rpc','id':step.get('rpcId'),
+                'method':step['method'],'args':step.get('args')},
+                {'adapter':'full-client','protocol':native['id']})
+        except ValueError:
+            require(False,'invalid_native_sdk_arguments')
+        rpc.append(step['rpcId']);receipt=step.get('result')
+        require(isinstance(receipt,dict) and receipt.get('error') in (None,''), 'native_sdk_error')
+        if method=='pressKeys':
+            require(receipt.get('accepted') is True,'native_input_not_accepted')
+            observation(receipt.get('observation'));actions+=1
+        elif method=='observe':observation(receipt)
+        else:
+            # The native envelope requires program_complete, so a clipped wait
+            # cannot be accepted as a successful completion of this recipe.
+            require(type(receipt.get('waitedMs')) is int and receipt['waitedMs']==argument,
+                    'native_wait_not_complete')
+    require(len(set(rpc))==len(rpc) and rpc==sorted(rpc),'native_sdk_count_mismatch')
+    return actions
 
 
 def verify_control(control,scenario,identity,window,baseline_sha256,actual,program_raw):
@@ -38,18 +74,8 @@ def verify_control(control,scenario,identity,window,baseline_sha256,actual,progr
             and execution.get('error') is None and owner.get('reason')=='program_complete'
             and timeline.get('status')=='completed','original_native_success_required')
     steps=execution.get('steps')
-    require(isinstance(steps,list) and 1<=len(steps)<=native['max_sdk_requests'],'native_sdk_steps_required')
-    rpc=[];actions=0
-    for step in steps:
-        require(isinstance(step,dict) and step.get('kind')=='sdk' and integer(step.get('rpcId'),1)
-                and step.get('method') in ('observe','pressKeys','wait')
-                and isinstance(step.get('args'),list) and isinstance(step.get('result'),dict),
-                'invalid_native_sdk_step')
-        rpc.append(step['rpcId'])
-        if step['method']=='pressKeys':
-            require(step['result'].get('accepted') is True,'native_input_not_accepted');actions+=1
-    require(len(set(rpc))==len(rpc) and rpc==sorted(rpc)
-            and integer(actions,1,native['max_actions'])
+    actions=verify_sdk_receipts(steps,native)
+    require(integer(actions,1,native['max_actions'])
             and type(execution.get('actions')) is int and execution['actions']==actions
             and type(owner.get('actions')) is int and owner['actions']==actions
             and type(execution.get('actionAttempts')) is int and execution['actionAttempts']==actions

@@ -3,7 +3,7 @@ import copy,hashlib,json,tempfile,unittest
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from full_client_native_xp_acceptance import PROTOCOL,verify_bundle
+from full_client_native_xp_acceptance import PROTOCOL,verify_bundle,verify_sdk_receipts
 from full_client_xp_windows import PROTOCOL as WINDOWS
 from full_client_native import contract,program
 from full_client_score import EvidenceError
@@ -21,8 +21,10 @@ class NativeEnvelopeTests(unittest.TestCase):
   scenario_ref=self.save('scenario',scenario)
   self.save('controller_result',{'schema_version':1,'protocol':PROTOCOL,'run_id':'a'*32,'model':None,'api_calls':0,
       'started_at_ms':1000000,'ended_at_ms':1020000,'accepted_actions':8,'sdk_requests':30,'program_sha256':hashlib.sha256(program(native).encode()).hexdigest()})
+  observation={'ready':True,'ageMs':100,'renderAgeMs':100,'character':{'alive':True}}
   steps=[{'kind':'sdk','rpcId':i+1,'method':'pressKeys' if i<8 else 'observe',
-      'args':[['ATTACK'],100] if i<8 else [],'result':{'accepted':True} if i<8 else {'character':{'alive':True}}} for i in range(30)]
+      'args':[['ATTACK'],100] if i<8 else [],
+      'result':{'accepted':True,'error':None,'observation':copy.deepcopy(observation)} if i<8 else copy.deepcopy(observation)} for i in range(30)]
   self.save('native_program',program(native).encode())
   self.save('native_result',{'protocol':native['id'],'nativeAcceptance':native,'api':None,'trialContext':None,
       'source':'client telemetry; unscored integration run','model_api_requests':0,'publication_eligible':False,'score':None,
@@ -121,6 +123,49 @@ class NativeEnvelopeTests(unittest.TestCase):
   self.save('native_result',original)
   self.save('native_program',b'// forged program')
   with self.assertRaises(EvidenceError):verify_bundle(self.manifest,self.root)
+ def test_original_native_sdk_arguments_errors_and_freshness_are_rechecked(self):
+  original=(self.root/self.arts['native_result']['path']).read_bytes()
+  changes=[('bad_key',0,{'args':[['INVALID'],100]}),
+           ('opposed_keys',0,{'args':[['LEFT','RIGHT'],100]}),
+           ('short_hold',0,{'args':[['ATTACK'],29]}),
+           ('long_hold',0,{'args':[['ATTACK'],1501]}),
+           ('wrong_arity',0,{'args':[['ATTACK']]}),
+           ('bad_id',0,{'rpcId':True}),
+           ('observe_args',8,{'args':[1]}),
+           ('observe_error',8,{'result':{'error':'stale'}}),
+           ('input_missing_observation',0,{'result':{'accepted':True}}),
+           ('wait_short',8,{'method':'wait','args':[1000],'result':{'waitedMs':999}}),
+           ('wait_long',8,{'method':'wait','args':[1000],'result':{'waitedMs':1001}}),
+           ('wait_bool',8,{'method':'wait','args':[1],'result':{'waitedMs':True}}),
+           ('wait_error',8,{'method':'wait','args':[1000],'result':{'waitedMs':1000,'error':'interrupted'}})]
+  for label,index,change in changes:
+   value=json.loads(original);value['program']['steps'][index].update(change);self.save('native_result',value)
+   with self.subTest(label=label),self.assertRaises(EvidenceError):verify_bundle(self.manifest,self.root)
+  for index in (0,8):
+   for field,bad in (('ready',False),('character',None),('ageMs',1500),('renderAgeMs',1500),
+                     ('ageMs',-1),('renderAgeMs',True),('ageMs',None)):
+    value=json.loads(original);receipt=value['program']['steps'][index]['result']
+    observation=receipt['observation'] if index==0 else receipt
+    observation[field]=bad;self.save('native_result',value)
+    with self.subTest(index=index,field=field,bad=bad),self.assertRaises(EvidenceError):verify_bundle(self.manifest,self.root)
+  self.save('native_result',original)
+ def test_complete_native_wait_and_neutral_skill_receipts_remain_valid(self):
+  value=json.loads((self.root/self.arts['native_result']['path']).read_bytes())
+  value['program']['steps'][0]['args']=[['PRIMARY_SKILL'],1500]
+  value['program']['steps'][8].update(method='wait',args=[1000],result={'waitedMs':1000})
+  self.save('native_result',value)
+  self.assertTrue(verify_bundle(self.manifest,self.root)['native_hook_accepted'])
+ def test_nonfinite_native_observation_and_error_bearing_ack_refused(self):
+  native=contract('hero','0'*64)
+  observation={'ready':True,'character':{'alive':True},'ageMs':100,'renderAgeMs':100}
+  original={'kind':'sdk','rpcId':1,'method':'pressKeys','args':[['JUMP'],300],
+            'result':{'accepted':True,'error':None,'observation':observation}}
+  for value in (float('nan'),float('inf'),float('-inf')):
+   for field in ('ageMs','renderAgeMs'):
+    step=copy.deepcopy(original);step['result']['observation'][field]=value
+    with self.subTest(field=field,value=value),self.assertRaises(EvidenceError):verify_sdk_receipts([step],native)
+  step=copy.deepcopy(original);step['result']['error']='interrupted'
+  with self.assertRaisesRegex(EvidenceError,'native_sdk_error'):verify_sdk_receipts([step],native)
  def test_short_hold_missing_duplicate_or_disconnected_status_refused(self):
   original=copy.deepcopy(self.rows)
   for change in ('short','gap','duplicate','offline','clock'):
