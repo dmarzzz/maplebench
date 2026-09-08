@@ -84,6 +84,23 @@ MediaRecorder fallback. `stop()` returns the same promise on repeated calls,
 flushes within five seconds and completes all hashing/muxing within 15 seconds.
 Failures abort the encoder and never return an uploadable Blob.
 
+For a healthy encoded capture that already has a first frame, the controller's
+stop request immediately disables inputs and permits exactly one more genuine
+post-render hook. That hook copies its pixels, then synchronously calls the
+recorder's `stop()` before yielding. This anchors the endpoint to an actual
+frame rather than an arbitrary timer phase. The hook wait is at most one second;
+missing renderers fail with `capture_final_frame_timeout`. The complete stop
+operation, including this wait and encoder flush/hashing, has one 15-second
+deadline. Upload retains its separate existing timeout. Interrupted, hidden,
+failed, or never-started captures abort without waiting for a final frame.
+
+The original request-to-capture deadline remains active until that final frame
+freezes the endpoint, and the measured media end must also fit that deadline.
+No timer is restarted, endpoint is backdated, or policy tolerance is widened.
+The normal publication verifier still requires its two-second terminal tail.
+Both the capture object and current run ID must still own the final hook and
+upload; late callbacks cannot relabel or upload another run's recording.
+
 Keep one snapshot pending until the next actual render supplies its duration;
 close snapshots promptly after submission. The first post-render snapshot is
 PTS 0. Later timestamps are `floor(render_monotonic_ms - first_render_ms) * 1000`
@@ -162,6 +179,9 @@ changes, retained-frame closeout and readback errors without fallback. A 301 ms
 initial-render delay is accepted with a zero-offset real first frame; separate
 readiness timeout, stop-before-frame and unchanged outer deadline tests prevent
 that startup fix from extending capture or admitting missing frames.
+Controller tests invoke the actual module render entry during stopping and
+cover the final-hook timeout, combined finish deadline, request-limit crossing,
+repeated stop, interruption, changed run/capture owner and slow upload.
 
 `scripts/check_webcodecs_capture.mjs` runs an isolated headless browser on a
 synthetic canvas through this exact module, then checks ffprobe packet hashes,
