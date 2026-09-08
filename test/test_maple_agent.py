@@ -525,10 +525,13 @@ class DockerIsolationTest(unittest.TestCase):
                     raise TimeoutError('private test endpoint detail')
                 code=('await sdk.pressKeys(["LEFT"],100);' if mode=='endpoint_timeout' else
                       'await sdk.wait(1700); await sdk.pressKeys(["LEFT"],1500);')
+                # The timeout case must admit a full three-second endpoint
+                # interval after Docker startup; the other case must not.
+                program_seconds=6 if mode=='endpoint_timeout' else 3
                 start=time.monotonic()
                 result=agent.execute_program(code,{'adapter':'full-client'},'http://127.0.0.1:8790',
-                    deadline=start+5,program_seconds=3,request_fn=endpoint)
-                self.assertLess(time.monotonic()-start,7)
+                    deadline=start+program_seconds+2,program_seconds=program_seconds,request_fn=endpoint)
+                self.assertLess(time.monotonic()-start,program_seconds+4)
                 self.assertEqual(result['actions'],0)
                 if mode=='endpoint_timeout':
                     self.assertEqual(result['reason'],'infrastructure_error',result)
