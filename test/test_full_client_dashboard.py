@@ -14,7 +14,7 @@ from unittest import mock
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from full_client_dashboard import build_snapshot, recording_url, write_snapshot, read_admin_status, main
+from full_client_dashboard import build_snapshot, recording_url, write_snapshot, read_admin_status, main, playback_cue
 from full_client_score import score_trial
 from test_full_client_score import fixture
 
@@ -87,6 +87,50 @@ class DashboardTests(unittest.TestCase):
 
     def snapshot(self,**kwargs): return build_snapshot(self.attempts,self.relay,now_ms=10000,**kwargs)
 
+    def test_playback_maps_verified_timeline_to_untrimmed_video(self):
+        folder,journal,result=self.attempt('1'*32)
+        result['timeline'].update(program_started_ms=1400,program_ended_ms=5500)
+        self.save_result(folder,journal,result)
+        recording=json.loads((folder/'recording.json').read_text())
+        recording.update(start_ms=100,end_ms=6100,duration_ms=6000,interrupted=False,
+            post_render_capture=True,timing_uncertainty_ms=9,
+            timing_method='browser_monotonic_duration_with_measured_clock_offset')
+        journal['receipts']['collect_final']['artifacts']['recording']=self.write(folder/'recording.json',recording)
+        self.write(folder/'journal.json',journal)
+        approved={'1'*32:{'url':'/recordings/'+'1'*32+'.webm','sha256':'d'*64}}
+        row=self.snapshot(recording_map=approved)['attempts'][0]
+        self.assertEqual(row['recording']['playback'],{'start_ms':1050,'basis':'program_start','timing_uncertainty_ms':9})
+        result['timeline'].update(first_input_started_ms=1700,first_input_acked_ms=1900)
+        self.save_result(folder,journal,result)
+        row=self.snapshot(recording_map=approved)['attempts'][0]
+        self.assertEqual(row['recording']['playback']['start_ms'],1350)
+        self.assertEqual(row['recording']['playback']['basis'],'first_acknowledged_input')
+        self.assertEqual(row['persisted_xp'],100);self.assertFalse(row['ranked'])
+        # Unhashed edits cannot supply a playback cue even when a video is linked.
+        result['timeline']['first_input_started_ms']=1800
+        self.write(folder/'result.json',result)
+        row=self.snapshot(recording_map=approved)['attempts'][0]
+        self.assertNotIn('playback',row['recording'] or {})
+
+    def test_playback_refuses_noops_incomplete_receipts_and_invalid_capture_timing(self):
+        result={'timeline':{'program_started_ms':1400,'program_ended_ms':5500}}
+        recording={'start_ms':100,'end_ms':6100,'duration_ms':6000,'interrupted':False,
+            'post_render_capture':True,'timing_uncertainty_ms':9,
+            'timing_method':'browser_monotonic_duration_with_measured_clock_offset'}
+        actions={'actions':4,'action_verification':'receipts_rechecked'}
+        for changes in ({'actions':0},{'actions':None},{'action_verification':'receipts_incomplete'}):
+            self.assertIsNone(playback_cue(result,recording,actions|changes))
+        for changes in ({'interrupted':True},{'post_render_capture':False},{'start_ms':1500},
+                        {'end_ms':5400},{'duration_ms':3000},{'timing_uncertainty_ms':101},
+                        {'timing_uncertainty_ms':True},{'timing_method':'unavailable'}):
+            self.assertIsNone(playback_cue(result,recording|changes,actions))
+        for changes in ({'first_input_started_ms':1700},
+                        {'first_input_started_ms':True,'first_input_acked_ms':1900},
+                        {'first_input_started_ms':1399,'first_input_acked_ms':1900},
+                        {'first_input_started_ms':1700,'first_input_acked_ms':1600},
+                        {'first_input_started_ms':1700,'first_input_acked_ms':5501}):
+            self.assertIsNone(playback_cue({'timeline':result['timeline']|changes},recording,actions))
+
     def publication(self,folder,journal,result,*,ready=True,reasons=None,version='abcdef1',at=9000):
         """Synthetic private validator receipt; the dashboard never runs a gate."""
         refs=copy.deepcopy(journal['receipts']['collect_final']['artifacts'])
@@ -134,6 +178,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(row['persisted_xp'],0)
             self.assertEqual(row['action_attempts'],0);self.assertEqual(row['acknowledged_actions'],0)
             self.assertIs(row['no_op'],True);self.assertEqual(row['action_verification'],'receipts_rechecked')
+            self.assertEqual(row['sdk_calls'],0)
         acceptance=rows['3'*32]
         self.assertEqual(acceptance['persisted_xp'],9500)
         self.assertEqual(acceptance['action_attempts'],29);self.assertEqual(acceptance['acknowledged_actions'],29)
@@ -206,6 +251,7 @@ class DashboardTests(unittest.TestCase):
         self.save_result(folder,journal,result)
         row=self.snapshot()['attempts'][0]
         self.assertIs(row['no_op'],True);self.assertEqual(row['persisted_xp'],-600)
+        self.assertEqual(row['sdk_calls'],2)
         result['program']['steps'][-1]['result']['waitedMs']=50
         self.save_result(folder,journal,result)
         self.assertIsNone(self.snapshot()['attempts'][0]['no_op'])

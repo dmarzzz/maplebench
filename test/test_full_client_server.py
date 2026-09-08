@@ -75,6 +75,23 @@ class FullClientServerTests(unittest.TestCase):
         self.assertNotIn('observation',json.loads(body))
         self.assertTrue(json.loads(body)['fresh'])
 
+    def test_stale_game_url_cannot_reopen_account_after_logout(self):
+        session=self.module.SessionCoordinator(self.module.BRIDGE)
+        self.module.SESSION=session
+        session.owner='renderer'; session.desired='waiting'; session.transition='b'*32
+        self.account.write_text('{"password":"test-only-must-stay-private"}')
+        for suffix in ('','?transition='+'a'*32,'?transition='+'b'*32):
+            status,body=self.request('GET','/web/index.html'+suffix)
+            self.assertEqual(status,303)
+            self.assertNotIn(b'full-client-demo.js',body)
+        status,body=self.request('GET','/demo-session')
+        self.assertEqual(status,409)
+        self.assertNotIn(b'test-only-must-stay-private',body)
+        session.desired='game'; session.transition='c'*32
+        self.assertEqual(self.request('GET','/web/index.html?transition='+'a'*32)[0],303)
+        self.assertEqual(self.request('GET','/web/index.html?transition='+'c'*32)[0],200)
+        self.assertEqual(self.request('GET','/demo-session')[0],200)
+
     def test_cross_site_top_level_waiting_navigation_is_the_only_exception(self):
         self.module.SESSION=self.module.SessionCoordinator(self.module.BRIDGE)
         navigation={'Sec-Fetch-Site':'cross-site','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'}

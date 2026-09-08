@@ -405,6 +405,37 @@ class FullClientTests(unittest.TestCase):
         self.assertIn('const state = await sdk.observe();',prompt)
         self.assertIn('explicitly await its call',prompt)
 
+    def test_first_input_timing_requires_acceptance_and_preserves_original_input(self):
+        for accepts in ([],[False],[True,True],[False,True]):
+            with self.subTest(accepts=accepts),tempfile.TemporaryDirectory() as folder:
+                bridge=FullClientBridge(folder);bridge.frame(self.frame())
+                with mock.patch('full_client_bridge.threading.Thread'):
+                    run=bridge.start('script')
+                clock=[100.0]; replies=iter(accepts); starts=[]
+                def request(url,payload=None,timeout=3,**kwargs):
+                    if not url.endswith('/v1/action'):return self.observation()
+                    starts.append(round((clock[0]-100)*1000));clock[0]+=.1
+                    return {'accepted':next(replies),'observation':self.observation()}
+                def execute(*args,**kwargs):
+                    steps=[]
+                    for _ in accepts:
+                        clock[0]+=.5
+                        reply=kwargs['request_fn']('/v1/action',{'type':'press_keys','keys':['RIGHT'],'durationMs':100})
+                        step={'kind':'sdk','method':'pressKeys','args':[['RIGHT'],100],'result':reply}
+                        steps.append(step);kwargs['step_callback'](step)
+                    return {'reason':'program_complete','actions':sum(accepts),'steps':steps}
+                with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                     mock.patch.object(bridge,'request',side_effect=request), \
+                     mock.patch.object(bridge,'_wait_for_capture'), \
+                     mock.patch('full_client_bridge.execute_program',side_effect=execute):
+                    bridge._run(run)
+                timeline=json.loads((bridge.output/run['id']/'result.json').read_text())['timeline']
+                if True in accepts:
+                    first=starts[accepts.index(True)]
+                    self.assertEqual(timeline['first_input_started_ms'],first)
+                    self.assertEqual(timeline['first_input_acked_ms'],first+100)
+                else:self.assertNotIn('first_input_started_ms',timeline)
+
     def test_input_requires_fresh_state_and_ack(self):
         with tempfile.TemporaryDirectory() as folder:
             bridge=FullClientBridge(folder)

@@ -79,6 +79,28 @@ class SessionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'active'):
             self.coordinator.dispatch({'op':'disconnect'})
 
+    def test_old_game_page_revokes_logout_ack_and_returns_to_waiting(self):
+        self.frame()
+        waiting=self.coordinator.dispatch({'op':'prepare_wait'})
+        self.frame('waiting',ack=waiting['transitionId'])
+        connecting=self.coordinator.dispatch({'op':'connect'})
+        self.frame('game',ack=connecting['transitionId'])
+        logout=self.coordinator.dispatch({'op':'disconnect'})
+        self.frame('waiting',ack=logout['transitionId'])
+        stale=self.frame('game',ack=connecting['transitionId'])
+        self.assertEqual(stale['session']['state'],'transitioning')
+        self.assertEqual(stale['navigation']['page'],'waiting')
+        self.assertEqual(stale['navigation']['id'],logout['transitionId'])
+        self.assertEqual(self.coordinator.dispatch({'op':'disconnect'})['transitionId'],logout['transitionId'])
+        self.assertEqual(self.frame('waiting',ack=logout['transitionId'])['session']['state'],'waiting')
+
+    def test_stale_page_does_not_interrupt_capture_or_active_program(self):
+        self.frame(); waiting=self.coordinator.dispatch({'op':'prepare_wait'})
+        self.frame('waiting',ack=waiting['transitionId'])
+        self.assertIsNone(self.frame('game',capture='saving',ack='old')['navigation'])
+        self.bridge.run={'status':'running','workerActive':True}
+        self.assertIsNone(self.frame('game',ack='old')['navigation'])
+
     def test_private_start_requires_connected_session_and_passes_frozen_limits(self):
         request={'op':'start','run_id':'a'*32,'request_id':'a'*32,'model':'gpt-6-astra',
             'duration_seconds':60,'total_token_limit':20000,'docker_image_id':'sha256:'+'b'*64,

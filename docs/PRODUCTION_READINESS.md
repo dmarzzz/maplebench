@@ -33,6 +33,12 @@ and party objectives remain a design; they are not claimed as running benchmarks
 
 ## Components
 
+- [Operations continuity](FULL_CLIENT_OPERATIONS.md): current source integrates
+  a shared durable admission gate, verified inherited child entry, permanent
+  group closure and a composed normal-service handoff. All 222 combined offline
+  tests passed, including complete wrapper and actual root CLI integration.
+  Protected rollout and live acceptance remain separate; the runtime is unchanged.
+
 - [Finite experiments](FULL_CLIENT_EXPERIMENTS.md): a frozen complete attempt set,
   per-fixture model order, aggregate budgets, explicit resume without replay, and
   reports that retain missing, failed, zero and negative outcomes. This new
@@ -161,9 +167,13 @@ strict checks for active or unsettled captures. A web-only deployment preserved
 the running normal server and worker, then an ordinary login verified three
 fresh native observations with 17 monsters and a visible native HUD. Ordinary
 logout preserved XP/keymap and the checked historical evidence hashes. This was a
-no-input, no-API operational check. The next API acceptance has not started:
-shared-host memory admission refused the controlled pause before any service
-change. See the [acceptance record](FULL_CLIENT_ACCEPTANCE.md#relay-restart-and-normal-service-acceptance).
+no-input, no-API operational check. After initial shared-capacity refusals, fresh
+admission allowed a separate single-entry Astra API acceptance: 34 acknowledged
+inputs, +9,250 persisted XP, alive at ordinary logout, saved recording and passing
+publication evidence. A new normal-service lifecycle completed with the same
+Cosmic instance through worker first idle; normal-worker health passed. This
+operated cycle does not establish repeated-model fairness or automatic recovery.
+See the [acceptance record](FULL_CLIENT_ACCEPTANCE.md#completed-trial-and-normal-service-restoration).
 
 The original normal server and queue worker were restored after the separate
 acceptance. Restoration exposed a false readiness timeout: `journalctl` returned

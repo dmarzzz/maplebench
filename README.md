@@ -1,6 +1,6 @@
 # MapleBench
 
-**Status: live full-client trials verified; model ranking remains preliminary.**
+**Status: live full-client trials verified; no model ranking established.**
 The durable adapter restores a frozen offline baseline, runs one real browser
 through ordinary login and bounded API control, then verifies persisted net XP
 after normal logout. The results dashboard shows exact model attribution,
@@ -11,12 +11,17 @@ establish a ranking. See the
 [results dashboard](docs/FULL_CLIENT_DASHBOARD.md) and
 [full-client control](docs/FULL_CLIENT.md).
 
-The latest separate release acceptance completed with 25 acknowledged Astra
-actions and +9,000 persisted net XP. Fresh populated render frames were verified
-before the API request; its saved recording and publication evidence passed.
-It remains separate from the earlier +9,500 Astra acceptance and original
-four-model trials. Class/task coverage is described in the
-[benchmark design](docs/CLASS_BENCHMARK_DESIGN.md).
+The latest verified success completed with 34 acknowledged Astra actions and
++9,250 persisted net XP. Fresh populated render frames were verified before the
+API request; its saved recording and publication evidence passed. Watch the
+[public replay](https://maplebench.vercel.app/latest/). The subsequent fresh group
+stopped during its first trial's logout collection and was recovered; a complete
+new four-model group remains outstanding.
+
+The [current goal, roadmap and burn-down](docs/ROADMAP.md) separates the next
+four-model showcase from repeatable operations and a broader class/task suite.
+It tracks live acceptance and public delivery, alongside existing source work.
+Class/task coverage is described in the [benchmark design](docs/CLASS_BENCHMARK_DESIGN.md).
 
 Moving to another computer? See [the laptop handoff](docs/LAPTOP_HANDOFF.md) to
 reuse the existing runner without transferring its assets or credentials.
@@ -38,7 +43,11 @@ MapleBench is an experimental benchmark for evaluating coding agents in a persis
 
 The intended world implementation is a MapleStory v83-compatible open-source server such as Cosmic. The benchmark framework itself contains **no Nexon game assets or WZ data**.
 
-## Research progression
+## Longer-term research directions
+
+These are proposed directions, not completed full-client protocols. The
+[current roadmap](docs/ROADMAP.md) gates longer tasks on repeatable operation and
+the native scoring evidence each metric requires.
 
 1. **Maximize XP** — give an agent a standardized character and 10 minutes; score total server-authoritative XP gained.
 2. **Maximize XP rate** — score peak sustained XP/min over a rolling 60-second window.
@@ -84,7 +93,10 @@ npm run score:demo
 
 The demo command scores a tiny example server event stream. It is deliberately independent of Cosmic so we can lock the benchmark contract before wiring the game server.
 
-## Near-term milestones
+## Original server-bot milestones
+
+This historical scaffold checklist describes the earlier adapter. Use the
+[full-client roadmap](docs/ROADMAP.md#burn-down) for current release priorities.
 
 - [x] Define server-authoritative episode/event schema.
 - [x] Implement total XP and rolling XP-rate scorers.

@@ -119,6 +119,7 @@
     for(const [index,[key,label]]of phases.entries()){const node=el('li',label),state=row.phase_states?.[key];if(state==='failed'){node.textContent=`${label}: failed`;node.className='phase-failed';}else if(row.status==='completed'||state==='returned')node.className='done';else if(index===current)node.className='current';$('phases').append(node);}
     $('live-model').textContent=row.returned_model||'Awaiting exact attribution';
     inputDetails($('live-actions'),row);
+    const featured=$('featured-recording'); if(featured){featured.replaceChildren();if(row.status==='completed'&&row.recording)recording(featured,row);}
     const saved=Number.isFinite(row.persisted_xp);
     $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
     $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
@@ -159,7 +160,7 @@
       if(row.kind==='integration')state.append(el('small','Unranked integration'));
       scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');inputDetails(cell(tr,null,'input-summary'),row);publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
     }
-    $('scope').textContent=snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
+    $('scope').textContent='Selected recorded run · unranked. No runs are started from this page.';
   }
   function freshness(){
     if(!snapshot)return;
@@ -178,7 +179,7 @@
       snapshot=next;renderLive();renderComparisons();renderHistory();freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
-    finally{if(!closed)timer=setTimeout(refresh,2000);}
+    finally{ /* Saved sharing page: fetch once; no live-feed polling. */ }
   }
   window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
   refresh();

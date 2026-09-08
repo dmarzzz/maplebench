@@ -28,6 +28,29 @@ jobs:
       - run: node scripts/check-tracked-files.mjs
       - run: npm test
       - run: python3 -m unittest discover -s test -p 'test_*.py'
+      - name: Verify production CLI admission in private root-owned fixtures
+        run: |
+          timeout 180s sudo python3 - <<'PY'
+          import os, pathlib, resource, subprocess, sys, tempfile
+          source = pathlib.Path.cwd()
+          with tempfile.TemporaryDirectory(prefix="maplebench-cli-tests-") as temporary:
+              root = pathlib.Path(temporary)
+              for directory in ("scripts", "test"):
+                  (root / directory).mkdir(mode=0o700)
+                  for entry in (source / directory).glob("*.py"):
+                      if not entry.is_file() or entry.is_symlink():
+                          raise RuntimeError("regular source file required")
+                      target = root / directory / entry.name
+                      target.write_bytes(entry.read_bytes())
+                      target.chmod(0o600)
+              resource.setrlimit(resource.RLIMIT_AS, (768 * 1024**2, 768 * 1024**2))
+              resource.setrlimit(resource.RLIMIT_CPU, (120, 120))
+              os.sched_setaffinity(0, set(sorted(os.sched_getaffinity(0))[:2]))
+              result = subprocess.run([sys.executable, "-B", "-m", "unittest", "discover",
+                  "-s", "test", "-p", "test_full_client_operation_cli.py", "-v"], cwd=root,
+                  env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"}, timeout=120)
+              sys.exit(result.returncode)
+          PY
       - name: Verify native save receipts without game assets or a server
         env:
           MAVEN_OPTS: -Xmx768m -XX:ActiveProcessorCount=2
