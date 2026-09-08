@@ -157,7 +157,7 @@ def validate_rpc(message, scenario):
         keys, duration = args
         allowed = {'LEFT', 'RIGHT', 'UP', 'DOWN', 'JUMP', 'ATTACK', 'BRANDISH',
                    'COMBO', 'BOOSTER', 'MAPLE_WARRIOR', 'HP_POTION', 'MP_POTION'}
-        if scenario.get('protocol') in ('full-client-adaptive-pilot-v1','scripted-native-acceptance-v1','scripted-native-acceptance-v2'):
+        if scenario.get('protocol') in ('full-client-adaptive-pilot-v1','scripted-native-acceptance-v1','scripted-native-acceptance-v2','scripted-native-acceptance-v3'):
             allowed=(allowed-{'BRANDISH','COMBO','BOOSTER','MAPLE_WARRIOR'}) | {'PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2'}
         if (type(keys) is not list or not 1 <= len(keys) <= 3
                 or any(type(key) is not str or key not in allowed for key in keys)
