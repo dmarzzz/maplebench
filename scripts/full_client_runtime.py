@@ -1032,10 +1032,11 @@ class CosmicRuntime:
                 **({"maximum_ms": 335000} if getattr(self, "scenario", {}).get("protocol") == "full-client-adaptive-pilot-v1" else {})) | {"video_sha256": recording["sha256"]}
         except EvidenceError:
             raise RuntimeErrorCode("recording_probe_failed") from None
-        require(type(recording.get("duration_ms")) in (int, float)
-                and math.isfinite(recording["duration_ms"])
-                and abs(probe["duration_ms"] - recording["duration_ms"]) <= 100,
-                "recording_duration_mismatch")
+        from full_client_capture import verify_video_duration
+        try:
+            verify_video_duration(probe,recording,getattr(self,'scenario',{}).get('adaptive_protocol',{}).get('capture_duration_policy'))
+        except (ValueError,TypeError):
+            raise RuntimeErrorCode('recording_duration_mismatch') from None
         self.state["artifacts"]["video_probe"] = self.artifact("video-probe.json", probe)
         try:
             verify_capture_bundle({"result": self.state["result"], "video": recording,

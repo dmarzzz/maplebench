@@ -239,8 +239,9 @@
     const output = document.createElement('canvas'), headerHeight = 120;
     output.width = game.width; output.height = game.height + headerHeight;
     const ctx = output.getContext('2d');
+    const durationPolicy=run.adaptiveProtocol?.capture_duration_policy;
     const item = {autoRunId,startedAt:performance.now(),startedWall:Date.now(),recorderStarted:false,
-      frames:0,firstFrameWall:null,lastFrameWall:null,lastFrameAt:null,maxGap:0,hidden:document.hidden,
+      frames:0,firstFrameWall:null,lastFrameWall:null,firstFrameAt:null,lastFrameAt:null,maxGap:0,hidden:document.hidden,
       errors:0,relayLost:false,clock:null,clockVerified:false,terminalToken:null,
       chunks:[],bytes:0,stopping:false,animation:null,stream:null,recorder:null,finishTimer:null,maxTimer:null};
     const draw = () => {
@@ -287,7 +288,7 @@
       if(item.recorderStarted) {
         const now=performance.now(),wall=Date.now();
         item.maxGap=Math.max(item.maxGap,now-(item.lastFrameAt ?? item.startedAt));
-        item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.lastFrameAt=now; item.frames++;
+        item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.firstFrameAt ??= now; item.lastFrameAt=now; item.frames++;
       }
     };
     item.onRendered = animate;
@@ -313,6 +314,9 @@
           rendered_frames:item.frames,max_frame_gap_ms:item.maxGap,hidden:item.hidden,errors:item.errors,relay_lost:item.relayLost,
           interrupted:item.hidden||item.errors>0||item.relayLost||item.frames===0||item.maxGap>1000,
           clock:item.clockVerified?item.clock:null,terminal_token:item.terminalToken}};
+        if(durationPolicy)Object.assign(pendingUpload.metadata,{schema_version:2,capture_duration_policy:durationPolicy,
+          first_frame_offset_ms:item.firstFrameAt===null?null:item.firstFrameAt-item.startedAt,
+          last_frame_offset_ms:item.lastFrameAt===null?null:item.lastFrameAt-item.startedAt});
         item.chunks=[];
         await uploadRecording();
       };

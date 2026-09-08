@@ -16,7 +16,7 @@ from full_client_adaptive import DEFAULT_PROTOCOL, PROTOCOL
 from full_client_score import EvidenceError, score_trial, verify_trial_bundle
 from full_client_publish import _measure_video_probe
 from full_client_research import summarize
-from full_client_capture import capture_receipt
+from full_client_capture import capture_receipt, CAPTURE_DURATION_POLICY
 import test_full_client_adaptive as adaptive_fixtures
 from test_full_client_score import bundle_fixture, write_artifact
 
@@ -97,11 +97,18 @@ class AdaptivePublicationTests(unittest.TestCase):
             'first_frame_wall_ms':start+10,'last_frame_wall_ms':end+90,'rendered_frames':9000,'max_frame_gap_ms':34,
             'hidden':False,'errors':0,'relay_lost':False,'interrupted':False,
             'clock':clock|{'client_received_ms':start},'terminal_token':terminal['id']}
+        capture_policy=self.scenario['adaptive_protocol'].get('capture_duration_policy')
+        if capture_policy:
+            capture.update(schema_version=2,capture_duration_policy=capture_policy,
+                first_frame_offset_ms=40,last_frame_offset_ms=capture['duration_ms']-90,
+                first_frame_wall_ms=start+40,last_frame_wall_ms=end+10,max_frame_gap_ms=215)
+            ready['serverReceivedAtMs']=start+50
         for name,value in [('capture',capture),('capture_clock',clock),('capture_ready',ready),('capture_terminal',terminal)]:
             write_artifact(folder,refs,name,value)
         recording={'status':'completed','sha256':refs['video']['sha256'],'capture_sha256':refs['capture']['sha256'],
             'overlay':{'controller_id':ident,'mode':'api','model':model},
-            **capture_receipt(capture,{'id':ident,'client':'synthetic-browser','startedAtMs':start,'protocol':PROTOCOL},ready,clock,terminal)}
+            **capture_receipt(capture,{'id':ident,'client':'synthetic-browser','startedAtMs':start,'protocol':PROTOCOL,
+                'adaptiveProtocol':self.scenario['adaptive_protocol']},ready,clock,terminal)}
         write_artifact(folder,refs,'recording',recording)
         score=verify_trial_bundle(evidence,folder,refs);write_artifact(folder,refs,'score',score)
         journal={'attempt_id':ident,'status':'completed','phase':'cleanup','request':self.plan['entries'][index]['spec'],
@@ -116,6 +123,31 @@ class AdaptivePublicationTests(unittest.TestCase):
             value=publication.prepare_package(self.path,self.plan_sha,self.attempts,self.output,
                 adaptive_scenario=self.scenario_path,research_profile=self.profile,**kwargs)
         return value,json.loads((Path(value['site'])/'results.json').read_text())
+
+    def enable_capture_policy(self):
+        self.scenario['adaptive_protocol']['capture_duration_policy']=dict(CAPTURE_DURATION_POLICY)
+        self.scenario_path.write_text(json.dumps(self.scenario,sort_keys=True))
+        sha=publication.digest(self.scenario_path.read_bytes());self.plan['fixtures'][0]['scenario']['sha256']=sha
+        for entry in self.plan['entries']:
+            entry['spec']['scenario_fingerprint']=sha
+            entry['spec_sha256']=publication.digest(publication.encoded(entry['spec']))
+        self.path.write_bytes(publication.encoded(self.plan));self.plan_sha=publication.digest(self.path.read_bytes())
+
+    def test_frozen_frame_envelope_is_rechecked_before_publishing_video(self):
+        self.enable_capture_policy();folder,journal,result=self.attempt(0)
+        refs=journal['receipts']['collect_final']['artifacts']
+        recording=json.loads((folder/refs['recording']['path']).read_text());duration=recording['duration_ms']
+        probe={'duration_ms':duration-117,'presentation_extent_ms':duration-117,
+            'presentation_span_ms':duration-118,'last_packet_duration_ms':1,'width':1024,'height':768,'frames':9001}
+        def prepare():
+            value=publication.prepare_package(self.path,self.plan_sha,self.attempts,self.output,
+                adaptive_scenario=self.scenario_path,research_profile=self.profile)
+            return json.loads((Path(value['site'])/'results.json').read_text())['attempts'][0]
+        with patch('full_client_publish._probe_video',return_value=probe):
+            row=prepare();self.assertEqual(row['publication_evidence']['status'],'adaptive_checked')
+            self.assertIsNotNone(row['recording'])
+        with patch('full_client_publish._probe_video',return_value=probe|{'frames':8999}):
+            row=prepare();self.assertIsNone(row['recording']);self.assertEqual(row['persisted_xp'],100)
 
     def test_full_wall_run_uses_native_xp_and_all_cycles_and_keeps_planned_models(self):
         self.attempt(0,xp=-50);value,snapshot=self.prepare();row=snapshot['attempts'][0]

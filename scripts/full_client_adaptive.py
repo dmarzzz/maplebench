@@ -36,7 +36,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 def validate_protocol(value):
-    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy'},'invalid_adaptive_protocol')
+    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','capture_duration_policy'},'invalid_adaptive_protocol')
     require(value.get('schema_version')==1 and type(value['schema_version']) is int
             and value.get('id')==PROTOCOL and type(value.get('wall_seconds')) is int
             and value['wall_seconds']==300,'invalid_adaptive_protocol')
@@ -46,6 +46,10 @@ def validate_protocol(value):
     require(all(type(value.get(k)) is int and a<=value[k]<=b for k,(a,b) in bounds.items()),'invalid_adaptive_limits')
     if 'horizon_policy' in value:
         require(digest(value['horizon_policy'])==digest(FULL_HORIZON_POLICY),'invalid_adaptive_horizon_policy')
+    if 'capture_duration_policy' in value:
+        from full_client_capture import validate_duration_policy
+        try:validate_duration_policy(value['capture_duration_policy'])
+        except (ValueError,TypeError):raise AdaptiveError('invalid_capture_duration_policy') from None
     profile=value.get('profile')
     require(isinstance(profile,dict) and set(profile)=={'id','class_name','level','skill_keys'}
             and isinstance(profile['id'],str) and re.fullmatch('[a-z0-9][a-z0-9-]{0,63}',profile['id'])

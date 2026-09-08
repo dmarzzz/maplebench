@@ -387,7 +387,9 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
                     "video: duration metadata disagrees with decoded packet coverage")
             headers.append(header)
     return {"width": width, "height": height, "frames": frames,
-            "duration_ms": headers[0] if headers else extent}
+            "duration_ms": headers[0] if headers else extent,
+            "presentation_span_ms":presentations[-1][0]-presentations[0][0],
+            "presentation_extent_ms":extent,"last_packet_duration_ms":presentations[-1][1]}
 
 
 def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS):
@@ -785,7 +787,8 @@ def verify_capture_bundle(manifest, artifact_root):
     require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
     try:
         measured = capture_receipt(capture, {"id": run_id, "client": result["controller"]["client"],
-                                             "startedAtMs": started, "protocol": result.get("protocol")}, ready, clock, terminal)
+                                             "startedAtMs": started, "protocol": result.get("protocol"),
+                                             "adaptiveProtocol":result.get('adaptive',{}).get('limits',{})}, ready, clock, terminal)
     except (ValueError, TypeError, KeyError, OverflowError) as error:
         raise EvidenceError("capture: raw measurements failed validation") from error
     require(all(same_json(video.get(key), value) for key, value in measured.items()),
