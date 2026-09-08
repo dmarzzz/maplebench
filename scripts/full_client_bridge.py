@@ -245,6 +245,7 @@ class FullClientBridge:
         self.lock = threading.Condition()
         self.client = None
         self.last_seen = 0
+        self.last_input_poll = None
         self.fresh_until = 0
         self.observation = {'ready': False}
         self.pending = None
@@ -558,6 +559,48 @@ class FullClientBridge:
         try:os.fsync(directory)
         finally:os.close(directory)
 
+    def _input_timeout(self, pending, now):
+        """Snapshot server facts before releasing the pending command; never an ACK."""
+        ident=pending.get('runId')
+        if (not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident)
+                or self.run.get('id')!=ident or self.run.get('client')!=pending.get('client')
+                or self.client!=pending.get('client') or not (self.output/ident).is_dir()):return 'owner_mismatch'
+        path=self.output/ident/'input-timeout.json'
+        if os.path.lexists(path):return 'existing'
+        bounded_ms=lambda value:round(value*1000) if math.isfinite(value) and -350<=value<=350 else None
+        relative=lambda value:bounded_ms(value-pending['requestedAt']) if value is not None else None
+        age_ms=lambda value:round(value,3) if type(value) in (int,float) and math.isfinite(value) and 0<=value<=350000 else None
+        def poll_value(poll):
+            return None if poll is None else {
+                'received_at_ms':poll['receivedAtMs'],'request_elapsed_ms':relative(poll['receivedAt']),
+                'elapsed_before_timeout_ms':bounded_ms(now-poll['receivedAt']),
+                'valid_frame':poll['validFrame'],'age_ms':age_ms(poll['ageMs']),
+                'render_age_ms':age_ms(poll['renderAgeMs'])}
+        ack=pending.get('lastMatchingAck')
+        value={'schema_version':1,'source':'bridge_input_timeout_diagnostic_unscored',
+            'outcome':'uncertain','dispatch_semantics':'selected_for_browser_response',
+            'run_id':ident,'command_id':pending['id'],'requested_at_ms':pending['requestedAtMs'],
+            'observed_at_ms':round(time.time()*1000),'keys':list(pending['keys']),
+            'duration_ms':pending['durationMs'],'dispatched':pending.get('sent') is True,
+            'request_budget_ms':relative(pending['deadline']),'elapsed_request_ms':relative(now),
+            'dispatch_elapsed_ms':relative(pending.get('sentAt')),
+            'remaining_ms':bounded_ms(pending['deadline']-now),
+            'request_poll':poll_value(pending.get('requestPoll')),
+            'dispatch_poll':poll_value(pending.get('dispatchPoll')),
+            'last_poll':poll_value(pending.get('lastPoll')),
+            'matching_ack':None if ack is None else {
+                'received_at_ms':ack['receivedAtMs'],'request_elapsed_ms':relative(ack['receivedAt']),
+                'ok':ack['ok'],'valid_frame':ack['validFrame'],
+                'enough_hold_time':ack['enoughTime'],'before_deadline':ack['beforeDeadline']}}
+        raw=(json.dumps(value,sort_keys=True,allow_nan=False)+'\n').encode()
+        if len(raw)>4096:raise ControlError('input_timeout_diagnostic_oversized')
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+        directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:os.fsync(directory)
+        finally:os.close(directory)
+        return 'saved'
+
     def frame(self, body):
         if not isinstance(body, dict):
             raise ValueError('Invalid client frame')
@@ -658,6 +701,14 @@ class FullClientBridge:
                 self.frame_transit=None
             else:
                 self._record_readiness_frame(capture,server_received_ms,now)
+            # Only bounded scalar transport facts enter timeout evidence. The
+            # observation, character, HUD, and arbitrary ACK fields never do.
+            self.last_input_poll={'client':client,'runId':run_id,'receivedAt':now,
+                'receivedAtMs':server_received_ms,'validFrame':valid_frame,
+                'ageMs':age,'renderAgeMs':render_age}
+            if (self.pending and self.pending.get('runId')==run_id
+                    and self.run.get('client')==client):
+                self.pending['lastPoll']=dict(self.last_input_poll)
             if (not settled_history and self.run.get('id') and (self.output/self.run['id']).is_dir()
                     and self.run['status'] in ('completed','failed') and not self.run.get('captureTerminal')):
                 self.run['captureTerminal']={'id':uuid.uuid4().hex,'serverIssuedAtMs':server_received_ms}
@@ -665,6 +716,9 @@ class FullClientBridge:
             if (self.pending and ack is not None and ack['id'] == self.pending['id']
                     and self.pending.get('sent')):
                 enough_time = now-self.pending['sentAt'] >= self.pending['durationMs']/1000 - 0.001
+                self.pending['lastMatchingAck']={'receivedAt':now,'receivedAtMs':server_received_ms,
+                    'ok':ack['ok'],'validFrame':valid_frame,'enoughTime':enough_time,
+                    'beforeDeadline':now<self.pending['deadline']}
                 self._input_failure(ack,valid_frame,enough_time,now,server_received_ms,client)
                 if now < self.pending['deadline']:
                     self.pending['ack'] = {'id':ack['id'], 'ok':ack['ok'] and valid_frame and enough_time}
@@ -682,6 +736,7 @@ class FullClientBridge:
                     and self.pending['deadline']-dispatch_now >= self.pending['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS):
                 self.pending['sent'] = True
                 self.pending['sentAt'] = dispatch_now
+                self.pending['dispatchPoll']=dict(self.pending['lastPoll']) if self.pending.get('lastPoll') else None
                 command = {k: self.pending[k] for k in ('id', 'keys', 'durationMs')}
                 command['runId'] = self.run.get('id')
                 # The browser subtracts the full request round trip, requiring
@@ -705,17 +760,27 @@ class FullClientBridge:
                 SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL) else {}))
             if self.pending:
                 raise ValueError('Another input is in flight')
+            requested=time.monotonic()
             pending = {'id': uuid.uuid4().hex, 'keys': action['keys'], 'durationMs': action['durationMs'],
-                       'runId':run_id,
-                       'deadline': time.monotonic() + min(timeout, 3)}
+                       'runId':run_id,'client':self.run.get('client'),
+                       'requestedAt':requested,'requestedAtMs':round(time.time()*1000),
+                       'deadline': requested + min(timeout, 3)}
+            if (self.last_input_poll and self.last_input_poll['runId']==run_id
+                    and self.last_input_poll['client']==pending['client']):
+                pending['lastPoll']=dict(self.last_input_poll)
+                pending['requestPoll']=dict(self.last_input_poll)
             if input_deadline is not None:
                 pending['deadline']=min(pending['deadline'],input_deadline)
             self.pending = pending
             try:
                 while 'ack' not in pending:
                     self._check_cancelled(run_id)
-                    left = pending['deadline'] - time.monotonic()
+                    now=time.monotonic()
+                    left = pending['deadline'] - now
                     if left <= 0:
+                        try:diagnostic=self._input_timeout(pending,now)
+                        except (OSError,ValueError):diagnostic='write_failed'
+                        if self.run.get('id')==run_id:self.run['inputTimeoutDiagnosticStatus']=diagnostic
                         raise TimeoutError('Client did not acknowledge keyboard input')
                     self.lock.wait(left)
                 ack = pending['ack']
