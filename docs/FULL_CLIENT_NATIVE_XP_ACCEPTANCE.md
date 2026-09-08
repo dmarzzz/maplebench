@@ -133,3 +133,20 @@ native fixture, pilot ID, runtime receipt or model protocol changes merely by
 integrating this library. Synthetic tests prove the executor's failure behavior
 and receipt integration; they do not prove actual native XP production or
 capture reliability.
+
+
+### Deferred control artifact collection
+
+The one-second coverage callback reads current owned status and bounded file
+metadata only. Once the exact native run reports saved terminal capture, the
+executor latches file identities and sizes before the existing 45-second
+capture-settled deadline. Later samples require that status and those identities
+to remain unchanged. Missing files, symlinks, changed identities or a regression
+to pending capture fail the check; no successful coverage is invented.
+
+Original control JSON, program and video bytes are transferred and hashed only
+after full coverage and verified ordinary logout, under the same maintenance
+owner. The executor compares all latched identities before and after transfer,
+then runs the unchanged original control, capture and XP verifiers. This avoids
+reading/copying a video of up to96MiB inside the one-second sampling interval.
+It does not relax cadence, add retries or establish actual native XP acceptance.

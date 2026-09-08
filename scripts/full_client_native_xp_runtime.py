@@ -7,6 +7,7 @@ authority, activates a JAR, creates an API claim, or resumes native control.
 import hashlib
 import importlib
 import os
+import stat
 from pathlib import Path
 import time
 
@@ -23,6 +24,10 @@ LOGIN_SECONDS = 60
 START_SECONDS = 90
 MIN_EXECUTION_SECONDS = 720
 WINDOW_COLLECTION_SECONDS = 345
+CONTROL_FILES = {'native_result': 'result.json', 'native_program': 'program.js',
+    'controller': 'controller.json', 'capture': 'capture.json', 'capture_ready': 'capture-ready.json',
+    'capture_clock': 'capture-clock.json', 'capture_terminal': 'capture-terminal.json',
+    'recording': 'recording.json'}
 CLASS_JOBS = {'hero': 112, 'bowmaster': 312, 'ice_lightning_arch_mage': 222}
 FROZEN_MODULES = ('full_client_native_xp_runtime', 'full_client_native_xp_acceptance',
     'full_client_xp_windows', 'full_client_native', 'full_client_runtime', 'full_client_publish',
@@ -32,6 +37,7 @@ FAILURE_CODES = frozenset('''native_xp_baseline_mismatch native_xp_candidate_man
 native_xp_executor_sources_not_frozen native_xp_account_not_online native_xp_renderer_or_scene_not_fresh
 native_xp_fresh_scene_required native_xp_control_failed_or_identity_changed native_xp_control_exceeded_recipe
 native_xp_short_capture_not_saved native_xp_api_evidence_forbidden native_xp_video_changed
+native_xp_terminal_evidence_changed native_xp_deferred_collection_requires_offline_coverage
 native_xp_window_time_insufficient native_xp_execution_time_insufficient native_xp_preflight_time_insufficient
 native_xp_header_invalid native_xp_save_log_failed native_xp_short_video_bound
 native_xp_restore_unconfirmed native_xp_initial_restore_not_started native_xp_cleanup_unconfirmed'''.split())
@@ -212,9 +218,15 @@ class NativeXpRuntime(CosmicRuntime):
             elapsed = row['wall_ms'] - self.state['window']['start_at_ms']
             control_limit = acceptance.MAX_CONTROL_START_DELAY_MS + self.native['wall_seconds'] * 1000
             require(elapsed < control_limit or idle, 'native_xp_control_exceeded_recipe')
-            if stopped_capture(status) and 'native_result' not in self.state['artifacts']:
-                self.collect_short_control()
-            require(elapsed < 45000 or 'native_result' in self.state['artifacts'],
+            if stopped_capture(status) and 'short_control_terminal' not in self.state:
+                require(elapsed <= 45000, 'native_xp_short_capture_not_saved')
+                self.state['short_control_terminal'] = self.control_file_stamps()
+                self.persist()
+            if 'short_control_terminal' in self.state:
+                require(stopped_capture(status), 'native_xp_short_capture_not_saved')
+                require(self.control_file_stamps() == self.state['short_control_terminal'],
+                        'native_xp_terminal_evidence_changed')
+            require(elapsed < 45000 or 'short_control_terminal' in self.state,
                     'native_xp_short_capture_not_saved')
         return row
 
@@ -255,19 +267,40 @@ class NativeXpRuntime(CosmicRuntime):
         self.state['coverage_verified'] = True
         self.persist()
 
-    def collect_short_control(self):
-        """Copy the original short capture while staying connected; probe after logout."""
+    def control_file_stamps(self):
+        """Bounded metadata-only terminal latch; never read video during coverage."""
         self.ownership()
-        self.intent('collect_native_control')
         source = Path(self.config['relay_output_root']) / self.run_id
-        require(not any((source / name).exists() for name in
+        require(source.resolve(strict=True) == source and source.is_dir(),
+                'native_xp_terminal_evidence_changed')
+        require(not any(os.path.lexists(source / name) for name in
                         ('api-request.json', 'api-response.json', 'adaptive.json', 'cycles')),
                 'native_xp_api_evidence_forbidden')
+        directory_info = source.lstat()
+        stamps = {'directory': [directory_info.st_dev, directory_info.st_ino,
+            directory_info.st_mode, directory_info.st_uid, directory_info.st_gid]}
+        for name in (*CONTROL_FILES.values(), 'video.webm'):
+            info = (source / name).lstat()
+            maximum = 96 * 1024 * 1024 if name == 'video.webm' else JSON_LIMIT
+            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                    and 0 < info.st_size <= maximum, 'native_xp_terminal_evidence_changed')
+            stamps[name] = [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                           info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+        return stamps
+
+    def collect_short_control(self):
+        """Transfer and hash original artifacts only after coverage and logout."""
+        self.ownership()
+        require(self.state.get('coverage_verified') is True and self.account_state() == 0,
+                'native_xp_deferred_collection_requires_offline_coverage')
+        self.disconnect()  # Read-only verification of the durable ordinary logout receipt.
+        terminal = self.state.get('short_control_terminal')
+        require(terminal is not None and self.control_file_stamps() == terminal,
+                'native_xp_terminal_evidence_changed')
+        self.intent('collect_native_control')
+        source = Path(self.config['relay_output_root']) / self.run_id
         arts = self.state['artifacts']
-        names = {'native_result': 'result.json', 'native_program': 'program.js', 'controller': 'controller.json',
-                 'capture': 'capture.json', 'capture_ready': 'capture-ready.json',
-                 'capture_clock': 'capture-clock.json', 'capture_terminal': 'capture-terminal.json',
-                 'recording': 'recording.json'}
+        names = CONTROL_FILES
         for key, name in names.items():
             arts[key] = self.artifact('control-' + name, raw=self.read_stable(source / name, JSON_LIMIT))
         result = parse_json(read_artifact_bytes(self.directory, arts['native_result'], 'native_result'))
@@ -280,12 +313,14 @@ class NativeXpRuntime(CosmicRuntime):
         raw = self.read_stable(source / 'video.webm', 96 * 1024 * 1024)
         require(hashlib.sha256(raw).hexdigest() == recording['sha256'], 'native_xp_video_changed')
         arts['video'] = self.artifact('native-control.webm', raw=raw)
+        require(self.control_file_stamps() == terminal, 'native_xp_terminal_evidence_changed')
         self.persist()
 
     def collect_final(self):
         self.safe_boundary()
         require(self.state.get('coverage_verified') is True, 'native_xp_full_coverage_required')
         self.disconnect()
+        self.collect_short_control()
         self.intent('collect_native_xp')
         arts = self.state['artifacts']
         final = self.host.snapshot(self.config['mysql'], self.run_id)
