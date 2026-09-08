@@ -1,6 +1,11 @@
 
 ## Retain earlier pilot cohorts while a replacement is incomplete
 
+Current cohorts support Hero, Bowmaster, Ice/Lightning Arch Mage and Night Lord,
+with up to four explicitly selected class packages. This enables a sixteen-result
+matrix; listing a class does not establish its native qualification or scores.
+The existing total file, byte and per-recording limits still apply.
+
 Request schema 2 adds `previous_cohorts`, a list of at most three explicit
 `{package, content_sha256}` selections. `cohorts` still contains at most one active
 cohort per class and all active cohorts must share dashboard assets. Previous

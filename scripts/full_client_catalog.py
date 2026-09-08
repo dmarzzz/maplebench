@@ -26,7 +26,7 @@ from full_client_trial import publish_attempt
 from full_client_vercel import checked_payload, MAX_PAYLOAD, PUBLIC_NAME
 from maple_agent import MODELS
 
-CLASSES={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage'}
+CLASSES={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage','night_lord':'Night Lord'}
 ROW_FIELDS=set(project_attempt(Reader(),'0'*32,None,None,{},None,0,'/recordings/'))|{
     'controller_status','live','renderer_fresh','protocol_id','adaptive','sdk_calls','research','recording_publication'}
 SNAPSHOT_FIELDS={'schema_version','generated_at_ms','source','verification','live_status_available','ranked',
@@ -194,7 +194,7 @@ def compose(request,output_root):
         and ((request['schema_version']==1 and set(request)-{'annotations'}=={'schema_version','cohorts','primary_content_sha256','archive'})
              or (request['schema_version']==2 and set(request)-{'annotations'}=={'schema_version','cohorts','primary_content_sha256','archive','previous_cohorts'}))
         and isinstance(request['cohorts'],list)
-        and 1<=len(request['cohorts'])<=3,'catalog_request_schema')
+        and 1<=len(request['cohorts'])<=4,'catalog_request_schema')
     packages=[]
     for item in request['cohorts']:
         require(isinstance(item,dict) and set(item)=={'package','content_sha256'},'catalog_package_selection')

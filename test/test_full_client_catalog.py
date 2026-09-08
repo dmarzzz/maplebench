@@ -73,7 +73,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(snapshot['attempts']),12);self.assertEqual(snapshot['catalog']['planned'],12)
         self.assertEqual(snapshot['catalog']['verified'],3);self.assertEqual(snapshot['catalog']['complete_cohorts'],0)
         self.assertEqual(len(snapshot['research_matrix']['columns']),3)
-        self.assertEqual({c['class_id'] for c in snapshot['research_matrix']['columns']},set(catalog.CLASSES))
+        self.assertEqual({c['class_id'] for c in snapshot['research_matrix']['columns']},{'hero','bowmaster','ice_lightning_arch_mage'})
         for row in snapshot['research_matrix']['models']:
             self.assertEqual([c['planned'] for c in row['cells']],[1,1,1])
         for p in packages:
@@ -87,6 +87,24 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual([r['persisted_xp'] for r in recorded],[-50,-50,-50])
         self.assertFalse(value['deployment_performed']);self.assertEqual(value['api_requests'],0)
         again,_=self.compose(packages);self.assertEqual(again['catalog_sha256'],value['catalog_sha256'])
+
+    def test_four_classes_keep_sixteen_results_and_all_recording_bytes(self):
+        packages=[self.package(self.fixture(name,10+i*10),count=4)
+                  for i,name in enumerate(catalog.CLASSES)]
+        value,snapshot=self.compose(packages)
+        self.assertEqual(snapshot['catalog']['planned'],16)
+        self.assertEqual(snapshot['catalog']['verified'],16)
+        self.assertEqual(snapshot['catalog']['complete_cohorts'],4)
+        self.assertEqual({c['class_id'] for c in snapshot['research_matrix']['columns']},set(catalog.CLASSES))
+        self.assertEqual(len([r for r in snapshot['attempts'] if r['recording']]),16)
+        for row in snapshot['research_matrix']['models']:
+            self.assertEqual([c['planned'] for c in row['cells']],[1,1,1,1])
+        for p in packages:
+            manifest=publication.verify_package(Path(p['package']),p['content_sha256'])
+            checked_payload(Path(value['site']),Path(value['inventory']),value['inventory_sha256'],manifest)
+        request=self.request(packages+[packages[0]])
+        with self.assertRaisesRegex(ValueError,'catalog_request_schema'):
+            catalog.compose(request,self.out)
 
     def test_each_new_run_updates_root_without_hiding_unstarted_models(self):
         f=self.fixture();first=self.package(f);one,a=self.compose([first])
