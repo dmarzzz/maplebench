@@ -14,4 +14,11 @@ inline bool has_ranged_projectile(bool inventory_projectile, bool bow_weapon,
                                   bool soul_arrow) {
     return inventory_projectile || (bow_weapon && soul_arrow);
 }
+// Default NX arrow visuals when Soul Arrow replaces an absent inventory item.
+// Physical items always retain their own animation; this never creates ammo.
+inline int32_t projectile_visual(int32_t inventory_id, bool bow, bool crossbow,
+                                  bool soul_arrow) {
+    if (inventory_id || !soul_arrow) return inventory_id;
+    return bow ? 2060000 : (crossbow ? 2061000 : 0);
+}
 }

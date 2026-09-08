@@ -30,6 +30,20 @@
                  attacktype = degenerate ? Attack::CLOSE : Attack::RANGED;
                  break;
              case Weapon::WAND:
+@@ -352,7 +357,12 @@
+         attack.accuracy    = stats.get_total(Equipstat::ACC);
+         attack.playerlevel = stats.get_stat(Maplestat::LEVEL);
+         attack.range       = stats.get_range();
+-        attack.bullet      = inventory.get_bulletid();
++        // This ID selects only the local projectile animation; packet encoding
++        // retains its original ammunition fields and server validation.
++        attack.bullet      = projectile_visual(inventory.get_bulletid(),
++            get_weapontype() == Weapon::BOW,
++            get_weapontype() == Weapon::CROSSBOW,
++            has_buff(Buffstat::SOULARROW) && attacktype == Attack::RANGED);
+         attack.origin      = get_position();
+         attack.toleft      = !flip;
+         attack.speed       = static_cast<uint8_t>(get_integer_attackspeed());
 --- a/src/client/Gameplay/Combat/Skill.cpp
 +++ b/src/client/Gameplay/Combat/Skill.cpp
 @@ -296,6 +296,10 @@

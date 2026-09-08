@@ -65,7 +65,10 @@ instead of incorrectly selecting a reduced-damage close attack when the buff
 substitutes for physical arrows. Claws and guns receive no exemption.
 
 No arrows are inserted into inventory and no MP, job, timing or server validation
-is bypassed. Projectile visuals with no physical arrow and Hurricane's existing
-packet-specific layout still need actual native verification. This patch does
+is bypassed. With Soul Arrow and no inventory arrow, ranged attacks select the
+existing NX default bow/crossbow projectile animation; physical-arrow animations
+remain unchanged. This visual ID is not serialized as packet ammunition.
+Projectile effects and Hurricane's packet-specific layout still need actual
+native verification. This patch does
 not change that serializer. Keep failed class qualification evidence intact;
 do not infer a valid class benchmark from these focused tests.
