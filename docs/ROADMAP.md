@@ -20,8 +20,8 @@ vision-only benchmark. No hidden grinding policy should make the strategic
 decisions being attributed to the model. The client is a reconstruction connected
 to the emulator; official-client fidelity is not established.
 
-The first parallel deliverables are an isolated cloud worker and a clean
-four-model showcase. The research product is a repeated model-by-task suite.
+An isolated cloud worker and a published four-model cohort are demonstrated.
+The research product is a repeated model-by-task suite.
 The first longer public pilot targets five minutes per model and class,
 with finite predeclared cohorts. One short
 run per model cannot establish the research product.
@@ -30,109 +30,90 @@ run per model cannot establish the research product.
 
 | Area | Demonstrated now | Remaining gap |
 | --- | --- | --- |
-| Gameplay | Actual rendered movement/combat and native inputs | Reliability across an entire unattended experiment |
+| Gameplay | Actual rendered movement/combat, native inputs and one completed four-model Bow cohort | Repeated unattended completion and faithful class mechanics |
 | Scoring | Frozen offline reset, ordinary logout, committed save evidence and signed persisted XP | Fixed-horizon event cutoff, level transitions and richer metrics |
-| Attribution | Exact requested/returned model, program, action receipts and video hashes | The same standard across a fresh complete group |
-| Public experience | Vercel site and working replay with the opening API wait skipped | Automatic public updates, curated cohort page and clear phases |
-| Comparison | Historical trials from Astra, Sol, Terra and Luna | Fresh complete group on the corrected contract; balanced repetitions |
+| Attribution | Exact requested/returned model, programs, action receipts, video hashes and independent gameplay review across all four Bow results | Retain the same standard on new workers and repeated groups |
+| Public experience | Automatic per-completion updates; current Hero/Bow cohorts; opening wait skipped; old archive retired | Publication within one minute and complete live phase reporting |
+| Comparison | One complete Bow cohort; three accepted Hero results plus one failure | Balanced repetitions and qualified cross-class task coverage |
 | Agent behavior | Repeated model replanning and full five-minute observation horizons | More useful action time within a frozen budget; repeated completion |
-| Task coverage | Accepted full-client Hero hunting fixture | Ranged, magic, navigation and progression fixtures |
-| Operations | Finite coordinator, recovery and lifecycle components have tests and separate live acceptances | Repeated complete groups and composed restoration without ad hoc repair |
+| Task coverage | Hero hunting and discrete Bow ranged effects in this port; Mage damaging-skill check | Continuous Hurricane, Mage multi-entity effects, navigation and progression |
+| Operations | One four-model cohort published by a bounded follower with no gameplay replay | Repeated group completion and independently qualified new workers |
 
 ## Current five-minute pilot evidence
 
-The public site now contains a protocol-separated Hero pilot alongside the
-preserved historical archive. Astra `d5ae529a7b574f399a37e899472bb0a3`
-completed the 300-second horizon with 98 acknowledged actions and **+18,250
-persisted XP**. Sol `565e2442ed754420913490f54243f623` completed the same
-horizon with 128 acknowledged actions and **+27,500 persisted XP**. Both were
-alive at logout, and their hashed recordings are publicly playable from the
-first acknowledged input. These are unranked pilot observations, not repeated
-research estimates or native peak-XP scores.
+The [public site](https://maplebench.vercel.app/) now retains two separate
+current cohorts: three accepted Hero recordings and four accepted Bowmaster
+recordings. They are unranked five-minute pilots on their declared client and
+fixture versions, not repeated research estimates or a cross-class leaderboard.
+All planned outcomes remain visible, including the unscored Hero failure.
 
-Both controllers replanned repeatedly, then exhausted their conservative token
-reservation allowance and observed without issuing inputs for the remainder.
-The complete recording preserves those waits. The UI identifies observation-only
-periods; a five-minute horizon does not mean five minutes of continuous action.
+The R6 Bowmaster plan completed all four entries under one frozen fixture,
+`full-client-adaptive-pilot-v1` and the explicit encoded full-horizon recipe.
+Each received a 300-second wall budget including inference, programs and waits.
+The runtime source was `b8e38f58ce375caca41d07903f3cef21a4fd9cea`; the plan
+fingerprint is `7f57831f59bf5f35d11b04cb5a3b2f69ea066ebbaeeaeacf26ccbfc4fd5f9b71`.
+All four completed ordinary save/cleanup and the cohort reached terminal state.
 
-Terra `33da8a6c16bf468295844e76cf211c6b` failed final recording validation:
-its decoded duration differed from the recorder callback interval by 117ms,
-exceeding the frozen 100ms guard. It was recovered without another model request
-and remains unscored. Luna `62f1ed7539904033812792ae39a26b97` executed ten
-acknowledged actions before browser/display service restarts interrupted its
-controller. Its outer API outcome remains conservatively uncertain. It has no
-accepted score. The group therefore does not constitute four valid results.
+| Model | Attempt | Confirmed responses | Accepted actions | Saved net XP | Alive at logout |
+| --- | --- | ---: | ---: | ---: | --- |
+| gpt-6-astra | `2fa9f2a094dc425c96ef00770f1cf6c1` | 11 | 107 | 0 | Yes |
+| gpt-5.6-sol | `5108ed9d4737408281602fa620259bc4` | 8 | 97 | 0 | Yes |
+| gpt-5.6-terra | `e01d8c5da90949e8bc1c41e86209c0a9` | 9 | 80 | 0 | Yes |
+| gpt-5.6-luna | `888baefdd9b345abbfc0f1341b94be69` | 9 | 94 | 0 | Yes |
 
-The isolated worker passed scripted native acceptance before this cohort:
-72 pixels of vertical jump displacement, physical attack, mapped skill MP
-consumption, monster contact, and +4,500 XP verified again after ordinary logout.
-That acceptance used no evaluated model. Rendering uses Chrome with SwiftShader
-on four dedicated virtual CPUs; the short acceptance sample produced roughly
-ten fresh rendered observations per second.
+These zeros are measured saved gains. They are not inferred from missing
+recordings, replaced with diagnostic client XP, or evidence by themselves of a
+scoring defect. Native review established discrete Hurricane and Arrow Rain
+damage, buffs, MP use and jumping in this port. Continuous Hurricane channeling
+and canonical Bowmaster fidelity remain unaccepted. See the exact scope in
+[native qualification](FULL_CLIENT_NATIVE_ACCEPTANCE.md#hurricane-channel-limitation).
+The model results preserve that limitation. A client repair needs a new version
+and fresh evaluation data.
 
-The replacement explicit-frame recording path passed loaded-game native
-acceptance on September 8. Its 23.024-second check preserved all 188 submitted,
-encoded and decoded frames. Independent video review confirmed a 39-pixel jump,
-a basic sword attack, buffs and visible Brandish damage to monsters. Ordinary
-logout and baseline restoration also passed. This scripted qualification used
-zero model API calls, killed no monster and earned zero persisted XP.
+The bounded publication follower automatically backed up, checked, composed
+and published each completion, then exited after four publications. It made
+zero model requests; gameplay calls above belong to the evaluated trials.
+Completed-journal to verified-public latency was **64.889, 67.084, 85.472 and
+67.232 seconds**, respectively. None met the 60-second target. Deployment-step
+latency alone is not the end-to-end measure.
 
-Earlier checks exposed an encoder backlog from retaining game-canvas frames,
-a mismatch between request and worker timing origins, and capture boundaries
-that included time before the first frame or after the last one. The accepted
-path takes CPU-owned snapshots and anchors media boundaries to actual rendered
-frames, with bounded readiness and shutdown. Strict frame, timestamp and byte
-checks remain enabled; failed historical evidence is not reclassified.
+The final deployment contains **22 public files and seven recordings**. All
+file bytes and all seven video range requests were verified. The 27 paths
+omitted from the previous deployment returned HTTP 404 on the current public
+alias. Older test recordings and prior R2/R4 cohort pages are retired from that
+alias; private originals remain intact. Independent full-video review is a
+separate gate from artifact and delivery checks. All four actual gameplay reviews
+and public playback checks passed. The separate four-video review index is
+`eec457da963946b91ad6ad16bc228f24e37a3271af97d7213406a0720db1fc0f`.
+Immutable automatic receipts are not rewritten to imply that they contained a
+later human review.
 
-The first entry of a fresh four-model Hero plan saved a complete 291-frame
-recording but stopped after one confirmed Astra response and 12 accepted inputs.
-A subsequent keyboard request timed out near the 20-second program boundary;
-its dispatch disposition is uncertain, so the attempt remains unscored. Its
-failure evidence is preserved; original-owner cleanup and permanent cohort
-closeout passed without another API request. The three remaining models were
-not submitted. A reviewed admission fix reserves the full keyboard-request
-timeout before dispatching a new hold. It preserves acknowledgement checks and
-the historical failure. Its cloud acceptance remains separate from local tests.
+The preserved R5 Hero cohort has three accepted results: Astra
+`627d0c5cf8594f798a95de7cec5c0771` earned **+32,000 saved XP** with 101
+accepted actions and ten confirmed responses; Sol
+`06be0ac11162442f849454de436214f5` earned **+18,250** with 93 actions and
+nine responses; Terra `5e514dc88454480fbeb7101712f4523c` earned **+18,250**
+with 83 actions and eight responses. All survived. Independent reviews and
+public playback showed real combat, monster disappearance and matching native
+HUD gains. Their observation-only tails remain labeled in the UI. Luna
+`807e3972b1e643829bda03a47a2201ea` remains an unscored keyboard-receipt
+failure after four confirmed responses and 28 accepted actions. Its original
+failure, recording and ordinary-owner recovery are preserved without replay.
+This Hero group is three accepted results out of four planned attempts.
 
-Replacement five-minute pilots reserve at most 240,000 tokens per model.
-Completion, playback and publication remain separate acceptance gates. The two
-public results above remain under their original protocol and budgets.
-Bowmaster and Ice/Lightning fixtures are prepared; native acceptance and their
-model cohorts remain pending. Native 15-second XP windows have an independently
-built candidate, but are not deployed or represented as completed research runs.
+Earlier R2 recording/browser failures and the R4 program-boundary timeout remain
+historical evidence, not fresh samples or zero performance. Repairs to loaded-game
+encoding, frame timing, input admission, native skill dispatch and publication
+were individually verified; those development iterations are not consecutive
+reliability successes. The current software-rendered client remains a
+reconstruction, not an established official-client equivalent.
 
-The corrected cohort has now published three fresh five-minute Hero results:
-Astra `627d0c5cf8594f798a95de7cec5c0771` earned **+32,000 persisted XP**
-with 101 accepted actions and ten confirmed responses; Sol
-`06be0ac11162442f849454de436214f5` earned **+18,250 persisted XP** with
-93 accepted actions and nine confirmed responses. Both survived. Their original
-recordings independently decoded to all 3,035 and 3,056 submitted frames,
-respectively, and actual public desktop/mobile playback passed. Video review
-confirmed movement, combat, monster disappearance and matching native HUD XP.
-Sol's invalid-hold program error remains in its trace; subsequent programs
-continued without operator repair.
-
-Their final 54.4- and 53.2-second observation-only tails are labeled in the UI.
-The initial Astra publication took 159.538 seconds from completed attempt to
-public verification; the deployment step itself took 36.490 seconds. The
-end-to-end result does not meet the one-minute publication target.
-
-Terra `5e514dc88454480fbeb7101712f4523c` earned **+18,250 persisted XP**,
-with 83 accepted actions, eight confirmed responses and survival at logout.
-All 3,079 rendered, submitted, encoded and decoded frames agree. Independent
-review shows attacks, monster death and disappearance, native XP gains and rope
-climbing. Public playback advances normally from its first-input cue. Its final
-70 seconds are explicitly labeled observation-only.
-
-Luna `807e3972b1e643829bda03a47a2201ea` failed with an uncertain keyboard
-receipt after four confirmed responses and 28 accepted actions. This occurred
-12.5 seconds into a program, so the earlier program-boundary explanation does
-not establish this failure's cause. Its healthy 879-frame recording and original
-failure receipts are preserved. No browser/display restart or out-of-memory
-failure was found; missing dispatch and poll timing prevents a precise transport
-diagnosis. Original-owner cleanup and permanent closeout completed without
-another API call. The final cohort has three accepted results and one unscored
-failure. The four-model acceptance and archive retirement gates remain open.
+Mage now has a reviewed native damaging-skill check: Chain Lightning damage,
+buffs, mana use, jumping and directional Teleport. That does not establish
+multi-entity area behavior, balanced difficulty or a completed model cohort.
+Native 15-second XP windows have source and tests, but their candidate runtime
+has not passed the required real positive-event acceptance or been used for
+these public results. Signed saved XP must not be presented as native peak rate.
 
 ## What RuneBench quality means here
 
@@ -209,7 +190,7 @@ Already verified foundations:
 - [x] A successful run has attributable, saved and inspected gameplay evidence.
 - [x] A public Vercel page serves the verified Astra recording.
 
-There are **19 remaining release deliverables** below, with five of 24 accepted.
+There are **15 remaining release deliverables** below, with nine of 24 accepted.
 These are acceptance
 counts, not equal effort units or a percentage-complete estimate. Some supporting
 code already exists. Track code-ready, live-accepted and published separately;
@@ -255,7 +236,7 @@ Gate: one independent cloud worker can execute the accepted full-client protocol
 and retain valid evidence without relying on the viewing laptop's renderer.
 Its infrastructure and deployment status are inspectable in agent-devops.
 
-### M2 — A shareable four-model showcase: 1/4
+### M2 — A shareable four-model showcase: 4/4
 
 - [x] **M2.1 Deploy the focused session fix.** A fresh protected release passes
   its focused regressions and live checks; stale game entry cannot reopen the
@@ -264,17 +245,27 @@ Its infrastructure and deployment status are inspectable in agent-devops.
   checks; fresh Astra and Sol trials completed ordinary reset/login/logout and
   recording verification. Their exact model labels and gameplay were checked
   in the original videos and on the public site.
-- [ ] **M2.2 Complete one new four-entry plan.** Astra, Sol, Terra and Luna each
+- [x] **M2.2 Complete one new four-entry plan.** Astra, Sol, Terra and Luna each
   receive the frozen fixture and budgets. All four outcomes have complete
   evidence, and normal services are restored. Valid poor outcomes count; a
   runtime-invalid attempt cannot be silently replaced by a better clip.
-- [ ] **M2.3 Verify all four replays.** Model, score, action timing, full recording
+  Accepted September 8: R6 Bow completed all four exact entries, verified saved
+  XP and recordings, ordinary cleanup and a terminal cohort. Each saved zero
+  XP and survived. This is a scoped port pilot, not canonical Bowmaster fidelity.
+- [x] **M2.3 Verify all four replays.** Model, score, action timing, full recording
   and sampled visible gameplay agree. Label zero-action or incomplete evidence
   accurately; recording delivery itself is verified.
-- [ ] **M2.4 Publish the clean cohort.** Put its four recordings on Vercel and
+  Accepted September 8: all four have verified artifact/recording delivery,
+  independent actual-video review and public playback checks. Visible ranged
+  hits do not imply a kill, positive XP or continuous Hurricane channeling.
+- [x] **M2.4 Publish the clean cohort.** Put its four recordings on Vercel and
   remove the older test recordings from the current site's manifest/deployment.
   Keep old evidence privately. Show the new cohort's attempt accounting and
   stable links; anonymous playback and byte ranges work.
+  Accepted September 8: all four Bow clips are public alongside the three
+  current Hero clips. The final 22 files and seven video ranges passed checks;
+  all 27 omitted historical paths returned 404 on the current alias. Private
+  originals are preserved. This does not close the separate visual-review gate.
 
 Gate: a reader can open one link, understand each of four actual outcomes, and
 watch the matching run. It is labeled a preliminary showcase, with no ranking.
@@ -284,14 +275,20 @@ watch the matching run. It is labeled a preliminary showcase, with no ranking.
 - [ ] **M3.1 Prove repeated group completion.** Three consecutive four-model
   groups on one frozen release finish and restore normally without ad hoc
   repair between models. M2 may count as the first; valid zeros are acceptable.
+  R6 Bow is one complete group. Earlier failed groups and repaired releases
+  do not supply the other two consecutive same-release successes.
 - [ ] **M3.2 Prove failure containment.** A separately declared interruption
   demonstrates cleanup, honest unknown/failed evidence and safe handling of only
   future unsubmitted entries. No uncertain API request is replayed. Deploy the
   existing composed lifecycle only after its needed recovery cases pass.
 - [ ] **M3.3 Publish after each completed run.** One idempotent, bounded pipeline
   projects checked evidence, uploads the clip and updates Vercel. Normal publication
-  completes within 60 seconds of validated artifacts being ready; failures show
+  completes within 60 seconds of the completed attempt journal; failures show
   a publishing state and a resumable publication job, without another model run.
+  Record validated-package-to-public time separately from this end-to-end clock.
+  Partial: R6 produced four automatic updates without model replay. Their
+  64.889–85.472-second end-to-end times missed the target; the deployed pipeline
+  is demonstrated, but this acceptance item remains open.
 - [ ] **M3.4 Expose operational state.** The site distinguishes queued, preparing,
   model planning, acting, saving, publishing, complete, invalid and stale. Measure
   phase durations and failed-attempt rate. A stale browser or expired service is
@@ -323,12 +320,22 @@ transition. This short acceptance does not establish an availability SLA.
 Gate: the task measures sustained adaptation, all planned attempts are accounted
 for, and the measurements support an honest per-fixture comparison.
 
-### M5 — Representative class and task coverage: 0/4
+### M5 — Representative class and task coverage: 1/4
 
-- [ ] **M5.1 Accept a ranged fixture.** Candidate: Bowmaster. Prove native ranged
+- [x] **M5.1 Accept a ranged fixture.** Candidate: Bowmaster. Prove native ranged
   hits, positioning and resource/ammunition behavior from a frozen baseline.
+  Accepted September 8 for the declared port: native-v10 showed a 64-pixel jump,
+  Soul Arrow/Sharp Eyes with MP cost, discrete Hurricane damage before basic
+  attack, and Arrow Rain effects/damage. Capture, ordinary save and exact
+  baseline restoration passed. Saved XP was zero; no kill or player-contact
+  damage was established. Continuous Hurricane and canonical class fidelity
+  remain open and require a new client version and fresh qualification.
 - [ ] **M5.2 Accept a magic fixture.** Candidate: Ice/Lightning Arch Mage. Prove
   area effects, affected entities and mana use from a frozen baseline.
+  Partial: native-v10 confirms Chain Lightning damage, mana use, buffs, jumping
+  and directional Teleport. Multiple affected entities and area behavior remain
+  unverified. Lower observed Mage damage is a fixture property to investigate,
+  not evidence of a model difference or equivalent task difficulty.
 - [ ] **M5.3 Accept two task families across the three classes.** Sustained
   hunting and navigation/objective completion produce six initial fixtures.
   Calibrate difficulty and starting scenes with separately labeled human or
@@ -370,10 +377,15 @@ optional until normalization is defensible.
 
 ## Execution discipline and sequencing
 
-The immediate dependency chain is **(M1 in parallel with M2) → M3 → M4 → M5 → M6**. Small independent
-work, such as UI design or class reference preparation, can proceed in parallel.
-Shared-host tests and gameplay remain serialized. Existing passing tests are
-reused; new focused tests address actual changes or observed failures.
+The next work is to qualify each new isolated worker and run a separately
+declared Mage/Bow/Hero matrix under the
+[worker and class admission requirements](CLASS_MATRIX_ADMISSION.md). New worker
+provisioning is complete for two additional workers; bootstrap and runtime
+qualification remain in progress. Provisioning alone closes no new runtime gate.
+Independent workers may run admitted groups in parallel, with one world/browser
+and one active owner per worker. Shared-host tests and gameplay remain serialized.
+M3 reliability, M4 measurement, M5 breadth and M6 research release remain separate
+acceptances. Existing passing tests are reused; focused checks address changes.
 
 Do not start new framework work unless it clears the next acceptance gate.
 Finish a working slice, deploy that exact slice, exercise it, then publish its
@@ -381,7 +393,7 @@ evidence. Code-ready is not live-accepted; local-gallery-ready is not public.
 The operator roadmap should stop accumulating one-off release procedures once
 the required group/lifecycle path is accepted.
 
-The current user-directed M2 replacement pilot uses four five-minute adaptive
+The accepted R6 port pilot used four five-minute adaptive
 trials: at most 12 API requests and 240,000 aggregate tokens per trial, or
 48 requests and 960,000 tokens across the group. The earlier two published
 results retain their original 120,000-token per-trial reservation cap. Model latency counts against each wall budget.
@@ -389,10 +401,11 @@ These are ceilings, not predicted usage. Further repetitions and class groups
 require separate finite plans; they do not inherit an unlimited queue. Record actual cost and useful gameplay
 per wall hour. Extra credits do not resolve browser or collection defects.
 
-There is no defensible calendar completion date yet. Establish actual batch
+There is no defensible calendar completion date for the full research product yet. Establish actual batch
 throughput and interruption rate at M3, then estimate M4–M6 from measured
-throughput and the declared experiment sizes. A four-model showcase is the next
-delivery; the full benchmark is several independently verifiable releases away.
+throughput and the declared experiment sizes. The four-model cohort is now
+published; repeated reliability, class fidelity and authoritative research
+scoring remain independently verifiable releases away.
 
 Defer party quests, support-class ranking, additional class families, cross-provider
 expansion and training/RL integrations until this core suite works. Bishop and
