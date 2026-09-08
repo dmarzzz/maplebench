@@ -18,6 +18,7 @@ from full_client_score import (EvidenceError, read_artifact_bytes,
                                read_json_artifact, same_json, verified_artifact)
 from full_client_trial import STATUS_FIELDS, validate_spec
 import full_client_xp_windows as windows
+import full_client_capture as capture_contract
 
 PROTOCOL = 'full-client-native-xp-publication-v1'
 VERIFIED = 'native_window_runner_receipts_rechecked'
@@ -58,7 +59,8 @@ def verify_attempt(root, context):
 
     A complete projection is still unranked and publication-ineligible until the
     separate native-runtime/baseline acceptance milestone is actually satisfied.
-    This entry point accepts only the original capture contract in this release.
+    Capture policy is selected only from the frozen adaptive scenario, never
+    inferred from decoded duration or supplied by a mutable publication option.
     """
     validate_context(context)
     root = Path(root)
@@ -153,7 +155,7 @@ def verify_attempt(root, context):
     _verify_settlement_policy(enclosing | {'video': recording}, root, evidence, scenario)
     video_path = verified_artifact(root, refs['video'], 'video', maximum=MAX_VIDEO)
     probe = _probe_video(video_path, refs['video']['sha256'], maximum_ms=335000)
-    require(abs(probe['duration_ms'] - recording['duration_ms']) <= 100, 'original_capture_duration_mismatch')
+    capture_contract.verify_video_duration(probe, recording, protocol.get('capture_duration_policy'))
     capture = read_json_artifact(root, refs, 'capture')
     require(capture['first_frame_wall_ms'] + measured['clock_offset_ms']['upper'] <= manifest['window']['start_at_ms'] + 100
             and capture['last_frame_wall_ms'] + measured['clock_offset_ms']['lower'] >= manifest['window']['deadline_at_ms'] - 100,
@@ -184,6 +186,8 @@ def verify_attempt(root, context):
                 'scorer_sha256': scorer_hash, 'publication_adapter_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 'experience_table_sha256': score['experience_table_sha256'],
                 'native_server_jar_sha256': runtime['server_jar']['sha256'],
+                'capture_duration_policy': protocol.get('capture_duration_policy'),
+                'capture_verifier_sha256': hashlib.sha256(Path(capture_contract.__file__).read_bytes()).hexdigest(),
                 'journal_sha256': context['journal']['sha256'], 'backend_sha256': context['backend']['sha256'],
                 'artifact_sha256': {name: refs[name]['sha256'] for name in
                     ('xp_manifest', 'xp_ledger', 'save', 'native_log', 'initial_db', 'final_db', 'session',

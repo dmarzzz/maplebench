@@ -56,10 +56,15 @@ losses. A complete native save must cover the full deadline.
 
 The original capture handshake, terminal receipt, post-render coverage, exact
 model overlay, actual decoded video, and frozen upload/logout settlement policy
-are also required. This branch retains its original 100 ms decoded-duration
-contract. It cannot retroactively accept historical Terra capture failures or
-silently opt into a later capture policy. Integrating a newer capture contract
-requires its explicitly frozen verifier; this adapter does not invent one.
+are also required. With no frozen `capture_duration_policy`, the original 100 ms
+decoded-duration contract remains mandatory. An explicitly frozen
+`post-render-frame-envelope-v1` policy instead uses the shared runtime/publication
+verifier: schema-2 raw monotonic offsets, bounded first/last-frame gaps, bounded
+wall drift, matching frame counts and decoded presentation endpoints. The policy
+comes only from the verified adaptive scenario, not a publication option or a
+recording that happens to fail the old tolerance. Historical Terra evidence lacks
+these frozen schema-2 receipts and remains ineligible. The projection records the
+selected policy and capture-verifier source hash in its provenance.
 
 ## Public metrics and provenance
 

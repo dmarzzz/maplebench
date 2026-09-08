@@ -13,7 +13,7 @@ import full_client_xp_windows as windows
 import full_client_adaptive as adaptive
 from full_client_adaptive_publication import verified_adaptive_score
 from full_client_dashboard import Reader
-from full_client_capture import capture_receipt
+from full_client_capture import capture_receipt, CAPTURE_DURATION_POLICY
 from full_client_publish import SETTLEMENT_POLICY
 from full_client_score import EvidenceError
 from full_client_docker_fixture import local_binding
@@ -39,9 +39,11 @@ class NativePublicationTests(unittest.TestCase):
         ref = self.h.raw(name + suffix, content); self.refs[name] = ref
         return ref
 
-    def make(self, *, progression=False, final_level=180, final_exp=4500, initial_exp=0, normalization=None, transitions=None):
+    def make(self, *, progression=False, final_level=180, final_exp=4500, initial_exp=0, normalization=None, transitions=None, frame_policy=False):
         self.h = Harness(self.root, calls=12)
         self.h.p['horizon_policy'] = copy.deepcopy(adaptive.FULL_HORIZON_POLICY)
+        if frame_policy:
+            self.h.p['capture_duration_policy'] = copy.deepcopy(CAPTURE_DURATION_POLICY)
         ordinary_observation = self.h.observation
         def initial_observation():
             value = ordinary_observation(); value['character']['exp'] = initial_exp
@@ -109,13 +111,17 @@ class NativePublicationTests(unittest.TestCase):
             'rendered_frames': 9000, 'max_frame_gap_ms': 34, 'hidden': False, 'errors': 0,
             'relay_lost': False, 'interrupted': False, 'clock': clock | {'client_received_ms': start},
             'terminal_token': terminal['id']}
+        if frame_policy:
+            capture.update(schema_version=2, capture_duration_policy=copy.deepcopy(CAPTURE_DURATION_POLICY),
+                first_frame_offset_ms=109, last_frame_offset_ms=capture['duration_ms'] - 96,
+                first_frame_wall_ms=start + 109, last_frame_wall_ms=end + 4, max_frame_gap_ms=215)
         for name, value in [('capture', capture), ('capture_clock', clock), ('capture_ready', ready), ('capture_terminal', terminal)]:
             self.save(name, value)
         recording = {'status': 'completed', 'sha256': self.refs['video']['sha256'],
             'capture_sha256': self.refs['capture']['sha256'],
             'overlay': {'controller_id': self.ident, 'mode': 'api', 'model': self.model},
             **capture_receipt(capture, {'id': self.ident, 'client': 'synthetic-browser',
-                'startedAtMs': start, 'protocol': adaptive.PROTOCOL}, ready, clock, terminal)}
+                'startedAtMs': start, 'protocol': adaptive.PROTOCOL, 'adaptiveProtocol': self.h.p}, ready, clock, terminal)}
         self.save('recording', recording)
         names = {'native_save': 'save', 'baseline_sql': 'baseline', 'controller_result': 'result'}
         self.manifest = copy.deepcopy(self.f.manifest)
@@ -138,6 +144,10 @@ class NativePublicationTests(unittest.TestCase):
             'scorer_sha256': hashlib.sha256(Path(windows.__file__).read_bytes()).hexdigest()}
         self.repin()
         self.probe = {'duration_ms': recording['duration_ms'], 'width': 1024, 'height': 768, 'frames': 9000}
+        if frame_policy:
+            extent = recording['duration_ms'] - 117.265
+            self.probe.update(duration_ms=extent, presentation_span_ms=extent - 1,
+                presentation_extent_ms=extent, last_packet_duration_ms=1, frames=9001)
 
     def repin(self):
         self.context['journal'] = self.h.save('journal.json', self.journal)
@@ -228,6 +238,46 @@ class NativePublicationTests(unittest.TestCase):
                              (self.journal, 'charged_usage', {'api_requests': 0, 'total_tokens': 0})):
             old = copy.deepcopy(obj[key]); obj[key] = bad; self.repin(); self.assertUnknown()
             obj[key] = old; self.repin()
+
+    def test_explicit_postrender_policy_uses_frame_endpoints_with_native_windows(self):
+        self.make(frame_policy=True)
+        value = self.project(strict=True)
+        self.assertEqual(value['authoritative_peak_xp_per_minute'], 18000)
+        self.assertEqual(value['provenance']['capture_duration_policy'], CAPTURE_DURATION_POLICY)
+        self.assertAlmostEqual(self.read('recording')['duration_ms'] - value['recording']['duration_ms'], 117.265)
+        self.assertEqual(value['complete_windows'], 20)
+
+    def test_progression_and_capture_optins_compose_without_changing_legacy_prompt(self):
+        self.make(progression=True, final_level=181, final_exp=0, frame_policy=True)
+        value = self.project(strict=True)
+        self.assertEqual(value['final_level'], 181)
+        self.assertEqual(value['authoritative_peak_xp_per_minute'], 4000000000)
+        plain = copy.deepcopy(self.h.p); plain.pop('capture_duration_policy')
+        self.assertEqual(adaptive.prompt(plain), adaptive.prompt(self.h.p))
+
+    def test_forged_frame_count_span_or_tail_cannot_use_optin_allowance(self):
+        self.make(frame_policy=True)
+        original = copy.deepcopy(self.probe)
+        for change in ({'frames': 9002}, {'presentation_span_ms': 300199},
+                       {'last_packet_duration_ms': 251}, {'presentation_extent_ms': 335001},
+                       {'presentation_span_ms': 299000}):
+            self.probe = original | change; self.assertUnknown()
+
+    def test_raw_schema_or_undeclared_policy_cannot_be_inferred_from_video(self):
+        self.make(frame_policy=True)
+        capture = self.read('capture'); capture['schema_version'] = 1
+        self.save('capture', capture); self.repin(); self.assertUnknown()
+        self.make()
+        recording = self.read('recording'); recording['capture_duration_policy'] = copy.deepcopy(CAPTURE_DURATION_POLICY)
+        self.save('recording', recording); self.repin(); self.assertUnknown()
+
+    def test_recording_policy_or_monotonic_endpoint_corruption_stays_unknown(self):
+        self.make(frame_policy=True)
+        recording = self.read('recording'); recording['first_frame_offset_ms'] += 1
+        self.save('recording', recording); self.repin(); self.assertUnknown()
+        self.make(frame_policy=True)
+        recording = self.read('recording'); recording['capture_duration_policy']['max_endpoint_gap_ms'] = 500
+        self.save('recording', recording); self.repin(); self.assertUnknown()
 
     def test_corrupt_recording_or_old_duration_tolerance_stays_unknown(self):
         p = self.root / self.refs['video']['path']; raw = p.read_bytes(); p.write_bytes(b'bad')
