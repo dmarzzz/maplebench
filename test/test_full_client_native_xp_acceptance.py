@@ -49,6 +49,57 @@ class NativeEnvelopeTests(unittest.TestCase):
   value=json.loads((self.root/self.arts[name]['path']).read_text());value.update(changes);self.save(name,value)
  def test_separate_zero_model_envelope_accepts_native_transaction_only(self):
   result=verify_bundle(self.manifest,self.root);self.assertTrue(result['native_hook_accepted']);self.assertEqual(result['diagnostic_windows']['complete_windows'],20);self.assertFalse(result['publication_eligible']);self.assertIsNone(result['model'])
+ def control_timing(self,start_delay,duration):
+  origin=self.manifest['window']['start_at_ms'];ended=origin+start_delay+duration
+  actual=json.loads((self.root/self.arts['native_result']['path']).read_text())
+  actual['timeline'].update(program_started_ms=start_delay,program_ended_ms=start_delay+duration)
+  actual['timing'].update(endedAtMs=ended+100,elapsedMs=start_delay+duration+100)
+  self.save('native_result',actual)
+  self.edit('controller_result',started_at_ms=origin+start_delay,ended_at_ms=ended)
+  for row in self.rows:row['controller_idle']=row['sequence']==0 or row['wall_ms']>=ended
+  self.coverage()
+ def test_delayed_control_keeps_original_300_second_window_and_20_scores(self):
+  for start_delay,duration in ((0,30000),(4000,29000),(5000,30000)):
+   self.control_timing(start_delay,duration)
+   with self.subTest(start_delay=start_delay,duration=duration):
+    result=verify_bundle(self.manifest,self.root)
+    self.assertTrue(result['native_hook_accepted'])
+    self.assertEqual(result['diagnostic_windows']['complete_windows'],20)
+    self.assertEqual(self.manifest['window'],{'start_at_ms':1000000,'deadline_at_ms':1300000,'window_ms':15000})
+    self.assertFalse(result['publication_eligible'])
+ def test_start_or_execution_overrun_is_not_allowed_by_35_second_envelope(self):
+  for start_delay,duration in ((5001,29000),(0,30001),(5000,30001)):
+   self.control_timing(start_delay,duration)
+   with self.subTest(start_delay=start_delay,duration=duration),self.assertRaisesRegex(EvidenceError,'fixed_native_control_window_required'):
+    verify_bundle(self.manifest,self.root)
+ def test_idle_claim_during_recorded_control_is_refused_but_pre_submission_idle_is_valid(self):
+  self.control_timing(4000,29000)
+  verify_bundle(self.manifest,self.root)
+  self.rows[32]['controller_idle']=True;self.coverage()
+  with self.assertRaisesRegex(EvidenceError,'native_control_idle_before_completion'):
+   verify_bundle(self.manifest,self.root)
+ def test_idle_deadline_uses_actual_start_not_maximum_arming_allowance(self):
+  for delay,index in ((0,30),(4000,34),(5000,35)):
+   self.control_timing(delay,20000)
+   self.rows[index]['controller_idle']=False;self.coverage()
+   with self.subTest(delay=delay),self.assertRaisesRegex(EvidenceError,'native_control_exceeded_recipe'):
+    verify_bundle(self.manifest,self.root)
+ def test_optional_control_cannot_widen_origin_or_change_owner(self):
+  from full_client_native_xp_acceptance import verify_coverage
+  original=json.loads((self.root/self.arts['controller_result']['path']).read_text())
+  raw=(self.root/self.arts['coverage']['path']).read_bytes()
+  for change in ({'started_at_ms':1005001},{'ended_at_ms':1030001},{'run_id':'c'*32},{'api_calls':True}):
+   with self.subTest(change=change),self.assertRaisesRegex(EvidenceError,'native_coverage_control_mismatch'):
+    verify_coverage(raw,IDENTITY,self.manifest['window'],control=original|change)
+ def test_capture_45_seconds_and_accounting_300_seconds_remain_fixed(self):
+  self.control_timing(5000,30000)
+  self.edit('native_result',timing={'startedAtMs':1000000,'endedAtMs':1045001,'elapsedMs':45001,'apiLatencyMs':0})
+  with self.assertRaisesRegex(EvidenceError,'fixed_native_control_window_required'):
+   verify_bundle(self.manifest,self.root)
+  self.control_timing(5000,30000)
+  self.manifest['window']['deadline_at_ms']+=1000
+  with self.assertRaisesRegex(EvidenceError,'native_control_timing_required'):
+   verify_bundle(self.manifest,self.root)
  def test_api_or_duplicate_control_or_unknown_program_refused(self):
   for change in ({'api_calls':1},{'model':'gpt-6-astra'},{'submission_attempts':2},{'program_sha256':'0'*64}):
    original=(self.root/self.arts['controller_result']['path']).read_bytes();self.edit('controller_result',**change)

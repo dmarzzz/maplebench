@@ -210,7 +210,8 @@ class NativeXpRuntime(CosmicRuntime):
                'renderer_fresh': True, 'controller_idle': idle}
         if not before_submission:
             elapsed = row['wall_ms'] - self.state['window']['start_at_ms']
-            require(elapsed < 30000 or idle, 'native_xp_control_exceeded_recipe')
+            control_limit = acceptance.MAX_CONTROL_START_DELAY_MS + self.native['wall_seconds'] * 1000
+            require(elapsed < control_limit or idle, 'native_xp_control_exceeded_recipe')
             if stopped_capture(status) and 'native_result' not in self.state['artifacts']:
                 self.collect_short_control()
             require(elapsed < 45000 or 'native_result' in self.state['artifacts'],

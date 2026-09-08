@@ -19,6 +19,23 @@ matching native identities and fresh rendering. The passive collector schedules
 against the original absolute monotonic deadline and never retries uncertain
 reads or writes. It accepts no control/action callback.
 
+The accounting origin is the durable sample immediately before submission.
+The original control evidence permits at most **five seconds to start**, followed
+by at most **30 seconds of program execution**. Runtime samples therefore require
+an inactive, completed controller by origin plus 35 seconds. Final verification
+uses the actual recorded program start to tighten that deadline to start plus
+30 seconds, and rejects an idle claim during the recorded program interval.
+The pre-submission sample is exempt from that last check because it precedes the
+run, even if both events share a millisecond timestamp. Completion is allowed
+before the maximum duration; no extra inputs or waits are required.
+
+This corrects a sampler/verifier mismatch that previously rejected valid delayed
+starts at origin plus 30 seconds. It adds no control time: the five-second start
+allowance and 30-second execution bound were already required by the original
+control verifier. The 300-second accounting deadline, 45-second capture ceiling,
+outer operation deadline, cleanup reserve and native recipe bytes stay fixed.
+This source correction is not an acceptance claim for historical evidence.
+
 The envelope independently checks the baseline/reset, offline initial/final
 snapshots, ordinary logout chronology, persistence journal, native XP hash chain,
 phase log and complete terminal save. It then calls the existing signed native
