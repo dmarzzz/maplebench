@@ -993,7 +993,10 @@ class FullClientBridge:
             return self._run_adaptive(run)
         out = self.output / run['id']
         result = None
-        started = time.monotonic()
+        # Offsets use the persisted request's wall origin, not worker entry.
+        # Journal writes/thread scheduling occur between those events; omitting
+        # that interval can falsely place program start before capture-ready.
+        started = time.monotonic() - (time.time() - run['startedAtMs'] / 1000)
         started_ms = run['startedAtMs']
         api_ms = 0
         meta = None
