@@ -23,12 +23,15 @@ counts exclude historical rows. The UI must display a separate history callout
 using this metadata. If the active cohort has no video yet, a verified previous
 video may remain featured.
 
-As soon as **any active cohort has four verified videos and one matching comparison
-group**, both previous cohorts and the legacy archive are omitted from the new
+Once the **primary cohort has four verified videos and one matching comparison
+group**, and every retained historical class has a complete active replacement,
+both previous cohorts and the legacy archive are omitted from the new
 public payload. Original private packages remain unchanged. No retirement occurs
 merely because four scores exist, a previous cohort is complete, or a model failed.
 All output still passes the existing 100-file/512MiB allowlist and payload checks.
-Schema 1 requests retain their previous behavior.
+A complete Bowmaster group cannot retire an incomplete Hero group's previous
+recordings. The finite publisher carries the operator notes through every update
+and allows three retained current classes alongside the class being published.
 
 ## Immutable operator cohort limitations
 

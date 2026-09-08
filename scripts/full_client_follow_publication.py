@@ -178,10 +178,15 @@ def checked_config(value):
             and argv[-4:] == ['--config', exporter['config']['path'], '--config-sha256', exporter['config']['sha256']]
             and exporter['config'] in exporter['command']['dependencies'], 'follow_export_config_changed')
     base = value['catalog']
-    require(isinstance(base, dict) and set(base) == {'cohorts', 'previous_cohorts', 'archive', 'output_root'}
-            and isinstance(base['cohorts'], list) and len(base['cohorts']) <= 2
+    require(isinstance(base, dict) and set(base)-{'annotations'} == {'cohorts', 'previous_cohorts', 'archive', 'output_root'}
+            and isinstance(base['cohorts'], list) and len(base['cohorts']) <= 3
             and isinstance(base['previous_cohorts'], list) and len(base['previous_cohorts']) <= 3,
             'follow_catalog_base_required')
+    require(isinstance(base.get('annotations', []), list) and len(base.get('annotations', [])) <= 6
+            and all(isinstance(note, dict) and set(note) == {'plan_sha256', 'text'}
+                    and isinstance(note['plan_sha256'], str) and SHA.fullmatch(note['plan_sha256'])
+                    and isinstance(note['text'], str) and 1 <= len(note['text']) <= 400
+                    for note in base.get('annotations', [])), 'follow_catalog_annotations_required')
     private_directory(base['output_root'])
     pub = value['publication']
     require(isinstance(pub, dict) and set(pub) == {'project_link', 'public_origin', 'executable'},
@@ -314,6 +319,10 @@ def checked_composition(value, request, output_root):
             'follow_catalog_sources_changed')
     inventory = Reader().json(directory, 'payload-inventory.json', value['inventory_sha256'])
     require(inventory.get('files') == content.get('files'), 'follow_catalog_inventory_changed')
+    notes = [{'plan_sha256': row['plan_sha256'], 'text': row['text']} for row in content.get('annotations', [])]
+    require(sorted(notes, key=lambda row: row['plan_sha256']) ==
+            sorted(request.get('annotations', []), key=lambda row: row['plan_sha256']),
+            'follow_catalog_annotations_changed')
     return value
 
 
@@ -406,6 +415,7 @@ class Follow:
             {'package': primary['package'], 'content_sha256': primary['content_sha256']}],
             'previous_cohorts': base['previous_cohorts'], 'archive': base['archive'],
             'primary_content_sha256': primary['content_sha256']}
+        if base.get('annotations'): request['annotations'] = base['annotations']
         checked_composition(composed, request, base['output_root'])
         proof = publication_proof(primary['package'], primary['content_sha256'], self.config, composed)
         public = catalog.cohort(primary['package'], primary['content_sha256'])['snapshot']['attempts']
@@ -502,6 +512,7 @@ class Follow:
         request = {'schema_version': 2, 'cohorts': [*base['cohorts'], {'package': value['package'], 'content_sha256': value['content_sha256']}],
                    'previous_cohorts': base['previous_cohorts'], 'archive': base['archive'],
                    'primary_content_sha256': value['content_sha256']}
+        if base.get('annotations'): request['annotations'] = base['annotations']
         if request_path.exists(): require(pinned_json(reference(request_path)) == request, 'follow_catalog_request_changed')
         else: save(request_path, request)
         composed_path = folder/'catalog.json'

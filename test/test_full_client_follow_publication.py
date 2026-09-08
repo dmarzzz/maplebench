@@ -177,6 +177,25 @@ class FollowTests(unittest.TestCase):
         self.assertEqual(result['status'], 'unfinished')
         self.assertEqual(len(self.exports), 1); self.assertEqual(self.cli_calls.count('deploy'), 1)
 
+    def test_operator_note_survives_each_publication_and_cannot_be_dropped(self):
+        note={'plan_sha256':self.plan_ref['sha256'],'text':'This declared port fixture excludes unqualified skills.'}
+        self.config['catalog']['annotations']=[note]
+        self.config_ref=self.write('annotated-config.json',self.config)
+        self.schedule=[(1,False),(2,False),(3,False),(4,True)]
+        result=self.runner().run()
+        self.assertEqual(result['status'],'complete')
+        state=follow.pinned_json(follow.reference(Path(result['state'])))
+        for proof_ref in state['publications']:
+            proof=follow.pinned_json(proof_ref); composed=follow.pinned_json(proof['catalog'])
+            site=Path(composed['site']); snapshot=json.loads((site/'results.json').read_bytes())
+            self.assertEqual(snapshot['catalog']['annotations'][0]['text'],note['text'])
+            self.assertIn(note['text'],(site/'index.html').read_text())
+            request=follow.pinned_json(follow.reference(Path(proof_ref['path']).parent/'catalog-request.json'))
+            self.assertEqual(request['annotations'],[note])
+            request.pop('annotations')
+            with self.assertRaisesRegex(ValueError,'follow_catalog_annotations_changed'):
+                follow.checked_composition(composed,request,self.catalogs)
+
     def test_missing_export_reply_never_blindly_reexports_on_resume(self):
         self.drop_export_receipt = True
         first = self.runner().run(); self.assertEqual(first['reason'], 'follow_export_uncertain')

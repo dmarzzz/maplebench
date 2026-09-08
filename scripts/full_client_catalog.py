@@ -217,7 +217,9 @@ def compose(request,output_root):
     packages.sort(key=lambda p:list(CLASSES).index(p['class_id']))
     assets=[{name:p['manifest']['content']['files'][name] for name in ASSETS} for p in packages]
     require(all(same_json(assets[0],value) for value in assets),'catalog_mixed_assets')
-    archive=request['archive'];old=None;old_files={};retired=bool((archive or previous) and any(p['complete'] for p in packages))
+    primary_complete=next(p['complete'] for p in packages if p['manifest']['content_sha256']==primary)
+    replaced_previous=all(any(p['complete'] and p['class_id']==prior['class_id'] for p in packages) for prior in previous)
+    archive=request['archive'];old=None;old_files={};retired=bool((archive or previous) and primary_complete and replaced_previous)
     retained_previous=[] if retired else previous
     if archive is not None:
         require(isinstance(archive,dict) and set(archive)=={'site','inventory','inventory_sha256'},'catalog_archive_inventory_required')

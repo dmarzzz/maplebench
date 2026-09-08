@@ -248,6 +248,19 @@ if __name__=='__main__':unittest.main()
 class PreviousCohortTests(CatalogTests):
     def request2(self,active,previous,archive=None):
         return self.request(active,archive)|{'schema_version':2,'previous_cohorts':previous}
+    def test_complete_bow_cannot_retire_previous_hero_before_hero_replacement_completes(self):
+        old=self.package(self.fixture('hero',100),count=3)
+        bow=self.package(self.fixture('bowmaster',200),count=4)
+        hero_fixture=self.fixture('hero',300)
+        partial=self.package(hero_fixture,count=1)
+        first=catalog.compose(self.request2([bow,partial],[old]),self.out)
+        self.assertFalse(first['archive_retired'])
+        snapshot=json.loads((Path(first['site'])/'results.json').read_bytes())
+        self.assertEqual(snapshot['catalog']['previous_cohorts'][0]['class_id'],'hero')
+        complete=self.package(hero_fixture,count=4)
+        last=catalog.compose(self.request2([bow,complete],[old]),self.out)
+        self.assertTrue(last['archive_retired'])
+        self.assertEqual(json.loads((Path(last['site'])/'results.json').read_bytes())['catalog']['previous_cohorts'],[])
     def test_previous_different_assets_preserved_separate_from_active_matrix(self):
         prior=self.package(self.fixture('hero',100),2)
         prior=self.mutate(prior,lambda site:(site/'style.css').write_text('/* prior pinned UI */'))
