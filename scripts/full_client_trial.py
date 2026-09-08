@@ -467,13 +467,16 @@ class TrialRunner:
         validate_spec(state.get("request"))
         return state
 
-    def _require_no_unrecovered(self):
+    def _require_no_unrecovered(self, proposed_id=None):
+        import full_client_pre_runtime_abort as abort
+        retired, certified_failed = abort.certified(self.root)
+        require(proposed_id not in retired, "attempt_permanently_retired")
         for child in self.root.iterdir():
             if child.name.startswith("."):
                 continue
             # Unknown/corrupt attempts are quarantines, never ignored.
             state = self._load(child.name)
-            require(state.get("status") in ("completed", "recovered"), "recovery_required")
+            require(state.get("status") in ("completed", "recovered") or child.name in certified_failed, "recovery_required")
 
     def preflight(self, timeout_seconds=30):
         require(type(timeout_seconds) is int and 1 <= timeout_seconds <= 120,
@@ -557,7 +560,7 @@ class TrialRunner:
         attempt_id = attempt_id or uuid.uuid4().hex
         require(isinstance(attempt_id, str) and ID.fullmatch(attempt_id), "invalid_attempt_id")
         with self._locks():
-            self._require_no_unrecovered()
+            self._require_no_unrecovered(attempt_id)
             attempt_dir = self.root / attempt_id
             require(not attempt_dir.exists() and not attempt_dir.is_symlink(), "attempt_exists")
             self.state = {"schema_version": 1, "attempt_id": attempt_id, "request": spec,
