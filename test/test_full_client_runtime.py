@@ -988,7 +988,7 @@ class RuntimeTests(unittest.TestCase):
         statuses = [
             {"bridge": {"run": {"id": self.run_id, "status": "running", "workerActive": True}, "browserReleasePending": False}},
             {"bridge": {"run": {"id": self.run_id, "status": "failed", "workerActive": False}, "browserReleasePending": True}},
-            {"bridge": {"run": {"id": self.run_id, "status": "failed", "workerActive": False}, "browserReleasePending": False}}]
+            {"bridge": {"run": {"id": self.run_id, "status": "failed", "workerActive": False, "failureAcknowledged": True}, "browserReleasePending": False}}]
         events = []
         def admin(op, **kwargs):
             events.append(op)

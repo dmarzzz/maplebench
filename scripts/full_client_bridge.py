@@ -30,6 +30,56 @@ class ControlError(ValueError):
         super().__init__(code)
 
 
+def failure_release(path, run_id, quarantine_id=None, *, create=False):
+    """Create once or validate the exact durable acknowledgment after a lost reply."""
+    if quarantine_id is None and (path.parent/'quarantine.json').exists():
+        try:
+            quarantine=json.loads(read_private_file(path.parent/'quarantine.json',4096))
+            if (set(quarantine)!={'runId','id','reason'} or quarantine['runId']!=run_id
+                    or not isinstance(quarantine['id'],str) or not re.fullmatch('[a-f0-9]{32}',quarantine['id'])
+                    or quarantine['reason'] not in ('invalid_controller_evidence','invalid_quarantine_evidence')):raise ValueError()
+            quarantine_id=quarantine['id']
+        except (OSError,ValueError,TypeError):raise ControlError('invalid_failure_release') from None
+    reason='operator_acknowledged_corrupt_evidence' if quarantine_id else 'operator_acknowledged_failure'
+    identity={'runId':run_id,'reason':reason}
+    if quarantine_id:identity['quarantineId']=quarantine_id
+    if create and not os.path.lexists(path):
+        raw=(json.dumps(identity|{'releasedAtMs':round(time.time()*1000)},sort_keys=True)+'\n').encode()
+        fd,name=tempfile.mkstemp(prefix='.release-',dir=path.parent)
+        try:
+            with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+            try:os.link(name,path)
+            except FileExistsError:pass
+            directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(directory)
+            finally:os.close(directory)
+        finally:os.unlink(name)
+    try:
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as stream:
+            before=os.fstat(stream.fileno())
+            if not _private_stat(before) or before.st_size>4096:raise ValueError()
+            raw=stream.read(4097);after=os.fstat(stream.fileno())
+        stamp=lambda st:(st.st_dev,st.st_ino,st.st_mode,st.st_uid,st.st_size,st.st_mtime_ns,st.st_ctime_ns)
+        if stamp(before)!=stamp(after) or stamp(after)!=stamp(path.lstat()):raise ValueError()
+        def pairs(items):
+            result={}
+            for k,v in items:
+                if k in result:raise ValueError()
+                result[k]=v
+            return result
+        value=json.loads(raw,object_pairs_hook=pairs)
+        if (set(value)!=set(identity)|{'releasedAtMs'} or any(value[k]!=v for k,v in identity.items())
+                or type(value['releasedAtMs']) is not int or value['releasedAtMs']<0):raise ValueError()
+        return value
+    except (OSError,ValueError,TypeError,RecursionError):raise ControlError('invalid_failure_release') from None
+
+
+def has_failure_release(path, run_id):
+    try:failure_release(path,run_id);return True
+    except ControlError:return False
+
+
 def _private_stat(value):
     return stat.S_ISREG(value.st_mode) and stat.S_IMODE(value.st_mode) == 0o600 and value.st_uid == os.geteuid()
 
@@ -212,11 +262,10 @@ class FullClientBridge:
                     os.replace(quarantine_path,folder/f'quarantine-corrupt-{quarantine["id"]}.bin')
                     write_json(quarantine_path,quarantine)
                 try:
-                    if (folder/'release.json').stat().st_size>128*1024: raise ValueError('invalid_release')
-                    release=json.loads((folder/'release.json').read_text())
-                except (OSError,ValueError,RecursionError,UnicodeError):
-                    release={}
-                if not isinstance(release,dict) or release.get('quarantineId')!=quarantine['id']:
+                    failure_release(folder/'release.json',folder.name,quarantine['id'])
+                    released=True
+                except ControlError:released=False
+                if not released:
                     self.quarantines[folder.name]=quarantine['id']
                     previous.update(status='failed',quarantined=True,reason=quarantine['reason'],
                                     evidenceStatus='failed',apiOutcome='uncertain')
@@ -452,7 +501,7 @@ class FullClientBridge:
                 and self.run.get('recordingStatus') == 'saved'
                 and (self.output/run_id/'recording.json').is_file()
                 or self.run['status'] == 'failed' and self.run.get('failureAcknowledged') is True
-                and (self.output/run_id/'release.json').is_file()
+                and has_failure_release(self.output/run_id/'release.json',run_id)
             )
             valid_frame = obs['ready'] and max(age, render_age) < 1500
             hud = body.get('renderedHud')
@@ -669,15 +718,21 @@ class FullClientBridge:
         if not isinstance(run_id,str) or not re.fullmatch('[a-f0-9]{32}',run_id):
             raise ControlError('invalid_run_identity')
         with self.lock:
+            if (self.pending or self.run.get('workerActive') or self.leases.get(run_id)
+                    or self.cancel_events.get(run_id)):
+                raise ControlError('run_cannot_be_released')
             if run_id in self.quarantines:
                 folder=self.output/run_id
-                write_json(folder/'release.json',{'runId':run_id,'quarantineId':self.quarantines[run_id],
-                    'reason':'operator_acknowledged_corrupt_evidence','releasedAtMs':round(time.time()*1000)})
+                failure_release(folder/'release.json',run_id,self.quarantines[run_id],create=True)
                 previous=json.loads((folder/'controller.json').read_text())
                 previous.update(failureAcknowledged=True,quarantined=False)
                 write_json(folder/'controller.json',previous)
                 if self.run.get('id')==run_id: self.run.update(previous)
                 del self.quarantines[run_id]
+                return
+            if self.run.get('id') != run_id and (self.output/run_id/'quarantine.json').exists():
+                # An already acknowledged historical quarantine is immutable.
+                failure_release(self.output/run_id/'release.json',run_id)
                 return
             if (self.run.get('id') != run_id or self.run['status'] not in ('failed','completed')
                     or self.pending or self.run.get('workerActive') or self.leases.get(run_id)):
@@ -685,8 +740,7 @@ class FullClientBridge:
             folder = self.output/run_id
             if self.run['status'] == 'completed' and (folder/'recording.json').is_file():
                 raise ControlError('successful_run_cannot_be_discarded')
-            write_json(folder/'release.json', {'runId':run_id,'reason':'operator_acknowledged_failure',
-                                             'releasedAtMs':round(time.time()*1000)})
+            failure_release(folder/'release.json',run_id,create=True)
             if self.run['status'] == 'completed':
                 self.run.update(status='failed',reason='recording_abandoned',recordingStatus='discarded')
             self.run['failureAcknowledged'] = True
