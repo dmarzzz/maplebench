@@ -31,7 +31,7 @@ def checked_profile(plan, scenario_path, public_profile):
             and profile['protocol_id']==ADAPTIVE_PROTOCOL and profile['class_id'] in CLASSES
             and profile['class_id']!='undeclared' and profile['task_id'] in TASKS,
             'explicit_adaptive_public_profile_required')
-    class_names={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice Lightning Arch Mage',
+    class_names={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage',
                  'shadower':'Shadower','bishop':'Bishop'}
     require(protocol['profile']['class_name']==class_names[profile['class_id']],
             'adaptive_public_class_mismatch')
