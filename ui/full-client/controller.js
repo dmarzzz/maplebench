@@ -179,6 +179,7 @@
       : held.size || physical.size ? 'Manual controls · no active model' : 'Idle · no active model';
     let state = !relayConnected ? 'Relay disconnected · inputs released'
       : !available ? 'Waiting for fresh client state'
+      : run.status === 'running' && run.adaptivePhase === 'waiting_for_deadline' ? `Waiting for deadline · game remains live · ${run.actions || 0} actions${run.adaptiveStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.adaptiveStartedAtMs)/1000))} / 300s` : ''}`
       : run.status === 'requesting' ? (run.adaptiveProtocol ? `Planning cycle ${(run.cycleNumber || 0)+1} · game remains live` : run.mode === 'api' ? 'Awaiting API program · game remains live' : 'Preparing SDK program')
       : run.status === 'running' ? `Program running · ${run.actions || 0} actions${run.programStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.programStartedAtMs)/1000))} / ${run.programSeconds || 22}s` : ''}`
       : run.id ? `Last ${model || 'scripted SDK'} run: ${run.status}${run.actions != null ? ` · ${run.actions} actions` : ''}${run.reason ? ` · ${run.reason}` : ''}`

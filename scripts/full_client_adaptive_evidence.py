@@ -3,7 +3,7 @@
 This authenticates consistency within trusted collector files, not the host.
 Persisted net XP is verified separately from native logout/database receipts.
 """
-from full_client_adaptive import PROTOCOL, digest, prompt, validate_protocol
+from full_client_adaptive import PROTOCOL, PASSIVE_STOP_REASONS, digest, prompt, validate_protocol
 from full_client_score import EvidenceError, parse_json, read_artifact_bytes, same_json
 from maple_agent import model_decision, validate_rpc
 import math
@@ -36,6 +36,8 @@ def references(result):
 def verify_result(result, root, *, protocol, model):
     p = validate_protocol(protocol)
     trace = result['adaptive']
+    horizon=p.get('horizon_policy')
+    reserve_ms=(50+p['program_seconds']+5)*1000 if horizon else None
     for ref in references(result):
         read_artifact_bytes(root, ref, 'adaptive', maximum=16 * 1024 * 1024)
     require(same_json(parse_json(read_artifact_bytes(root, result['adaptiveTrace'], 'adaptive')), trace))
@@ -48,7 +50,8 @@ def verify_result(result, root, *, protocol, model):
             and same_json(result['controller'].get('adaptiveProtocol'), p)
             and trace.get('status') == result['controller'].get('status') == 'completed'
             and trace.get('error') is None and trace.get('reason') in
-                ('wall_time_limit', 'action_limit', 'sdk_request_limit', 'token_reservation_limit', 'death', 'api_request_limit'))
+                ('wall_time_limit', 'action_limit', 'sdk_request_limit', 'token_reservation_limit', 'death', 'api_request_limit', 'request_window_closed'))
+    require(horizon is not None or trace['reason']!='request_window_closed' and 'horizon_wait' not in trace)
     instructions = prompt(p)
     require(read_artifact_bytes(root, trace['instructions'], 'instructions') == instructions.encode())
     timing, counters = trace['timing'], trace['counters']
@@ -65,18 +68,35 @@ def verify_result(result, root, *, protocol, model):
              'actions', 'action_attempts', 'sdk_requests')}
     steps, intervals, recent = [], [], []
     last = 0; response_ids=set()
+    def observation(obs):
+        require(isinstance(obs,dict) and obs.get('ready') is True and isinstance(obs.get('character'),dict)
+                and all(type(obs.get(k)) in (int,float) and math.isfinite(obs[k]) and 0<=obs[k]<1500
+                        for k in ('ageMs','renderAgeMs')))
+    wait=trace.get('horizon_wait')
+    stopped_for=wait.get('reason') if isinstance(wait,dict) else trace['reason']
     for index, cycle in enumerate(trace['cycles']):
         t = cycle['timing']
         require(type(t.get('observed_ms')) is int and last <= t['observed_ms'] <= 300000
                 and cycle['requested_model'] == model)
+        if horizon:observation(cycle['observation'])
         if cycle['status'] == 'budget_rejected':
-            require(index == len(trace['cycles'])-1 and trace['reason'] == 'token_reservation_limit'
+            require(index == len(trace['cycles'])-1 and stopped_for == 'token_reservation_limit'
                     and cycle['api_outcome'] == 'not_started' and cycle['request'] is None and cycle['response'] is None
                     and type(cycle['token_reservation']) is int
                     and total['reserved_tokens'] + cycle['token_reservation'] > p['max_total_tokens'])
-            continue
+            last=t['observed_ms'];continue
+        window_closed=cycle['status']=='window_closed'
+        if window_closed:
+            require(horizon is not None and index==len(trace['cycles'])-1
+                and stopped_for=='request_window_closed' and cycle['api_outcome']=='not_started'
+                and cycle['response'] is None and cycle['program'] is None and cycle['execution'] is None
+                and cycle['usage'] is None and cycle['returned_model'] is None
+                and 'api_started_ms' not in t and 'api_ended_ms' not in t
+                and type(t.get('window_closed_ms')) is int
+                and max(t['observed_ms'],300000-reserve_ms)<=t['window_closed_ms']<=timing['controller_ended_ms'])
+            last=t['window_closed_ms']
+            if cycle['request'] is None:continue
         request = parse_json(read_artifact_bytes(root, cycle['request'], 'request'))
-        response = parse_json(read_artifact_bytes(root, cycle['response'], 'response'))
         identity = {'maplebench_run_id': trace['run_id'], 'maplebench_cycle_index': str(index)}
         value = parse_json(request['input'])
         require(set(value) == {'observation', 'recent_programs', 'remaining_seconds', 'remaining_actions',
@@ -88,7 +108,16 @@ def verify_result(result, root, *, protocol, model):
                 and value['remaining_actions'] == p['max_actions'] - total['action_attempts']
                 and value['remaining_sdk_requests'] == p['max_sdk_requests'] - total['sdk_requests']
                 and type(value['remaining_seconds']) in (int, float) and 0 < value['remaining_seconds'] <= 300
-                and request.get('metadata') == response.get('metadata') == identity)
+                and request.get('metadata') == identity)
+        if window_closed:
+            def unsent_request(_url, body, _key, _timeout):
+                require(same_json(body | {'metadata':identity},request))
+                return {}
+            model_decision(model,instructions,value,None,output_tokens=p['max_output_tokens'],
+                           timeout=50,request_fn=unsent_request)
+            continue
+        response = parse_json(read_artifact_bytes(root, cycle['response'], 'response'))
+        require(response.get('metadata')==identity)
         def saved_response(_url, body, _key, _timeout):
             require(same_json(body | {'metadata': identity}, request))
             return response
@@ -109,6 +138,10 @@ def verify_result(result, root, *, protocol, model):
                 and all(type(t.get(k)) is int for k in ('api_started_ms', 'api_ended_ms'))
                 and t['observed_ms'] <= t['api_started_ms'] < 300000
                 and t['api_started_ms'] <= t['api_ended_ms'] <= timing['controller_ended_ms'])
+        if horizon:
+            require(type(cycle.get('request_timeout_seconds')) is int and cycle['request_timeout_seconds']==50
+                and t['api_started_ms']<=300000-reserve_ms
+                and t['api_ended_ms']-t['api_started_ms']<=55000)
         total['api_requests_started'] += 1; total['api_responses_confirmed'] += 1
         total['reserved_tokens'] += reservation
         for key in ('input_tokens', 'output_tokens', 'total_tokens'):
@@ -146,10 +179,6 @@ def verify_result(result, root, *, protocol, model):
                 and type(execution.get('actionAttempts')) is int and execution['actionAttempts'] >= accepted
                 and type(execution.get('rpcRequests')) is int and execution['rpcRequests'] >= len(cycle_steps))
         held_ms=0; seen=set()
-        def observation(obs):
-            require(isinstance(obs,dict) and obs.get('ready') is True and isinstance(obs.get('character'),dict)
-                    and all(type(obs.get(k)) in (int,float) and math.isfinite(obs[k]) and 0<=obs[k]<1500
-                            for k in ('ageMs','renderAgeMs')))
         observation(cycle['observation']); observation(cycle['pre_execution_observation'])
         for step_index, step in enumerate(cycle_steps):
             if step.get('kind')=='rejected_rpc':
@@ -196,6 +225,34 @@ def verify_result(result, root, *, protocol, model):
             and result['program']['actions'] == total['actions']
             and result['program']['actionAttempts'] == total['action_attempts']
             and result['program']['rpcRequests'] == total['sdk_requests'])
+    if horizon:
+        require('horizon_wait' in trace)
+        if wait is None:
+            require(trace['reason'] in ('death','wall_time_limit'))
+        else:
+            require(isinstance(wait,dict) and set(wait)=={'reason','started_ms','ended_ms','counters','samples'}
+                and wait['reason'] in PASSIVE_STOP_REASONS
+                and trace['reason'] in (wait['reason'],'death')
+                and all(type(wait.get(k)) is int for k in ('started_ms','ended_ms'))
+                and last<=wait['started_ms']<=wait['ended_ms']<=timing['controller_ended_ms']
+                and same_json(wait['counters'],counters)
+                and isinstance(wait['samples'],list) and len(wait['samples'])<=301)
+            previous=wait['started_ms'];dead=False
+            for sample in wait['samples']:
+                require(isinstance(sample,dict) and set(sample)=={'observed_ms','ageMs','renderAgeMs','character'}
+                    and type(sample['observed_ms']) is int and not dead
+                    and previous<=sample['observed_ms']<=min(previous+5000,wait['ended_ms'])
+                    and isinstance(sample['character'],dict)
+                    and set(sample['character'])<=set(('x','y','hp','maxHp','mp','maxMp','exp','level','mapId','alive'))
+                    and type(sample['character'].get('alive')) is bool
+                    and all(type(v) is bool if k=='alive' else type(v) in (int,float) and math.isfinite(v)
+                            for k,v in sample['character'].items()))
+                observation(sample|{'ready':True})
+                previous=sample['observed_ms'];dead=sample['character']['alive'] is False
+            require(wait['ended_ms']-previous<=5000)
+            if trace['reason']=='death':require(dead)
+            else:require(not dead and timing['wall_elapsed_ms']==300000 and wait['ended_ms']>=300000)
+            if wait['reason']=='request_window_closed':require(wait['started_ms']>=300000-reserve_ms)
     timeline = result['timeline']; origin = timing['wall_started_at_ms'] - result['timing']['startedAtMs']
     require(origin >= 0 and timeline['adaptive_started_ms'] == timeline['program_started_ms'] == origin
             and timeline['api_started_ms'] == intervals[0]['started_at_ms'] - result['timing']['startedAtMs']
@@ -203,7 +260,7 @@ def verify_result(result, root, *, protocol, model):
             and origin + timing['controller_ended_ms'] <= timeline['program_ended_ms'] <= origin + timing['controller_ended_ms'] + 3100
             and timeline['program_ended_ms'] == timeline['adaptive_ended_ms']
             and result['timing']['endedAtMs'] >= result['timing']['startedAtMs'] + timeline['program_ended_ms'] - 5)
-    reason=trace['reason']
+    reason=stopped_for
     if reason=='wall_time_limit':require(timing['wall_elapsed_ms']==300000)
     if reason=='api_request_limit':require(total['api_requests_started']==p['max_api_requests'])
     if reason=='action_limit':require(total['action_attempts']==p['max_actions'])

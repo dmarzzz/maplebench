@@ -41,6 +41,29 @@ poll().then(()=>{assert.equal(sent.captureClockAck,'clock');assert.equal(sent.ca
                               capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)
 
+    @unittest.skipUnless(shutil.which('node'),'Node is required for the live/captured HUD regression')
+    def test_passive_horizon_hud_retains_model_and_displays_actual_wall_clock(self):
+        source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
+        view=source[source.index('  const format = '):source.index('  function renderHeader()')]
+        fixture="""
+const assert=require('node:assert/strict');
+Date.now=()=>251000;
+const run={status:'running',mode:'api',model:'gpt-5.6-sol',actions:8,
+ adaptivePhase:'waiting_for_deadline',adaptiveStartedAtMs:1000,programStartedAtMs:3000};
+const observe=()=>({character:{alive:true,level:180,exp:0,hp:100,maxHp:100,mp:50,maxMp:100}}),fresh=()=>true;
+const activeRun=()=>true,relayConnected=true,held=new Map(),physical=new Set(),namesByCode={},skillNamesByCode={};
+let baseline={exp:0,level:180},baselineScope='run';
+"""
+        checks="""
+const data=view();assert.equal(data.mode,'OpenAI API · gpt-5.6-sol');
+assert.equal(data.state,'Waiting for deadline · game remains live · 8 actions · 250 / 300s');
+assert.equal(data.keys,'Keys: none');assert.equal(data.stale,false);
+run.status='completed';assert.ok(!view().state.includes('Waiting for deadline'));
+"""
+        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+view+checks],
+                              capture_output=True,text=True,timeout=5)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     def run_dispatch(self, checks):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
         dispatch=source[source.index('  const commandDeadline = '):source.index('  const poll=async()=>{')]

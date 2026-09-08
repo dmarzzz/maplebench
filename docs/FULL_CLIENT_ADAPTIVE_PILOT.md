@@ -57,6 +57,44 @@ Pin `full_client_adaptive.py` in the web import closure, and pin it together wit
 Prepare a new scenario/baseline identity and new attempt IDs; do not retrofit old
 receipts or reuse a submitted attempt.
 
+## Opt-in full-horizon reserve
+
+For fresh cohorts, copy `FULL_HORIZON_POLICY` into
+`adaptive_protocol.horizon_policy` before freezing the scenario:
+
+```json
+{"id":"full-horizon-reserve-v1","request_timeout_seconds":50,
+ "settlement_reserve_seconds":5,"passive_observation_interval_ms":1000}
+```
+
+This policy requires 50 seconds for the request, the configured program allowance
+(20 seconds for the current cohort), and five seconds of settlement reserve before
+a new request starts. With 20-second programs, the last request can start at most
+225 seconds into the run. The request timeout stays 50 seconds. The dispatch guard
+runs again after readiness and request persistence; an unsent request remains
+`not_started`, even if its request artifact was already written.
+
+When the reserve closes, or confirmed API/token/action/SDK budgets are exhausted,
+the controller passively observes the live world until the original 300-second
+deadline. It sends no gameplay inputs or model requests during this interval. The
+live HUD and recording say **Waiting for deadline**, retain exact model attribution,
+and show the wall clock. Death, cancellation, stale observations and actual request
+failures still stop early. Uncertain requests are never converted into confirmed
+responses or retried. The last four seconds use cancellable sleeps; an observation
+is never given a timeout shortened against the normal deadline.
+
+The optional `horizon_wait` receipt records the original stop reason, monotonic
+start/end offsets, unchanged counters and at most 301 compact character/freshness
+samples. It omits monster arrays. Verification checks serial timing, full request
+reserve and timeout, fresh bounded samples, full elapsed wall time, and unchanged
+usage/input counts. Public evidence exposes wait timing and sample count, not raw
+samples. This proves controller/collector consistency, not native XP-window scores.
+
+The policy changes the exact prompt and scenario hash. Prepare new attempt IDs,
+refreeze prompt/source/scenario pins and keep old fixtures separate. Absence of the
+policy preserves the original prompt and early-stop behavior; old traces remain
+valid. Do not reinterpret old short runs as having used the full horizon.
+
 ## Evidence and closeout
 
 `result.json` contains an `adaptive` trace and its `adaptiveTrace` reference to

@@ -1124,7 +1124,9 @@ class FullClientBridge:
                         check_cancelled();self._readiness_dispatch(run,readiness)
             with self.lock:
                 check_cancelled()
-                self.run.update(status=value['phase'],cycleNumber=value['cycle'],
+                self.run.update(status='running' if value['phase']=='waiting_for_deadline' else value['phase'],
+                    adaptivePhase=value['phase'],cycleNumber=value['cycle'],
+                    adaptiveStartedAtMs=round((time.time()-(time.monotonic()-adaptive_started))*1000),
                     apiRequestsStarted=value['counters']['api_requests_started'],
                     apiTokenUpperBound=value['counters']['reserved_tokens'])
                 self.run.setdefault('programStartedAtMs',round(time.time()*1000))
