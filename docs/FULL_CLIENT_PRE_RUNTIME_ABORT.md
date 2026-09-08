@@ -42,3 +42,19 @@ changed, copied or malformed evidence blocks future admission. If a write reply
 is lost, rerun only this exact config: the existing intent/proof/terminal is read
 and reconciled. Existing proof is never replaced. No terminal claim means no
 exemption. No alternate config may take over a partial abort.
+
+## First live acceptance
+
+On September 8, the original cloud cohort failed its initial inventory status
+check before restoring a database, starting a trial world, or calling a model.
+The attempted recovery reached a process-identity refusal without creating
+backend state. The reviewed abort command then completed the original admission
+claim under the existing locks in 32.168 seconds. Independent verification
+confirmed the failed journal was byte-identical, all four original IDs were
+blocked, and a distinct future ID could pass the quarantine scan.
+
+The production-owner Linux test run passed all 13 abort tests. An earlier
+unprivileged run correctly rejected the root-owned protected source in its three
+writer integration cases; the actual command is restricted to the root operator.
+No model calls occurred during this acceptance. This verifies the specific
+pre-runtime abort contract, not recovery of a world that has already started.
