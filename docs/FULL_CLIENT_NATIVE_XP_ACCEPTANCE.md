@@ -32,12 +32,82 @@ Returned windows are diagnostic. The result remains ineligible for publication
 and requires separate visual acceptance; it does not claim level-up or loss-hook
 coverage merely because those arithmetic unit tests passed.
 
-## Remaining executor boundary
+## Executor library
 
-A future operator executor must bind the exact source, immutable candidate JAR,
-new runtime inventory and baseline; hold the normal operation/world/queue/runner
-locks; create durable single-use control/save/restore intents; preserve the short
-native recording; and ordinary-logout/restore under the same ownership. This
-module deliberately provides no dispatch CLI. A valid offline envelope cannot
-by itself authorize that executor or attest cleanup. Existing live pilot IDs,
-receipts and runtime remain unchanged.
+`full_client_native_xp_runtime.NativeXpRuntime` implements the runtime phases for
+this separate maintenance protocol. It accepts an operator-supplied ownership
+checker and provides no dispatch CLI. `execute_owned` starts one finite native
+recipe, collects the fixed 301-sample interval, performs ordinary logout, verifies
+the original control/save/ledger evidence, stops its owned server and restores
+the declared baseline. Model dispatch and publication entry points are refused.
+
+The original native recording remains at most **45 seconds**, with at most
+30 seconds of scripted control. Once control and upload settle, the executor
+copies that recording while the character remains connected for the rest of the
+300-second interval. Subsequent callbacks only read owned runtime status. It
+does not manufacture a five-minute video or adaptive model cycles. After logout,
+the normal read-only video probe and frozen capture-policy verifier check the
+short recording. The XP result requires the separately verified 20 native
+windows, exact ledger header observed at server startup, ordinary save and
+offline database reconciliation. A complete zero-transaction interval remains
+insufficient evidence for the positive XP hook.
+
+The outer operation has a 900-second cap and reserves 180 seconds for cleanup.
+Startup has a 90-second cap and login a 60-second cap. The owned transient game
+service has an 840-second limit; the normal model runtime limit is unchanged.
+No cap extends an infrastructure lease. Every phase remains subject to the
+operator's earlier absolute deadline. Coverage uses the original monotonic
+origin; slow sampling, copy/upload delay, stale rendering or an uncertain write
+fails the interval instead of moving that origin.
+
+Submission, ordinary logout and each SQL restore have durable intents. An
+uncertain native submission cannot be issued again. An uncertain initial SQL
+restore has no verified reset proof, so cleanup may only inspect the baseline,
+not execute that SQL again. A final restore whose reply is lost likewise permits
+inspection only. A failed preflight leaves its failure artifact and unclosed
+state; it cannot authorize a cleanup mutation. Cleanup or ownership failure
+cannot produce a clean completion receipt.
+
+## Operator integration boundary
+
+The library is a tested foundation, **not an executable acceptance plan**. Before
+calling it, a separately reviewed private wrapper must:
+
+- Pin the new source closure, immutable candidate JAR, runtime manifest, private
+  baseline and current service identities. The runtime and scenario must both
+  explicitly opt into `native-xp-ledger-acceptance-v1`; the runtime additionally
+  declares `xp_window_protocol` and `native_xp_candidate_jar: {path, sha256}`.
+  The candidate reference must equal the manifest's server JAR, and every module
+  in `FROZEN_MODULES` must have its current bytes in the manifest. Normal frozen
+  checks still require the native persistence and XP classes in the JAR.
+- Reconcile the preceding admission claim as terminal, ensure admission is
+  available, and hold the existing operation/world/queue/runner locks throughout.
+  The injected checker must raise on lost lock, current service or ownership
+  identity; it must not merely return a boolean. Scan other native operations
+  under these locks and refuse any unclosed or mismatched prior operation.
+- Choose a fresh native ID and server-instance ID, with private `attempt_root`
+  and `api_attempt_root` that are separate and not nested. The API attempt tree
+  never receives a native journal. The fresh native directory must contain only
+  the initial `backend-state.json`; the same ID must not exist in relay or native
+  output. Keep the outer intent/configuration beside this directory, not in it.
+- Bind a hashed native input document with exactly `schema_version: 1`,
+  `protocol`, `run_id`, `attempt_root`, `api_attempt_root` and `config_sha256`.
+  The configuration digest uses `full_client_runtime.encoded(config)` (sorted,
+  compact JSON plus a newline). Put that document reference in both the initial
+  state and context as `native_input_reference`. Context also supplies
+  `maintenance_protocol`, `attempt_id`, `attempt_dir`, the real inherited
+  world/queue `lock_fds` and their `lock_paths`; it carries **no API request**.
+- Initialize empty `intents`, `events`, `session` and `artifacts`, with
+  `maintenance_protocol`, `attempt_id`, `server_instance_id`, `clean: false` and
+  `publication_eligible: false`. Provide at least 900 seconds before the actual
+  fixed lease expiry, with an external hard timeout and resource limits.
+- Preserve any failure and implement separately reviewed cleanup-only recovery
+  for an interrupted operation. There is no recipe replay/resume entry point.
+  Independently verify the final restored snapshot and capture playback before
+  recording visual acceptance. Never publish this diagnostic as a model run.
+
+Existing private plans with unresolved pins remain nonexecutable. No live JAR,
+native fixture, pilot ID, runtime receipt or model protocol changes merely by
+integrating this library. Synthetic tests prove the executor's failure behavior
+and receipt integration; they do not prove actual native XP production or
+capture reliability.
