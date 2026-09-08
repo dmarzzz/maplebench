@@ -197,26 +197,27 @@ class CatalogUITests(unittest.TestCase):
         fixture="""
 const assert=require('node:assert/strict');
 const nodes={};const $=id=>nodes[id]||=( {children:[],replaceChildren(){this.children=[]},append(...v){this.children.push(...v)}} );
-const el=(tag,text)=>({tag,text}),document={createTextNode:text=>({text})};
+const el=(tag,text)=>({tag,text,children:[],append(...v){this.children.push(...v)}}),document={createTextNode:text=>({text})};
+const links=()=>$('catalog-cohorts').children.flatMap(group=>group.children.filter(v=>v.tag==='a'));
 let snapshot={catalog:{schema_version:1,cohorts:[
  {url:'./cohorts/aaaaaaaaaaaaaaaa/',class_id:'hero',verified:1},
  {url:'https://example.test/',class_id:'bowmaster',verified:4}]}},closed=false,timer;
 """
         checks="""
 renderCatalog();assert.equal($('catalog-cohorts').hidden,false);
-assert.equal($('catalog-cohorts').children.filter(v=>v.tag==='a').length,1);
-assert.equal($('catalog-cohorts').children[0].href,'./cohorts/aaaaaaaaaaaaaaaa/');
-assert.equal($('catalog-cohorts').children[0].text,'Hero · 1 / 4 verified');
+assert.equal(links().length,1);
+assert.equal(links()[0].href,'./cohorts/aaaaaaaaaaaaaaaa/');
+assert.equal(links()[0].text,'Hero · 1 / 4 verified');
 let scheduled,rendered=0;const setTimeout=(fn,ms)=>{scheduled=ms;return fn};
 const renderResearch=()=>rendered++,renderLive=()=>{},renderComparisons=()=>{},renderHistory=()=>{},freshness=()=>{};
 const replay={open:false};
 const next={schema_version:1,attempts:[{id:'a'},{id:'b'},{id:'c'},{id:'d'}],comparisons:[],generated_at_ms:1,
- live_status_available:false,catalog:{schema_version:1,cohorts:[{url:'./cohorts/aaaaaaaaaaaaaaaa/',class_id:'hero',verified:2}]}};
+ live_status_available:false,catalog:{schema_version:2,previous_cohorts:[],cohorts:[{url:'./cohorts/aaaaaaaaaaaaaaaa/',class_id:'hero',verified:2}]}};
 const fetch=async(url,options)=>{assert.equal(url,'./results.json');assert.equal(options.cache,'no-store');return{ok:true,json:async()=>next}};
 """
         final="""
 (async()=>{await refresh();assert.equal(scheduled,10000);assert.equal(rendered,1);
- assert.equal(snapshot.attempts.length,4);assert.equal($('catalog-cohorts').children[0].text,'Hero · 2 / 4 verified');
+ assert.equal(snapshot.attempts.length,4);assert.equal(links()[0].text,'Hero · 2 / 4 verified');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
         result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+render+checks+refresh+final],
