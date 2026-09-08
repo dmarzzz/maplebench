@@ -66,6 +66,17 @@ class FullClientServerTests(unittest.TestCase):
             'Origin':'http://localhost:9999','Content-Type':'application/json'})
         self.assertEqual(status,403)
 
+    def test_controller_loads_encoder_module_from_same_origin(self):
+        status,body=self.request('GET','/web/index.html')
+        self.assertEqual(status,200)
+        self.assertIn(b'<script type="module" src="/full-client-demo.js">',body)
+        status,body=self.request('GET','/webcodecs-recorder.js')
+        self.assertEqual(status,200)
+        self.assertEqual(body,self.module.ENCODER.read_bytes())
+        status,body=self.request('GET','/full-client-demo.js')
+        self.assertEqual(status,200)
+        self.assertIn(b"from './webcodecs-recorder.js'",body)
+
     def test_status_is_read_only_and_omits_client_identifier(self):
         self.module.BRIDGE.frame(self.frame())
         self.module.BRIDGE.run={'status':'idle','client':'private-owner-id'}

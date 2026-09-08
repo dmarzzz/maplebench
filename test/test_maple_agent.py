@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from full_client_docker_fixture import local_binding
+from docker_binding_fixture import local_binding
 from full_client_docker import DockerBindingError
 
 SPEC = importlib.util.spec_from_file_location('maple_agent', Path(__file__).parents[1] / 'scripts/maple_agent.py')

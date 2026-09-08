@@ -183,6 +183,20 @@ class AdaptivePublicationTests(unittest.TestCase):
         self.profile['class_id']='bowmaster'
         with self.assertRaisesRegex(ValueError,'adaptive_public_class_mismatch'):self.prepare()
 
+    def test_public_profile_accepts_each_canonical_native_class(self):
+        from full_client_native import PROFILES
+        from full_client_adaptive_publication import checked_profile
+        for class_id, native_profile in PROFILES.items():
+            with self.subTest(class_id=class_id):
+                scenario=copy.deepcopy(self.scenario)
+                scenario['adaptive_protocol']['profile']=copy.deepcopy(native_profile)
+                self.scenario_path.write_text(json.dumps(scenario,sort_keys=True))
+                plan=copy.deepcopy(self.plan)
+                plan['fixtures'][0]['scenario']['sha256']=hashlib.sha256(self.scenario_path.read_bytes()).hexdigest()
+                public_profile=self.profile | {'class_id':class_id}
+                actual,_=checked_profile(plan,self.scenario_path,public_profile)
+                self.assertEqual(actual,public_profile)
+
     def test_complete_four_model_group_keeps_signed_results_and_is_idempotent(self):
         for index,xp in enumerate((0,-50,100,9000)):self.attempt(index,xp)
         value,snapshot=self.prepare(replace_archive=True)

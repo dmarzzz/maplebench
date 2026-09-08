@@ -1,3 +1,4 @@
+import { createPostRenderRecorder } from './webcodecs-recorder.js';
 // Live controls and honest canvas capture for the unscored full-client adapter.
 (() => {
   fetch('/demo-session').then(r => { if (!r.ok) throw Error(); return r.json(); })
@@ -234,7 +235,7 @@
     while (value.length && ctx.measureText(value).width > width) value = value.slice(0,-1);
     ctx.fillText(value === text ? value : value.slice(0,-1)+'…', x,y);
   };
-  function startRecording(autoRunId = null) {
+  async function startRecording(autoRunId = null) {
     if (capture) return;
     if (saving || pendingUpload || closed) return;
     const output = document.createElement('canvas'), headerHeight = 120;
@@ -287,12 +288,36 @@
       if(item.stopping) return;
       draw();
       if(item.recorderStarted) {
+        if(item.encodedRecorder) item.encodedRecorder.onRendered();
         const now=performance.now(),wall=Date.now();
         item.maxGap=Math.max(item.maxGap,now-(item.lastFrameAt ?? item.startedAt));
-        item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.firstFrameAt ??= now; item.lastFrameAt=now; item.frames++;
+        item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.firstFrameAt ??= now; item.lastFrameAt=now; item.frames=item.encodedRecorder?item.encodedRecorder.frames:item.frames+1;
       }
     };
     item.onRendered = animate;
+    const encoded = durationPolicy?.id === 'post-render-encoded-frame-v1';
+    if(encoded) {
+      item.encodedMode=true;item.durationPolicy=durationPolicy;capture=item;
+      const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:335000;
+      item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},encodedLimit);
+      try {
+        item.encoderPromise=createPostRenderRecorder(output,{maxDurationMs:encodedLimit,onFailure:()=>{
+          if(capture!==item) return;
+          item.errors++; notice.textContent='Encoded frame capture failed; this recording cannot be accepted.';
+          stopRecording();
+        }});
+        item.encodedRecorder=await item.encoderPromise;
+        if(item.stopping || closed) return;
+        item.startedAt=item.encodedRecorder.startedAt;item.startedWall=item.encodedRecorder.startedWall;
+        item.recorderStarted=true;
+        notice.textContent='Recording verified post-render frames.';renderHeader();
+      } catch {
+        item.errors++;clearTimeout(item.maxTimer);
+        if(capture===item) capture=null;
+        notice.textContent='This browser could not start the required encoded-frame recording.';renderHeader();
+      }
+      return;
+    }
     try {
       const mimeType = ['video/webm;codecs=vp8','video/webm'].find(type => MediaRecorder.isTypeSupported(type));
       if (!mimeType) throw Error('WebM capture is unavailable');
@@ -337,11 +362,30 @@
     if (!capture || capture.stopping) return;
     try { capture.onRendered(); } catch { capture.errors++; notice.textContent='Frame capture failed'; stopRecording(); }
   };
-  function stopRecording() {
+  async function stopRecording() {
     const item=capture;
     if(!item||item.stopping) return;
     item.stoppedAt=performance.now();item.stoppedWall=Date.now();
     item.stopping=true; clearTimeout(item.finishTimer); clearTimeout(item.maxTimer); cancelAnimationFrame(item.animation);
+    if(item.encodedMode) {
+      try {
+        const recorder=item.encodedRecorder || await item.encoderPromise;
+        const finished=await recorder.stop();
+        pendingUpload={runId:item.autoRunId,blob:finished.blob,metadata:{
+          schema_version:3,run_id:item.autoRunId,client_id:clientId,...finished.measurements,
+          capture_duration_policy:item.durationPolicy,
+          encoder_receipt:finished.encoder_receipt,
+          hidden:item.hidden,errors:item.errors,relay_lost:item.relayLost,
+          interrupted:item.hidden||item.errors>0||item.relayLost||finished.measurements.rendered_frames===0||finished.measurements.max_frame_gap_ms>1000,
+          clock:item.clockVerified?item.clock:null,terminal_token:item.terminalToken}};
+        if(capture===item) capture=null;
+        await uploadRecording();
+      } catch {
+        if(capture===item) capture=null;
+        notice.textContent='Encoded recording did not finish verification; the run has no accepted recording.';
+      }
+      renderHeader();return;
+    }
     if(item.recorder.state!=='inactive') item.recorder.stop();
     else { item.stream.getTracks().forEach(track=>track.stop()); capture=null; }
     renderHeader();

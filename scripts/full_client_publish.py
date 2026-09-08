@@ -358,6 +358,7 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
     require(isinstance(packets, list) and len(packets) == frames,
             "video: require complete bounded packet and decoded-frame accounting")
     presentations = []
+    packet_hashes=[]
     for packet in packets:
         require(isinstance(packet, dict) and isinstance(packet.get("flags"), str)
                 and "C" not in packet["flags"] and "D" not in packet["flags"],
@@ -372,6 +373,8 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
                 and _number(duration) and duration <= 1000,
                 "video: invalid or out-of-bounds packet timestamps")
         presentations.append((timestamp, duration))
+        packet_hashes.append(packet.get("data_hash"))
+    original_presentations=list(presentations)
     presentations.sort()
     require(all(0 < later[0] - earlier[0] <= 1000
                 for earlier, later in zip(presentations, presentations[1:])),
@@ -386,10 +389,19 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
             require(_number(header, 1) and header <= maximum_ms and abs(header - extent) <= SLACK_MS,
                     "video: duration metadata disagrees with decoded packet coverage")
             headers.append(header)
-    return {"width": width, "height": height, "frames": frames,
+    tags=probe.get("format",{}).get("tags",{})
+    ledger=tags.get("MAPLEBENCH_ENCODER_LEDGER_V1") if isinstance(tags,dict) else None
+    encoded={}
+    if ledger is not None:
+        require(original_presentations==presentations,"video: encoded packet order mismatch")
+        require(all(isinstance(h,str) and re.fullmatch("SHA256:[a-f0-9]{64}",h) for h in packet_hashes),"video: missing encoded packet hashes")
+        encoded={"encoder_ledger_json":ledger,"packet_sha256":[h[7:] for h in packet_hashes],
+                 "packet_durations_us":[round(duration*1000) for _,duration in presentations]}
+    return encoded|{"width": width, "height": height, "frames": frames,
             "duration_ms": headers[0] if headers else extent,
             "presentation_span_ms":presentations[-1][0]-presentations[0][0],
-            "presentation_extent_ms":extent,"last_packet_duration_ms":presentations[-1][1]}
+            "presentation_extent_ms":extent,"last_packet_duration_ms":presentations[-1][1],
+            "packet_timestamps_us":[round(timestamp*1000) for timestamp,_ in presentations]}
 
 
 def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS):
@@ -407,8 +419,8 @@ def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS):
                 try:
                     process = subprocess.run(
                         ["ffprobe", "-v", "error", "-threads", "1", "-err_detect", "explode",
-                         "-select_streams", "v:0", "-count_frames", "-show_packets",
-                         "-show_entries", "packet=pts_time,duration_time,flags:stream=width,height,nb_read_frames,duration:format=duration",
+                         "-select_streams", "v:0", "-count_frames", "-show_packets", "-show_data_hash", "sha256",
+                         "-show_entries", "packet=pts_time,duration_time,flags,data_hash:stream=width,height,nb_read_frames,duration:format=duration:format_tags=MAPLEBENCH_ENCODER_LEDGER_V1",
                          "-of", "json", descriptor_path], stdin=subprocess.DEVNULL,
                         stdout=output, stderr=errors, timeout=30, check=False, pass_fds=(fd,),
                         preexec_fn=_video_probe_limits,
@@ -420,6 +432,8 @@ def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS):
                 output.seek(0)
                 probe = parse_json(output.read(JSON_LIMIT + 1))
             measured = _measure_video_probe(probe, maximum_ms=maximum_ms)
+            if "encoder_ledger_json" in measured:
+                measured.update(webm_sha256=expected_sha256,webm_bytes=os.fstat(fd).st_size)
         return measured
     except EvidenceError:
         raise
@@ -785,7 +799,8 @@ def verify_capture_bundle(manifest, artifact_root):
             and _text(terminal["id"]) and _number(terminal["serverIssuedAtMs"]),
             "capture: invalid terminal server receipt")
     require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
-    native = result.get("protocol") == "scripted-native-acceptance-v1"
+    from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL
+    native = result.get("protocol") in (NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL)
     owner = {"id": run_id, "client": result["controller"]["client"], "startedAtMs": started,
              "protocol": result.get("protocol"), "adaptiveProtocol":result.get('adaptive',{}).get('limits',{})}
     if native:
@@ -794,7 +809,7 @@ def verify_capture_bundle(manifest, artifact_root):
         require(result["controller"].get("mode") == "script" and result["controller"].get("model") is None
                 and result["controller"].get("returnedModel") is None and result.get("api") is None
                 and result.get("trialContext") is None and type(result.get("model_api_requests")) is int
-                and result["model_api_requests"] == 0 and result["controller"].get("protocol") == "scripted-native-acceptance-v1"
+                and result["model_api_requests"] == 0 and result["controller"].get("protocol") == config["id"] == result["protocol"]
                 and all(result.get("timeline", {}).get(key) is None for key in ("api_started_ms", "api_ended_ms"))
                 and same_json(config,result["controller"].get("nativeAcceptance")),
                 "capture: native acceptance cannot carry a model identity")

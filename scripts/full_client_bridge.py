@@ -17,7 +17,7 @@ from pathlib import Path
 
 from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, validate_rpc
 from full_client_capture import capture_receipt
-from full_client_native import PROTOCOL as NATIVE_PROTOCOL, validate_contract as validate_native, program as native_program
+from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, validate_contract as validate_native, program as native_program
 from full_client_docker import DockerBindingError, validate_binding
 from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
 from full_client_adaptive import AdaptiveError, PROTOCOL as ADAPTIVE_PROTOCOL, run_adaptive, validate_protocol
@@ -604,7 +604,7 @@ class FullClientBridge:
             if not url.endswith('/v1/action') or not isinstance(payload, dict) or payload.get('type') != 'press_keys':
                 raise ValueError('Only full-client keyboard actions are supported')
             _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},
-                SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL) else {}))
+                SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL) else {}))
             if self.pending:
                 raise ValueError('Another input is in flight')
             pending = {'id': uuid.uuid4().hex, 'keys': action['keys'], 'durationMs': action['durationMs'],
@@ -812,7 +812,7 @@ class FullClientBridge:
         if adaptive_protocol is not None:
             identity['adaptiveProtocol'] = adaptive_protocol
         if native_acceptance is not None:
-            identity.update(protocol=NATIVE_PROTOCOL,nativeAcceptance=native_acceptance)
+            identity.update(protocol=native_acceptance['id'],nativeAcceptance=native_acceptance)
         with self.lock:
             claim = self.output/'requests'/f'{request_id}.json'
             if claim.exists():
@@ -1047,7 +1047,7 @@ class FullClientBridge:
             phase = 'program_execution'
             program_started=time.monotonic()
             input_deadline=program_started+program_seconds
-            result = execute_program(code, SCENARIO | ({'protocol':NATIVE_PROTOCOL} if run.get('nativeAcceptance') else {}), 'http://127.0.0.1:8840',
+            result = execute_program(code, SCENARIO | ({'protocol':run['nativeAcceptance']['id']} if run.get('nativeAcceptance') else {}), 'http://127.0.0.1:8840',
                                      deadline=time.monotonic()+program_seconds+2, program_seconds=program_seconds,
                                      max_actions=action_limit, max_requests=sdk_request_limit,
                                      request_fn=run_request, step_callback=record_progress,cancel_event=cancel_event,
@@ -1078,7 +1078,7 @@ class FullClientBridge:
             result_document = {'controller':run | {'status':status, 'reason':reason,'workerActive':False,'actions':result['actions'], 'returnedModel':meta.get('model') if meta else None}, 'program':result, 'initial':initial,
                                          'final':final, 'source':'full-client-trial' if run.get('trialContext') else 'client telemetry; unscored integration run',
                                          'trialContext':run.get('trialContext'),
-                                         **({'protocol':NATIVE_PROTOCOL,'nativeAcceptance':run['nativeAcceptance'],'model_api_requests':0,
+                                         **({'protocol':run['nativeAcceptance']['id'],'nativeAcceptance':run['nativeAcceptance'],'model_api_requests':0,
                                               'publication_eligible':False,'score':None} if run.get('nativeAcceptance') else {}),
                                          'timing':{'startedAtMs':started_ms, 'endedAtMs':round(time.time()*1000),
                                                    'elapsedMs':round((time.monotonic()-started)*1000),
