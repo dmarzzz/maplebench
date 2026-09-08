@@ -156,6 +156,18 @@
     $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
     $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
   }
+  function renderCatalog(){
+    const node=$('catalog-cohorts'),catalog=snapshot.catalog;
+    if(!node)return;
+    node.replaceChildren();node.hidden=!(catalog?.schema_version===1&&Array.isArray(catalog.cohorts)&&catalog.cohorts.length<=3);
+    if(node.hidden)return;
+    for(const cohort of catalog.cohorts){
+      if(!/^\.\/cohorts\/[a-f0-9]{16}\/$/.test(cohort.url))continue;
+      const names={hero:'Hero',bowmaster:'Bowmaster',ice_lightning_arch_mage:'Ice/Lightning Arch Mage'};
+      const link=el('a',`${names[cohort.class_id]||'Declared class'} · ${cohort.verified} / 4 verified`);
+      link.href=cohort.url;link.className='pill';node.append(link,document.createTextNode(' '));
+    }
+  }
   function renderResearch(){
     const matrix=snapshot.research_matrix,container=$('research-matrix'),select=$('research-protocol');
     const available=matrix?.schema_version===1&&Array.isArray(matrix.protocols)&&Array.isArray(matrix.columns)&&Array.isArray(matrix.models);
@@ -164,6 +176,7 @@
     const selected=select.value;select.replaceChildren();
     for(const protocol of matrix.protocols){const option=el('option',protocol.label);option.value=protocol.id;select.append(option);}
     if(matrix.protocols.some(item=>item.id===selected))select.value=selected;
+    else if(snapshot.catalog&&matrix.protocols.some(item=>item.id==='full-client-adaptive-pilot-v1'))select.value='full-client-adaptive-pilot-v1';
     const protocol=matrix.protocols.find(item=>item.id===select.value),columns=matrix.columns.filter(item=>item.protocol_id===select.value);
     $('research-protocol-detail').textContent=protocol?`${protocol.clock}. ${protocol.metric}. ${protocol.status}.`:'';
     const table=el('table'),caption=el('caption',`${protocol?.label||'Protocol'}: model and class/task evidence`),head=el('thead'),heading=el('tr'),body=el('tbody');
@@ -225,7 +238,9 @@
       if(row.kind==='integration')state.append(el('small','Unranked integration'));
       scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');inputDetails(cell(tr,null,'input-summary'),row);publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
     }
-    $('scope').textContent=snapshot.cohort
+    $('scope').textContent=snapshot.catalog
+      ?`${snapshot.catalog.verified} of ${snapshot.catalog.planned} planned model/class runs have verified results. ${snapshot.catalog.archive_state==='retired'?'A complete four-model cohort replaced the public test recordings.':snapshot.catalog.archive_state==='retained'?'The public test archive remains until one four-model cohort is complete.':''} Saved progress refreshes every 10 seconds. No runs start from this page.`
+      :snapshot.cohort
       ?`${snapshot.cohort.verified} of ${snapshot.cohort.planned} planned models have verified results. ${snapshot.cohort.archive_replacement?'This completed cohort replaces the public test archive.':'Cohort progress; the existing public archive is retained.'} No runs start from this page.`
       :snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
   }
@@ -244,10 +259,10 @@
       const response=await fetch('./results.json',{cache:'no-store',signal:AbortSignal.timeout(3000)});
       if(!response.ok)throw Error();const next=await response.json();
       if(next.schema_version!==1||!Array.isArray(next.attempts)||next.attempts.length>100||!Array.isArray(next.comparisons)||!Number.isFinite(next.generated_at_ms))throw Error();
-      snapshot=next;renderResearch();renderLive();renderComparisons();renderHistory();freshness();
+      snapshot=next;renderCatalog();renderResearch();renderLive();renderComparisons();renderHistory();freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
-    finally{if(!closed&&snapshot?.live_status_available!==false)timer=setTimeout(refresh,2000);}
+    finally{if(!closed&&(snapshot?.live_status_available!==false||snapshot?.catalog?.schema_version===1))timer=setTimeout(refresh,snapshot?.catalog?.schema_version===1?10000:2000);}
   }
   window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
   refresh();
