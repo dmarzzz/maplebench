@@ -25,10 +25,13 @@ FULL_HORIZON_POLICY = {'id':'full-horizon-reserve-v1','request_timeout_seconds':
     'settlement_reserve_seconds':5,'passive_observation_interval_ms':1000}
 NATIVE_PROGRESSION_POLICY = {'id':'native-xp-level-progression-v1',
     'xp_window_protocol':'full-client-xp-windows-v1','maximum_level':200}
+FINAL_SLOT_POLICY = {'id':'final-program-slot-v1','request_timeout_seconds':50,
+    'settlement_reserve_seconds':5,'passive_observation_interval_ms':1000,
+    'ordinary_admission_seconds':150,'final_admission_seconds':75,'final_program_max_seconds':145}
 CAPTURE_COHORT_RECIPE = 'full-horizon-capture-cohort-v1'
 ENCODED_COHORT_RECIPE = 'full-horizon-encoded-cohort-v1'
 PASSIVE_STOP_REASONS = frozenset(('request_window_closed','api_request_limit',
-    'action_limit','sdk_request_limit','token_reservation_limit'))
+    'action_limit','sdk_request_limit','token_reservation_limit','final_program_complete'))
 
 class AdaptiveError(ValueError):
     """Only fixed credential-free codes cross the controller boundary."""
@@ -49,7 +52,9 @@ def validate_protocol(value):
             'max_evidence_bytes':(65536,4*1024*1024)}
     require(all(type(value.get(k)) is int and a<=value[k]<=b for k,(a,b) in bounds.items()),'invalid_adaptive_limits')
     if 'horizon_policy' in value:
-        require(digest(value['horizon_policy'])==digest(FULL_HORIZON_POLICY),'invalid_adaptive_horizon_policy')
+        require(digest(value['horizon_policy']) in (digest(FULL_HORIZON_POLICY),digest(FINAL_SLOT_POLICY)),'invalid_adaptive_horizon_policy')
+        if value['horizon_policy']==FINAL_SLOT_POLICY:
+            require(value['program_seconds']==20 and value['max_api_requests']<=12,'invalid_final_slot_limits')
     if 'capture_duration_policy' in value:
         from full_client_capture import validate_duration_policy
         try:validate_duration_policy(value['capture_duration_policy'])
@@ -87,6 +92,17 @@ def encoded_capture_cohort_protocol(profile):
     value['capture_duration_policy']=ENCODED_FRAME_POLICY
     return validate_protocol(value)
 
+def final_slot_cohort_protocol(profile):
+    value=encoded_capture_cohort_protocol(profile)
+    value['horizon_policy']=dict(FINAL_SLOT_POLICY)
+    return validate_protocol(value)
+
+def final_slot_offer(remaining, requests_left):
+    final=remaining<=150 or requests_left==1
+    return {'kind':'final' if final else 'ordinary',
+            'program_max_seconds':min(145,max(0,remaining-5)) if final else 20,
+            'admission_seconds':75 if final else 150}
+
 def prompt(protocol):
     p=validate_protocol(protocol)
     text = f'''You control the real MapleStory v83 full client with this frozen profile:
@@ -115,7 +131,20 @@ variables do not survive between responses. The next input contains your recent
 programs and their actual outcomes, so you can revise your own strategy.
 Return JSON {{note,code}} with a short intention, not private reasoning.
 '''
-    if 'horizon_policy' in p:
+    if p.get('horizon_policy')==FINAL_SLOT_POLICY:
+        text=text.replace(f'Each program gets at most {p["program_seconds"]} seconds', 'Ordinary programs get at most 20 seconds')
+        text+='''Frozen final-program-slot-v1: each request declares execution_slot with kind,
+program_max_seconds and admission_seconds. Ordinary requests require 150 seconds
+remaining to retain a final request reserve. At most one final program is offered
+when 150 seconds or less remain, or this is the last allowed request. It may run
+up to its declared limit (maximum 145 seconds), clamped after inference to the
+original wall deadline minus 5 seconds. Model latency remains charged. Use fresh
+sdk.observe calls within your program; no additional model request follows the
+final slot. Early return causes passive observation, never automatic replay.
+All SDK/action/request/token limits still apply. A full 3-second input RPC budget
+is required; leave time to return cleanly. Death, cancellation and failures stop.
+'''
+    elif 'horizon_policy' in p:
         reserve=50+p['program_seconds']+5
         text+=f'''Frozen full-horizon policy: a new request requires at least {reserve} seconds
 remaining (50 seconds for inference, {p['program_seconds']} for execution, 5 for settlement).
@@ -149,7 +178,9 @@ The returned trace is not a persisted-XP or publication-validation receipt.
     on_phase(phase='preparing',cycle=0,deadline=deadline,counters={})
     instructions=prompt(protocol)
     horizon=protocol.get('horizon_policy')
+    final_policy=horizon==FINAL_SLOT_POLICY
     reserve=50+protocol['program_seconds']+5 if horizon else None
+    cycle_reserve=reserve
     counters={k:0 for k in ('api_requests_started','api_responses_confirmed','reserved_tokens','actual_input_tokens',
         'actual_output_tokens','actual_total_tokens','actions','action_attempts','sdk_requests')}
     trace={'schema_version':1,'protocol':PROTOCOL,'protocol_sha256':digest(protocol),'run_id':run_id,
@@ -211,7 +242,7 @@ The returned trace is not a persisted-XP or publication-validation receipt.
             stop(reason)
         finally:
             wait['ended_ms']=offset();save()
-    def window_open():return not horizon or deadline-clock()>=reserve
+    def window_open():return not horizon or deadline-clock()>=cycle_reserve
     def usage_counts(meta):
         usage=meta.get('usage')
         require(isinstance(usage,dict) and all(type(usage.get(k)) is int and usage[k]>=0
@@ -221,6 +252,7 @@ The returned trace is not a persisted-XP or publication-validation receipt.
     try:
         save()
         for index in range(protocol['max_api_requests']):
+            cycle_reserve=reserve
             cancel_check()
             if clock()>=deadline:stop('wall_time_limit');break
             if counters['action_attempts']>=protocol['max_actions']:finish('action_limit');break
@@ -246,6 +278,10 @@ The returned trace is not a persisted-XP or publication-validation receipt.
             value={'observation':current,'recent_programs':recent[-2:],
                 'remaining_seconds':round(max(0,deadline-clock()),3),'remaining_actions':remaining_actions,
                 'remaining_sdk_requests':remaining_sdk,'cycle_index':index}
+            if final_policy:
+                slot=final_slot_offer(value['remaining_seconds'],protocol['max_api_requests']-index)
+                value['execution_slot']=slot;cycle['execution_slot']=dict(slot)
+                cycle_reserve=slot['admission_seconds']
             submitted=False
             def provider(url,payload,_unused,timeout):
                 nonlocal submitted
@@ -320,7 +356,9 @@ The returned trace is not a persisted-XP or publication-validation receipt.
             cancel_check()
             if clock()>=deadline:stop('wall_time_limit');break
             if choice is None:
-                cycle['status']='invalid_program';recent.append({'error':'Model response was incomplete or invalid; no code executed.'});save();continue
+                cycle['status']='invalid_program';recent.append({'error':'Model response was incomplete or invalid; no code executed.'});save()
+                if final_policy and slot['kind']=='final':finish('final_program_complete');break
+                continue
             code=choice['code'];cycle['program']=persist_bytes(prefix+'program.js',code.encode())
             cycle['choice']=persist_json(prefix+'program.json',choice)
             current=bounded_observe();final=current
@@ -334,7 +372,17 @@ The returned trace is not a persisted-XP or publication-validation receipt.
                 receipt_bytes+=len(json.dumps(step,sort_keys=True,separators=(',',':'),allow_nan=False).encode())
                 require(receipt_bytes<=protocol['max_evidence_bytes'],'adaptive_evidence_byte_limit')
                 cycle_steps.append(step);steps.append(dict(step,cycle_index=index));on_step(step)
-            execution=execute(code,deadline=deadline,program_seconds=min(protocol['program_seconds'],max(0,deadline-clock())),
+            execution_deadline=deadline-5 if final_policy else deadline
+            program_limit=slot['program_max_seconds'] if final_policy else protocol['program_seconds']
+            program_limit=min(program_limit,max(0,execution_deadline-clock()))
+            if final_policy:
+                require(program_limit>=3,'adaptive_final_slot_execution_window_closed')
+                cycle['execution_budget']={'program_seconds':program_limit,'deadline_ms':295000}
+                save()
+                # Durable evidence time is charged, never added to the program.
+                program_limit=min(program_limit,max(0,execution_deadline-clock()))
+                require(program_limit>=3,'adaptive_final_slot_execution_window_closed')
+            execution=execute(code,deadline=execution_deadline,program_seconds=program_limit,
                               max_actions=remaining_actions,max_requests=remaining_sdk,step_callback=record)
             cycle['timing']['program_ended_ms']=offset();cycle['execution']=execution
             cycle['execution_receipt']=persist_json(prefix+'execution.json',execution)
@@ -356,6 +404,7 @@ The returned trace is not a persisted-XP or publication-validation receipt.
             if counters['action_attempts']>=protocol['max_actions']:finish('action_limit');break
             if counters['sdk_requests']>=protocol['max_sdk_requests']:finish('sdk_request_limit');break
             if clock()>=deadline:stop('wall_time_limit');break
+            if final_policy and slot['kind']=='final':finish('final_program_complete');break
             recent.append({'note':choice['note'][:240],'code':code,'execution':{k:execution.get(k)
                 for k in ('reason','error','actions','actionAttempts','rpcRequests')},
                 'recent_receipts':cycle_steps[-5:]})
