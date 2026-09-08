@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from full_client_docker_fixture import local_binding
+from docker_binding_fixture import local_binding
 from full_client_freeze import (FreezeError, Inventory, build_manifest, inspect_image,
                                 main, read_private_json, verify_manifest, write_manifest)
 

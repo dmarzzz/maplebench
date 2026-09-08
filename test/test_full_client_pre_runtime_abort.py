@@ -126,6 +126,12 @@ class AbortWriterTests(unittest.TestCase):
         self.config={'schema_version':1,'authority':self.authority,'claim':self.claim,'coordinator':abort.pin(self.directory/'coordinator.json'),'journal':self.journal,'runtime':runtime,'snapshot':snapshot,'original_source':str(scripts),'attempt_ids':self.ids,'implementation':implementation,'group_unit':'maplebench-test.service','group_invocation':'e'*32}
         self.config_ref=abort.create(self.root/'abort-config.json',self.config)
         self.observation={'ready':True,'account_offline':True,'baseline_snapshot':snapshot,'browser_transition':'f'*32,'services_stopped':True,'api_calls':0,'observed_at_ms':__import__('time').time_ns()//1000000,'processes_absent':True,'artifacts_absent':True,'group_unit':'maplebench-test.service','group_invocation':'e'*32,'group_cgroup_empty':True}
+    def test_docker_test_fixture_does_not_impersonate_production_source(self):
+        import docker_binding_fixture
+        self.assertFalse(docker_binding_fixture.__name__.startswith('full_client_'))
+        with patch.object(abort,'observe',return_value=self.observation):
+            self.assertEqual(abort.execute(self.config_ref)['status'],'aborted_before_runtime_no_score')
+
     def test_actual_writer_admission_locks_finish_and_repeat_are_nonreplaying(self):
         with patch.object(abort,'observe',return_value=self.observation) as observed:
             self.assertEqual(abort.execute(self.config_ref)['status'],'aborted_before_runtime_no_score')

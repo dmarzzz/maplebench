@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from full_client_docker import (DockerBindingError, bound_invocation, configured_command,
                                 freeze_binding, validate_binding)
-from full_client_docker_fixture import local_binding
+from docker_binding_fixture import local_binding
 
 
 class DockerBindingTests(unittest.TestCase):

@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from full_client_docker_fixture import local_binding
+from docker_binding_fixture import local_binding
 from full_client_bridge import FullClientBridge, ControlError, PROMPT, write_json
 from maple_agent import validate_rpc, model_decision
 
