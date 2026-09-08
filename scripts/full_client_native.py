@@ -7,6 +7,7 @@ from full_client_capture import CAPTURE_DURATION_POLICY, ENCODED_FRAME_POLICY, v
 
 PROTOCOL = 'scripted-native-acceptance-v1'
 NATIVE_V2_PROTOCOL = 'scripted-native-acceptance-v2'
+NATIVE_V3_PROTOCOL = 'scripted-native-acceptance-v3'
 PROFILES = {
     'hero': {'id':'hero-180','class_name':'Hero','level':180,
              'skill_keys':{'PRIMARY_SKILL':'Brandish','SECONDARY_SKILL':'Combo Attack','BUFF_1':'Booster','BUFF_2':'Maple Warrior'}},
@@ -17,7 +18,7 @@ PROFILES = {
 }
 
 def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL):
-    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
+    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
         raise ValueError('invalid_native_fixture')
     return {'id':protocol,'class_id':class_id,'profile':json.loads(json.dumps(PROFILES[class_id])),
             'baseline_sha256':baseline_sha256,'wall_seconds':30,'max_actions':12,'max_sdk_requests':100,
@@ -55,6 +56,7 @@ if(nearby.length){const dx=nearby[0].x-first.character.x;
 def program(value):
     value=validate_contract(value);class_id=value['class_id']
     if value['id']==PROTOCOL:return _legacy_program(value)
+    if value['id']==NATIVE_V3_PROTOCOL and class_id!='hero':return _targeted_program(value)
     # These are finite physical key inputs. No arbitrary user program or game API
     # is accepted. Bow attacks require the ordinary Soul Arrow buff first.
     code="""// Scripted native acceptance; no model and no ranked result.
@@ -92,6 +94,63 @@ for(let step=0;step<4;step++){
     # Keep a short passive tail for end-frame and native-effect inspection.
     code+='await sdk.wait(1500);\nawait sdk.observe();\n'
     return code
+
+def _targeted_program(value):
+    # This is a distinct, explicitly requested recipe. V1/V2 bytes are retained.
+    code="""// Scripted native acceptance v3; no model and no ranked result.
+await sdk.wait(1000);
+await sdk.observe();
+await sdk.pressKeys(['JUMP'],300);
+await sdk.observe();
+await sdk.wait(1100);
+await sdk.observe();
+"""
+    for key in ('BUFF_1','BUFF_2'):
+        code+=f"await sdk.pressKeys(['{key}'],300);\nawait sdk.observe();\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    code+="""// The native default attack rectangle spans y=-50..50 for these skills.
+// This filters visible foot positions, not animation bounds; it is not hit proof.
+const targets=(scene)=>scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=50)
+  .sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x));
+let direction='RIGHT';
+for(let step=0;step<4;step++){
+  const scene=await sdk.observe(), nearby=targets(scene);
+  if(!nearby.length)break;
+  const dx=nearby[0].x-scene.character.x, inRange=Math.abs(dx)<=110;
+  direction=dx<0?'LEFT':'RIGHT';
+  await sdk.pressKeys([direction],inRange?30:Math.min(1500,Math.max(300,Math.round(Math.abs(dx)*5))));
+  const after=await sdk.observe(), current=targets(after);
+  if(current.length&&Math.abs(current[0].x-after.character.x)<=110)break;
+  await sdk.wait(150);
+}
+// Recheck range and face immediately before casting, not before a basic-attack delay.
+const aim=await sdk.observe(), nearby=targets(aim);
+if(nearby.length&&Math.abs(nearby[0].x-aim.character.x)<=110){
+  direction=nearby[0].x<aim.character.x?'LEFT':'RIGHT';
+  await sdk.pressKeys([direction],30);
+  const faced=await sdk.observe(), current=targets(faced);
+  if(current.some(m=>Math.abs(m.x-faced.character.x)<=110&&(direction==='LEFT'?m.x<=faced.character.x:m.x>=faced.character.x))){
+    await sdk.pressKeys(['PRIMARY_SKILL'],1200);
+    await sdk.wait(1100);
+    await sdk.observe();
+    // One finite second cast; no retries, targeting loop or extra action allowance.
+    await sdk.pressKeys(['PRIMARY_SKILL'],1200);
+    await sdk.wait(1100);
+    await sdk.observe();
+  }
+}
+await sdk.observe();
+await sdk.pressKeys(['ATTACK'],600);
+await sdk.wait(1100);
+await sdk.observe();
+"""
+    if value['class_id']=='ice_lightning_arch_mage':
+        code+="""// A direction accompanies native Teleport; before/after observations retain displacement.
+await sdk.observe();
+await sdk.pressKeys([direction,'SECONDARY_SKILL'],300);
+"""
+    else:
+        code+="await sdk.observe();\nawait sdk.pressKeys(['SECONDARY_SKILL'],600);\n"
+    return code+"await sdk.wait(1100);\nawait sdk.observe();\nawait sdk.wait(1500);\nawait sdk.observe();\n"
 
 def fingerprint(value):
     return hashlib.sha256((json.dumps(validate_contract(value),sort_keys=True,separators=(',',':'))+'\n').encode()).hexdigest()
