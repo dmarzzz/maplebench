@@ -494,6 +494,23 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     // not agree. Recheck this local deadline immediately before keydown.
     return receivedAt+command.remainingMs-Math.max(elapsed,wallElapsed);
   };
+  const ackFrame = (ack, runId) => {
+    const observation=observe(),clientSentAtMs=Date.now();
+    return {client:clientId,observation,ageMs:Date.now()-(observation.capturedAt||0),renderAgeMs:Date.now()-(Module.MapleBenchRenderedAt||0),renderedHud:Module.MapleBenchHud||null,ack,
+          page:'game',sessionAck,releaseAck,clientSentAtMs,captureClockAck:capture?.clock?.id,
+          captureClockReceivedAtMs:capture?.clock?.client_received_ms,
+          capture:capture?{runId:capture.autoRunId,started:capture.recorderStarted,renderedFrames:capture.frames,
+            interrupted:capture.hidden||capture.errors>0||capture.relayLost||capture.stopping}:null,
+          captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle',captureFailure};
+  };
+  const sendUrgentAck = async (ack, runId) => {
+    const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),2000);
+    try {
+      // One attempt only. The normal poll retains the same ACK on any reply.
+      await fetch('/control/ack',{method:'POST',headers:{'Content-Type':'application/json'},
+        signal:abort.signal,body:JSON.stringify({...ackFrame(ack,runId),ackRunId:runId})});
+    } catch {} finally {clearTimeout(timer);}
+  };
   const executeInput = async (command, deadline) => {
     if(activeCommand) return;
     const item={interrupted:false,failure:null,keydown:false,startedAt:performance.now()}; activeCommand=item;
@@ -514,7 +531,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       if(performance.now()+command.durationMs>deadline) reject('deadline_before_input');
       releaseAll(false); game.focus();
       if(performance.now()+command.durationMs>deadline) reject('deadline_before_keydown');
-      item.keydown=true;
+      item.keydown=true; item.keydownAt=performance.now();
       for(const code of keys) { key(code,'keydown'); held.set(code,setTimeout(()=>release(code),command.durationMs)); }
       renderHeader();
       await new Promise(resolve=>setTimeout(resolve,command.durationMs));
@@ -529,7 +546,12 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
           elapsed_ms:Number.isSafeInteger(elapsed)&&elapsed>=0&&elapsed<=350000?elapsed:null,
           remaining_ms:Number.isSafeInteger(remaining)&&remaining>=-350000&&remaining<=3000?remaining:null};
       }
+      const done=performance.now();
+      acknowledgement.timing={schema_version:1,received_at_ms:Math.round(item.startedAt),
+        keydown_after_ms:item.keydown?Math.round(item.keydownAt-item.startedAt):null,
+        finished_after_ms:Math.round(done-item.startedAt),urgent_post_after_ms:Math.round(done-item.startedAt)};
       activeCommand=null; renderHeader();
+      sendUrgentAck(acknowledgement,command.runId).catch(()=>{});
     }
   };
   const poll=async()=>{

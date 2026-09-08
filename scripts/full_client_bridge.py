@@ -601,7 +601,7 @@ class FullClientBridge:
         finally:os.close(directory)
         return 'saved'
 
-    def frame(self, body):
+    def frame(self, body, *, acknowledgement_only=False):
         if not isinstance(body, dict):
             raise ValueError('Invalid client frame')
         client = body.get('client')
@@ -617,10 +617,24 @@ class FullClientBridge:
                 or not isinstance(ack.get('id'), str) or not re.fullmatch('[a-f0-9]{32}', ack['id'])
                 or type(ack.get('ok')) is not bool):
             raise ControlError('invalid_input_acknowledgement')
+        if ack is not None and 'timing' in ack:
+            timing=ack['timing']
+            if (not isinstance(timing,dict) or set(timing)!={'schema_version','received_at_ms','keydown_after_ms','finished_after_ms','urgent_post_after_ms'}
+                    or timing['schema_version']!=1 or type(timing['schema_version']) is not int
+                    or type(timing['received_at_ms']) is not int or not 0<=timing['received_at_ms']<=2**53-1
+                    or any(type(timing[k]) is not int or not 0<=timing[k]<=350000 for k in ('finished_after_ms','urgent_post_after_ms'))
+                    or timing['finished_after_ms']>timing['urgent_post_after_ms']
+                    or timing['keydown_after_ms'] is not None and (type(timing['keydown_after_ms']) is not int
+                        or not 0<=timing['keydown_after_ms']<=timing['finished_after_ms'])):
+                raise ControlError('invalid_input_timing')
         if ack is not None and 'failure' in ack:
             if ack['ok']:raise ControlError('invalid_input_failure')
             input_failure(ack['failure'])
         with self.lock:
+            if acknowledgement_only and (ack is None or not self.pending
+                    or body.get('ackRunId') != self.pending.get('runId')
+                    or client != self.pending.get('client') or ack['id'] != self.pending['id']):
+                raise ControlError('input_ack_owner_mismatch')
             now = time.monotonic()
             server_received_ms=round(time.time()*1000)
             active = self.run['status'] in ('requesting', 'running') or self.run.get('workerActive') or bool(self.leases) or self.pending is not None
@@ -714,13 +728,14 @@ class FullClientBridge:
                 self.run['captureTerminal']={'id':uuid.uuid4().hex,'serverIssuedAtMs':server_received_ms}
                 write_json(self.output/self.run['id']/'capture-terminal.json',self.run['captureTerminal'])
             if (self.pending and ack is not None and ack['id'] == self.pending['id']
-                    and self.pending.get('sent')):
+                    and self.pending.get('sent') and 'ack' not in self.pending):
                 enough_time = now-self.pending['sentAt'] >= self.pending['durationMs']/1000 - 0.001
                 self.pending['lastMatchingAck']={'receivedAt':now,'receivedAtMs':server_received_ms,
                     'ok':ack['ok'],'validFrame':valid_frame,'enoughTime':enough_time,
-                    'beforeDeadline':now<self.pending['deadline']}
+                    'beforeDeadline':now<self.pending['deadline'],'clientTiming':ack.get('timing'),
+                    'transport':'urgent' if acknowledgement_only else 'poll'}
                 self._input_failure(ack,valid_frame,enough_time,now,server_received_ms,client)
-                if now < self.pending['deadline']:
+                if now < self.pending['deadline'] and 'ack' not in self.pending:
                     self.pending['ack'] = {'id':ack['id'], 'ok':ack['ok'] and valid_frame and enough_time}
                     self.lock.notify_all()
             if body.get('releaseAck') == self.run.get('id') and self._cancelled(self.run.get('id')):
@@ -731,7 +746,7 @@ class FullClientBridge:
                     write_json(self.output/self.run['id']/'controller.json',self.run)
             command = None
             dispatch_now = time.monotonic()
-            if (valid_frame and self.pending and not self._cancelled(self.pending.get('runId'))
+            if (not acknowledgement_only and valid_frame and self.pending and not self._cancelled(self.pending.get('runId'))
                     and not self.pending.get('sent')
                     and self.pending['deadline']-dispatch_now >= self.pending['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS):
                 self.pending['sent'] = True
@@ -786,7 +801,8 @@ class FullClientBridge:
                 ack = pending['ack']
                 self._check_cancelled(run_id)
                 accepted = ack['ok'] and self.fresh()
-                return {'accepted': accepted, 'observation': self._snapshot() if self.fresh() else {'ready':False},
+                timing=pending.get('lastMatchingAck')
+                return {**({'inputTiming':timing} if timing and timing.get('clientTiming') else {}), 'accepted': accepted, 'observation': self._snapshot() if self.fresh() else {'ready':False},
                         'error': None if accepted else 'Client input was interrupted'}
             finally:
                 self.pending = None
