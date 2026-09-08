@@ -34,6 +34,12 @@ public final class MapleBenchPersistence {
         record("save_committed", characterId, accountId);
     }
 
+    public static synchronized void committed(int characterId, int accountId, int level, int exp, int worldExpRate) {
+        long wall = System.currentTimeMillis(), nano = System.nanoTime();
+        if (initialized && journal != null) journal.record("save_committed", characterId, accountId, wall);
+        MapleBenchXpLedger.committed(characterId, accountId, level, exp, worldExpRate, wall, nano);
+    }
+
     public static synchronized void failed(int characterId, int accountId) {
         record("save_failed", characterId, accountId);
     }
