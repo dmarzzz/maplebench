@@ -1,0 +1,13 @@
+--- a/src/client/Data/SkillData.cpp
++++ b/src/client/Data/SkillData.cpp
+@@ -137,6 +137,10 @@
+             { SkillId::FIRE_DEMON, ATTACK },
+             { SkillId::PARALYZE, ATTACK | RANGED },
+             { SkillId::METEOR_SHOWER, ATTACK },
++            // Fixture bow and I/L attacks (not buffs).
++            { 3121004, ATTACK | RANGED }, // Hurricane
++            { 3111004, ATTACK },          // Arrow Rain
++            { 2221006, ATTACK | RANGED }, // Chain Lightning
+             // Rogue
+             { SkillId::DISORDER, ATTACK },
+             { SkillId::LUCKY_SEVEN, ATTACK | RANGED },
