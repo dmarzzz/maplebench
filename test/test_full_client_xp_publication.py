@@ -16,7 +16,7 @@ from full_client_dashboard import Reader
 from full_client_capture import capture_receipt, CAPTURE_DURATION_POLICY
 from full_client_publish import SETTLEMENT_POLICY
 from full_client_score import EvidenceError
-from full_client_docker_fixture import local_binding
+from docker_binding_fixture import local_binding
 from test_full_client_adaptive import Harness
 import test_full_client_xp_windows as native_fixtures
 from test_full_client_xp_windows import Ledger, IDENTITY, NORM
