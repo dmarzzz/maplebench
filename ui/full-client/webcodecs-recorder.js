@@ -94,6 +94,8 @@ export class PostRenderRecorder {
   async initialize(){
     need(!this._encoder,'capture_already_initialized');
     need(this._VideoFrame&&this._VideoEncoder&&globalThis.crypto?.subtle,'webcodecs_unavailable');
+    this._snapshotContext=this.canvas.getContext?.('2d');
+    need(this._snapshotContext&&typeof this._snapshotContext.getImageData==='function','invalid_canvas');
     const config={codec:'vp8',width:this._width,height:this._height,bitrate:2000000,
       framerate:30,latencyMode:'quality',hardwareAcceleration:'prefer-software'};
     const support=await bounded(this._VideoEncoder.isConfigSupported(config),LIMITS.configurationTimeoutMs,'encoder_configuration_timeout');
@@ -129,8 +131,19 @@ export class PostRenderRecorder {
       if(!this.frames){this.firstFrameAt=now;this.firstFrameWall=wall;}
       const timestamp=Math.floor(now-this.firstFrameAt)*1000;
       need(!this._pending||timestamp>this._pending.timestamp,'duplicate_quantized_timestamp');
-      // Snapshot immediately; no await, RAF, captureStream, or canvas read after the hook.
-      const frame=new this._VideoFrame(this.canvas,{timestamp});
+      // Read the composited pixels now. Retain CPU memory, never a GPU-backed
+      // canvas resource while the previous frame waits for its end timestamp.
+      // No await, RAF, captureStream, delayed readback, or source-frame fallback.
+      let frame;
+      try{
+        const pixels=this._snapshotContext.getImageData(0,0,this._width,this._height,
+          {colorSpace:'srgb',pixelFormat:'rgba-unorm8'});
+        need(pixels.width===this._width&&pixels.height===this._height&&pixels.colorSpace==='srgb'
+          &&pixels.data instanceof Uint8ClampedArray&&pixels.data.length===this._width*this._height*4,
+          'capture_snapshot_failed');
+        frame=new this._VideoFrame(pixels.data,{format:'RGBA',codedWidth:this._width,codedHeight:this._height,
+          timestamp,colorSpace:{primaries:'bt709',transfer:'iec61966-2-1',matrix:'rgb',fullRange:true}});
+      }catch{throw Error('capture_snapshot_failed');}
       try{if(this._pending)this._submit(timestamp-this._pending.timestamp);}
       catch(error){frame.close();throw error;}
       this._pending={frame,timestamp};this.frames++;this.lastFrameAt=now;this.lastFrameWall=wall;this._lastAt=now;

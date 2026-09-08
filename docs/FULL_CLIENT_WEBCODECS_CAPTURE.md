@@ -22,6 +22,27 @@ This producer change requires fresh source pins. It retains the eight-frame
 pending limit, 30 fps hint, 2 Mbps bitrate and every-hook capture; overload still
 fails. Existing evidence and capture-policy acceptance rules remain unchanged.
 
+The current producer synchronously reads the already composited post-render
+canvas into sRGB, 8-bit RGBA `ImageData`, then constructs `VideoFrame` from that
+CPU byte buffer with explicit sRGB color metadata. It does not retain a
+canvas-backed GPU resource while waiting for the next frame's timestamp. The
+canvas read and raw-frame construction both finish inside the same render hook;
+no delayed read, frame selection, extra frame or GPU-source fallback is allowed.
+The HTML canvas API supplies the pixel copy, and the raw-buffer VideoFrame
+constructor copies those pixels into its own media resource.
+[HTML pixel manipulation](https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-getimagedata),
+[WebCodecs VideoFrame constructors](https://www.w3.org/TR/webcodecs/#videoframe-constructors).
+Unexpected dimensions, color space, byte format, or readback/construction errors
+abort capture with the allowlisted `capture_snapshot_failed` diagnostic.
+
+This source-pinned change tests GPU resource retention as one possible cause of
+encoding stalls under game load. It does not establish the cause or guarantee
+loaded-game throughput. The copy consumes CPU time within the existing capture
+deadline; the queue, frame-gap limits, every-hook requirement and complete
+encoded/decoded ledger checks are unchanged. The source must receive fresh
+activation pins and native acceptance before model trials. Historical recordings
+are not reinterpreted under the new producer.
+
 WebM uses a single VP8 track, a 1 ms timestamp scale, explicit BlockDuration for
 every frame, delta-frame references, a duration header and keyframe cues. There
 is no guessed duration, default frame rate, frame lacing or audio. Ledger Tags
@@ -124,7 +145,9 @@ evidence merely because encoding passed.
 `node --test scripts/test_webcodecs_recorder.mjs` covers ordered timing, exact
 counts, duplicate/missing output, invisible frame rejection, queue limits,
 quantization, clock drift, gaps, resize, unsupported codec, quality-mode support, failed hashes and
-bounded configuration/flush/finalization.
+bounded configuration/flush/finalization. CPU snapshot tests also cover exact
+pixel bytes and format, synchronous snapshot ownership across later canvas
+changes, retained-frame closeout and readback errors without fallback.
 
 `scripts/check_webcodecs_capture.mjs` runs an isolated headless browser on a
 synthetic canvas through this exact module, then checks ffprobe packet hashes,

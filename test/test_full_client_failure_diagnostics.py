@@ -40,6 +40,13 @@ class FailureDiagnosticsTests(unittest.TestCase):
  def test_initialization_failure_can_have_no_frame_and_no_encoder_clock(self):
   value=self.diagnostic(clock_origin='capture_request',first_frame_offset_ms=None,last_frame_offset_ms=None,rendered_frames=0,submitted_frames=0,encoded_frames=0,code='webcodecs_unavailable')
   self.assertEqual(capture_failure(value),value)
+ def test_cpu_snapshot_failure_keeps_its_specific_durable_code(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=self.bridge(tmp);value=self.diagnostic(code='capture_snapshot_failed')
+   b.frame(self.frame(captureFailure=value))
+   saved=json.loads((Path(tmp)/('a'*32)/'capture-failure.json').read_bytes())
+   self.assertEqual(saved['diagnostic'],value)
+   self.assertEqual(saved['source'],'browser_reported_diagnostic_unscored')
  def test_first_interrupted_input_keeps_owned_command_and_actual_ack_checks(self):
   with tempfile.TemporaryDirectory() as tmp:
    b=self.bridge(tmp);b.pending={'id':'c'*32,'runId':'a'*32,'sent':True,'sentAt':10.,'deadline':12.,'durationMs':300}
