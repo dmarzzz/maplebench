@@ -161,23 +161,35 @@ def copy_file(source,name,target,expected):
 
 
 def compose(request,output_root):
-    require(isinstance(request,dict) and set(request)=={'schema_version','cohorts','primary_content_sha256','archive'}
-        and type(request['schema_version']) is int and request['schema_version']==1 and isinstance(request['cohorts'],list)
+    require(isinstance(request,dict) and type(request.get('schema_version')) is int
+        and ((request['schema_version']==1 and set(request)=={'schema_version','cohorts','primary_content_sha256','archive'})
+             or (request['schema_version']==2 and set(request)=={'schema_version','cohorts','primary_content_sha256','archive','previous_cohorts'}))
+        and isinstance(request['cohorts'],list)
         and 1<=len(request['cohorts'])<=3,'catalog_request_schema')
     packages=[]
     for item in request['cohorts']:
         require(isinstance(item,dict) and set(item)=={'package','content_sha256'},'catalog_package_selection')
         packages.append(cohort(item['package'],item['content_sha256']))
+    previous=[]
+    selections=request.get('previous_cohorts',[])
+    require(isinstance(selections,list) and len(selections)<=3,'catalog_previous_cohorts_limit')
+    for item in selections:
+        require(isinstance(item,dict) and set(item)=={'package','content_sha256'},'catalog_package_selection')
+        previous.append(cohort(item['package'],item['content_sha256']))
+    all_packages=packages+previous
     primary=request['primary_content_sha256']
     require(primary in [p['manifest']['content_sha256'] for p in packages],'catalog_primary_required')
     for key,values in (
         ('class',[p['class_id'] for p in packages]),('fixture',[p['fixture_fingerprint'] for p in packages]),
         ('cohort',[p['manifest']['content']['plan_sha256'][:16] for p in packages])):
         require(len(set(values))==len(values),'catalog_duplicate_'+key)
+    require(len({p['manifest']['content']['target_path'] for p in all_packages})==len(all_packages),'catalog_duplicate_mount')
+    require(len({r['id'] for p in all_packages for r in p['snapshot']['attempts']})==4*len(all_packages),'catalog_duplicate_attempt')
     packages.sort(key=lambda p:list(CLASSES).index(p['class_id']))
     assets=[{name:p['manifest']['content']['files'][name] for name in ASSETS} for p in packages]
     require(all(same_json(assets[0],value) for value in assets),'catalog_mixed_assets')
-    archive=request['archive'];old=None;old_files={};retired=bool(archive and any(p['complete'] for p in packages))
+    archive=request['archive'];old=None;old_files={};retired=bool((archive or previous) and any(p['complete'] for p in packages))
+    retained_previous=[] if retired else previous
     if archive is not None:
         require(isinstance(archive,dict) and set(archive)=={'site','inventory','inventory_sha256'},'catalog_archive_inventory_required')
         old_site=directory(Path(archive['site']))
@@ -203,23 +215,46 @@ def compose(request,output_root):
             'planned':4,'verified':snapshot['cohort']['verified'],'complete':p['complete'],
             'attempt_ids':[r['id'] for r in members]})
     new_rows=list(rows)
+    previous_metadata=[]
+    for p in retained_previous:
+        content=p['manifest']['content'];members=copy.deepcopy(p['snapshot']['attempts'])
+        group_ids={g['id']:digest(encoded({'previous_cohort':content['plan_sha256'],'comparison':g['id']}))
+                   for g in p['snapshot']['comparisons']}
+        for row in members:
+            if row.get('recording'):row['recording']['url']='.'+content['target_path']+'recordings/'+row['id']+'.webm'
+            if row.get('comparison_group'):row['comparison_group']=group_ids[row['comparison_group']]
+        rows.extend(members)
+        prior_comparisons=copy.deepcopy(p['snapshot']['comparisons'])
+        for group in prior_comparisons:
+            group['id']=group_ids[group['id']];group['scope']='previous_cohort'
+        comparisons.extend(prior_comparisons)
+        previous_metadata.append({'id':content['plan_sha256'],'content_sha256':p['manifest']['content_sha256'],
+            'url':'.'+content['target_path'],'class_id':p['class_id'],'fixture_fingerprint':p['fixture_fingerprint'],
+            'scope':'previous_cohort','label':'Previous pilot cohort','planned':4,
+            'verified':p['snapshot']['cohort']['verified'],'complete':p['complete'],
+            'attempt_ids':[r['id'] for r in members]})
     if old:require({r['id'] for r in rows}.isdisjoint(r['id'] for r in old['attempts']),'catalog_duplicate_attempt')
     if old and not retired:rows.extend(copy.deepcopy(old['attempts']));comparisons.extend(copy.deepcopy(old['comparisons']))
     require(len({r['id'] for r in rows})==len(rows),'catalog_duplicate_attempt')
     require(len({g['id'] for g in comparisons})==len(comparisons),'catalog_duplicate_comparison')
     featured=max([r for r in new_rows if verified(r) and r.get('recording')],
                  key=lambda r:(r['updated_at_ms'] or 0,r['id']),default=None)
+    if featured is None:
+        previous_ids={i for p in previous_metadata for i in p['attempt_ids']}
+        featured=max([r for r in rows if r['id'] in previous_ids and verified(r) and r.get('recording')],
+                     key=lambda r:(r['updated_at_ms'] or 0,r['id']),default=None)
     snapshot={'schema_version':1,'generated_at_ms':max([r['updated_at_ms'] or 0 for r in rows],default=0),
         'source':'full_client_public_catalog','verification':'pinned_public_cohort_packages','live_status_available':False,
         'ranked':False,'recording_prefix':'./recordings/','truncated':False,'attempts':rows,'comparisons':comparisons,
         'featured_run_id':featured['id'] if featured else (old.get('featured_run_id') if old and not retired else None),
-        'catalog':{'schema_version':1,'planned':len(new_rows),'verified':sum(verified(r) for r in new_rows),
+        'catalog':{'schema_version':request['schema_version'],'planned':len(new_rows),'verified':sum(verified(r) for r in new_rows),
             'complete_cohorts':sum(p['complete'] for p in packages),'cohorts':cohorts,'poll_interval_ms':10000,
-            'archive_state':'retired' if retired else 'retained' if old else 'not_supplied'}}
-    snapshot['research_matrix']=summarize(snapshot)
+            'archive_state':'retired' if retired else 'retained' if old or previous else 'not_supplied'}}
+    if request['schema_version']==2:snapshot['catalog']['previous_cohorts']=previous_metadata
+    snapshot['research_matrix']=summarize(snapshot) if request['schema_version']==1 else summarize(snapshot|{'attempts':new_rows,'comparisons':[g for g in comparisons if g.get('scope')!='previous_cohort']})
     root_names=set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}
     planned_files={name:value for name,value in old_files.items() if name not in root_names} if old and not retired else {}
-    for p in packages:
+    for p in packages+retained_previous:
         content=p['manifest']['content'];prefix=content['target_path'].lstrip('/')
         planned_files.update({prefix+name:value for name,value in content['files'].items()})
     ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
@@ -232,7 +267,7 @@ def compose(request,output_root):
     require(len(planned_files)<=100 and all(PUBLIC_NAME.fullmatch(name) for name in planned_files)
         and sum(v['bytes'] for v in planned_files.values())<=MAX_PAYLOAD,'catalog_payload_limit')
     output_root=directory(Path(output_root))
-    for source in [p['package'] for p in packages]+([old_site] if old else []):
+    for source in [p['package'] for p in all_packages]+([old_site] if old else []):
         require(not output_root.is_relative_to(source) and not source.is_relative_to(output_root),'catalog_inputs_overlap_output')
     stage=Path(tempfile.mkdtemp(prefix='.catalog-',dir=output_root));site=stage/'site';site.mkdir(mode=0o755)
     try:
@@ -240,7 +275,7 @@ def compose(request,output_root):
             for name,value in old_files.items():
                 if name not in set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}:
                     copy_file(old_site,name,site/name,value)
-        for p in packages:
+        for p in packages+retained_previous:
             content=p['manifest']['content'];prefix=content['target_path'].lstrip('/')
             (site/prefix/'recordings').mkdir(parents=True,mode=0o755)
             for name,value in content['files'].items():copy_file(p['site'],name,site/prefix/name,value)
@@ -253,6 +288,8 @@ def compose(request,output_root):
         checked_payload(site,stage/'payload-inventory.json',digest(inventory),primary_package['manifest'])
         content={'schema_version':1,'source_content_sha256':[p['manifest']['content_sha256'] for p in packages],
             'archive_inventory_sha256':archive['inventory_sha256'] if archive else None,'archive_retired':retired,'files':files}
+        if request['schema_version']==2:
+            content.update(schema_version=2,previous_content_sha256=[p['manifest']['content_sha256'] for p in previous])
         ident=digest(encoded(content));write_new(stage/'catalog-manifest.json',encoded({'schema_version':1,'content_sha256':ident,'content':content}))
         destination=output_root/ident
         if os.path.lexists(destination):

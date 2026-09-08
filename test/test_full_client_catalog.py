@@ -225,3 +225,41 @@ const fetch=async(url,options)=>{assert.equal(url,'./results.json');assert.equal
 
 
 if __name__=='__main__':unittest.main()
+
+class PreviousCohortTests(CatalogTests):
+    def request2(self,active,previous,archive=None):
+        return self.request(active,archive)|{'schema_version':2,'previous_cohorts':previous}
+    def test_previous_different_assets_preserved_separate_from_active_matrix(self):
+        prior=self.package(self.fixture('hero',100),2)
+        prior=self.mutate(prior,lambda site:(site/'style.css').write_text('/* prior pinned UI */'))
+        active=self.package(self.fixture('hero',200),1)
+        request=self.request2([active],[prior],self.archive())
+        result=catalog.compose(request,self.out);site=Path(result['site']);snapshot=json.loads((site/'results.json').read_text())
+        self.assertEqual(snapshot['catalog']['schema_version'],2)
+        self.assertEqual(snapshot['catalog']['planned'],4)
+        self.assertEqual(snapshot['catalog']['previous_cohorts'][0]['scope'],'previous_cohort')
+        self.assertEqual(len(snapshot['research_matrix']['columns']),1)
+        self.assertEqual(len(snapshot['attempts']),12)
+        manifest=publication.verify_package(Path(prior['package']),prior['content_sha256'])
+        prefix=manifest['content']['target_path'].lstrip('/')
+        for name,expected in manifest['content']['files'].items():
+            self.assertEqual(publication.stable_fingerprint(site/prefix/name,publication.MAX_ADAPTIVE_VIDEO),expected)
+        self.assertTrue(any(g['scope']=='previous_cohort' for g in snapshot['comparisons']))
+    def test_active_complete_retires_previous_and_legacy_without_touching_inputs(self):
+        prior=self.package(self.fixture('hero',100),2);active=self.package(self.fixture('hero',200),4)
+        result=catalog.compose(self.request2([active],[prior],self.archive()),self.out)
+        snapshot=json.loads((Path(result['site'])/'results.json').read_text())
+        self.assertTrue(result['archive_retired']);self.assertEqual(snapshot['catalog']['previous_cohorts'],[])
+        self.assertEqual(len(snapshot['attempts']),4)
+        old=publication.verify_package(Path(prior['package']),prior['content_sha256'])
+        self.assertFalse((Path(result['site'])/old['content']['target_path'].lstrip('/')).exists())
+    def test_prior_selection_bounded_and_duplicate_mount_refused(self):
+        active=self.package(self.fixture('hero',100),1)
+        for previous,code in [([active]*4,'catalog_previous_cohorts_limit'),([active],'catalog_duplicate_mount')]:
+            with self.assertRaisesRegex(ValueError,code):catalog.compose(self.request2([active],previous),self.out)
+    def test_previous_cohort_does_not_waive_active_asset_consistency(self):
+        active=self.package(self.fixture('hero',100),1)
+        bow=self.package(self.fixture('bowmaster',200),1)
+        bow=self.mutate(bow,lambda site:(site/'style.css').write_text('/* changed */'))
+        with self.assertRaisesRegex(ValueError,'catalog_mixed_assets'):
+            catalog.compose(self.request2([active,bow],[]),self.out)

@@ -1,0 +1,26 @@
+
+## Retain earlier pilot cohorts while a replacement is incomplete
+
+Request schema 2 adds `previous_cohorts`, a list of at most three explicit
+`{package, content_sha256}` selections. `cohorts` still contains at most one active
+cohort per class and all active cohorts must share dashboard assets. Previous
+packages may have different frozen fixtures and assets; each passes the existing
+four-model package verifier independently. Their original nested package bytes
+and mounts remain unchanged. Mount and attempt collisions fail closed.
+
+The root catalog exposes `catalog.schema_version: 2` and
+`catalog.previous_cohorts`. Each previous entry has the usual cohort metadata plus
+`scope: "previous_cohort"` and `label: "Previous pilot cohort"`. All four historical
+attempts remain present, including failures and unstarted entries. Root comparison
+IDs are namespaced by the previous plan so repeated identical fixtures cannot pool
+scores across cohorts. The active research matrix and active planned/verified
+counts exclude historical rows. The UI must display a separate history callout
+using this metadata. If the active cohort has no video yet, a verified previous
+video may remain featured.
+
+As soon as **any active cohort has four verified videos and one matching comparison
+group**, both previous cohorts and the legacy archive are omitted from the new
+public payload. Original private packages remain unchanged. No retirement occurs
+merely because four scores exist, a previous cohort is complete, or a model failed.
+All output still passes the existing 100-file/512MiB allowlist and payload checks.
+Schema 1 requests retain their previous behavior.
