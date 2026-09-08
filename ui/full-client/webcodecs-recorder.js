@@ -6,7 +6,7 @@ export const ENCODED_FRAME_POLICY = Object.freeze({id:'post-render-encoded-frame
 export const LEDGER_TAG = 'MAPLEBENCH_ENCODER_LEDGER_V1';
 export const LIMITS = Object.freeze({maxBytes:95*1024*1024,maxLedgerBytes:8*1024*1024,
   maxPendingFrames:8,maxPendingHashes:16,configurationTimeoutMs:5000,flushTimeoutMs:5000,
-  stopTimeoutMs:15000,maxDurationMs:335000});
+  firstFrameTimeoutMs:5000,stopTimeoutMs:15000,maxDurationMs:335000});
 const utf8 = new TextEncoder();
 const need=(ok,code)=>{if(!ok)throw Error(code);};
 const integer=(n,min=0,max=Number.MAX_SAFE_INTEGER)=>Number.isSafeInteger(n)&&n>=min&&n<=max;
@@ -104,12 +104,16 @@ export class PostRenderRecorder {
     this._encoder.configure(config);
     try{await bounded(this._encoder.flush(),LIMITS.configurationTimeoutMs,'encoder_configuration_timeout');this._check();}
     catch(error){this._fail(error.message);throw error;}
-    this.startedAt=this._now();this.startedWall=this._wall();this._lastAt=this.startedAt;
+    this.configuredAt=this._now();this.configuredWall=this._wall();this._lastAt=this.configuredAt;
+    // Configuration completion is readiness, not the beginning of media.
+    // Keep the outer duration bound fixed even while the first hook is pending.
     this._timer=setTimeout(()=>this._fail('capture_duration_limit'),this._maximum);
+    this._firstFrameTimer=setTimeout(()=>this._fail('capture_first_frame_timeout'),
+      Math.min(LIMITS.firstFrameTimeoutMs,this._maximum));
     return this;
   }
   _fail(code){
-    if(this.failure)return;this.failure=code;clearTimeout(this._timer);
+    if(this.failure)return;this.failure=code;clearTimeout(this._timer);clearTimeout(this._firstFrameTimer);
     this._pending?.frame.close();this._pending=null;
     try{if(this._encoder?.state!=='closed')this._encoder?.close();}catch{}
     this._outputs=[];this._inputs=[];
@@ -121,15 +125,16 @@ export class PostRenderRecorder {
     this._check();need(!this.stopping&&this._encoder?.state==='configured','capture_not_active');
     try{
       const now=this._now(),wall=this._wall();
-      need(Number.isFinite(now)&&now>=this._lastAt&&now-this.startedAt<=this._maximum,'capture_clock_or_duration');
-      need(Math.abs(wall-this.startedWall-(now-this.startedAt))<=ENCODED_FRAME_POLICY.max_wall_drift_ms,'capture_wall_clock_drift');
+      need(Number.isFinite(now)&&now>=this._lastAt&&now-this.configuredAt<=this._maximum,'capture_clock_or_duration');
+      const clockAt=this.frames?this.startedAt:this.configuredAt,clockWall=this.frames?this.startedWall:this.configuredWall;
+      need(Math.abs(wall-clockWall-(now-clockAt))<=ENCODED_FRAME_POLICY.max_wall_drift_ms,'capture_wall_clock_drift');
+      need(this.frames||now-this.configuredAt<=LIMITS.firstFrameTimeoutMs,'capture_first_frame_timeout');
       need(this.frames<ENCODED_FRAME_POLICY.max_frames,'capture_frame_limit');
       need(this.canvas.width===this._width&&this.canvas.height===this._height,'capture_dimensions_changed');
-      const gap=now-this._lastAt;
-      need(gap<=(this.frames?ENCODED_FRAME_POLICY.max_frame_gap_ms:ENCODED_FRAME_POLICY.max_endpoint_gap_ms),'capture_frame_gap');
+      const gap=this.frames?now-this._lastAt:0;
+      need(gap<=ENCODED_FRAME_POLICY.max_frame_gap_ms,'capture_frame_gap');
       this._maxGap=Math.max(this._maxGap,gap);
-      if(!this.frames){this.firstFrameAt=now;this.firstFrameWall=wall;}
-      const timestamp=Math.floor(now-this.firstFrameAt)*1000;
+      const timestamp=this.frames?Math.floor(now-this.firstFrameAt)*1000:0;
       need(!this._pending||timestamp>this._pending.timestamp,'duplicate_quantized_timestamp');
       // Read the composited pixels now. Retain CPU memory, never a GPU-backed
       // canvas resource while the previous frame waits for its end timestamp.
@@ -146,6 +151,10 @@ export class PostRenderRecorder {
       }catch{throw Error('capture_snapshot_failed');}
       try{if(this._pending)this._submit(timestamp-this._pending.timestamp);}
       catch(error){frame.close();throw error;}
+      if(!this.frames){
+        this.startedAt=this.firstFrameAt=now;this.startedWall=this.firstFrameWall=wall;
+        clearTimeout(this._firstFrameTimer);
+      }
       this._pending={frame,timestamp};this.frames++;this.lastFrameAt=now;this.lastFrameWall=wall;this._lastAt=now;
       return true;
     }catch(error){this._fail(error.message);throw error;}
@@ -190,10 +199,10 @@ export class PostRenderRecorder {
     return this._stopPromise;
   }
   async _finish(){
-    this._check();need(!this.stopping,'capture_already_stopping');this.stopping=true;clearTimeout(this._timer);
+    this._check();need(!this.stopping,'capture_already_stopping');this.stopping=true;clearTimeout(this._timer);clearTimeout(this._firstFrameTimer);
     const endAt=this._now(),endWall=this._wall();
     try{
-      need(this.frames>=2&&endAt>=this.lastFrameAt&&endAt-this.startedAt<=this._maximum,'incomplete_capture');
+      need(this.frames>=2&&endAt>=this.lastFrameAt&&endAt-this.configuredAt<=this._maximum,'incomplete_capture');
       need(endAt-this.lastFrameAt<=ENCODED_FRAME_POLICY.max_endpoint_gap_ms,'capture_endpoint_gap');
       need(Math.abs(endWall-this.startedWall-(endAt-this.startedAt))<=ENCODED_FRAME_POLICY.max_wall_drift_ms,'capture_wall_clock_drift');
       this._maxGap=Math.max(this._maxGap,endAt-this.lastFrameAt);
