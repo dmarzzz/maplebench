@@ -228,15 +228,79 @@ class ExecutorTests(unittest.TestCase):
                     'protocol': self.backend.native['id'], 'status': 'completed', 'workerActive': False,
                     'recordingStatus': 'saved', 'evidenceStatus': 'saved'}}}
         self.host.admin.return_value = status
+        folder = Path(self.backend.config['relay_output_root']) / self.backend.run_id
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in (*executor.CONTROL_FILES.values(), 'video.webm'):
+            if not (folder/name).exists(): (folder/name).write_bytes(b'{}')
         return status
 
-    def test_capture_is_collected_after_terminal_while_session_stays_connected(self):
+    def test_large_video_is_not_copied_or_read_during_terminal_sampling(self):
         self.status_fixture()
-        self.backend.collect_short_control = MagicMock()
+        self.backend.collect_short_control = MagicMock(side_effect=AssertionError('heavy copy in sampling'))
+        self.backend.read_stable = MagicMock(side_effect=AssertionError('artifact read in sampling'))
+        video = Path(self.backend.config['relay_output_root']) / self.backend.run_id / 'video.webm'
+        with video.open('wb') as f: f.truncate(96 * 1024 * 1024)
         row = self.backend.sample(20)
         self.assertTrue(row['controller_idle'])
-        self.backend.collect_short_control.assert_called_once()
+        self.backend.collect_short_control.assert_not_called()
+        self.backend.read_stable.assert_not_called()
+        self.assertIn('short_control_terminal', self.backend.state)
         self.assertEqual([c.args[1]['op'] for c in self.host.admin.call_args_list], ['status'])
+
+    def test_changed_or_missing_terminal_artifacts_reject_before_deferred_copy(self):
+        self.status_fixture()
+        self.backend.sample(20)
+        self.backend.state['coverage_verified'] = True
+        self.backend.account_state.return_value = 0
+        self.backend.disconnect = MagicMock()
+        self.backend.read_stable = MagicMock(side_effect=AssertionError('copy before pin check'))
+        source = Path(self.backend.config['relay_output_root']) / self.backend.run_id
+        (source/'result.json').write_bytes(b'{"changed":true}')
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'terminal_evidence_changed'):
+            self.backend.collect_short_control()
+        (source/'result.json').unlink()
+        with self.assertRaises(FileNotFoundError): self.backend.collect_short_control()
+        self.backend.read_stable.assert_not_called()
+
+    def test_missing_terminal_file_never_latches_success_and_symlink_is_refused(self):
+        self.status_fixture()
+        source = Path(self.backend.config['relay_output_root']) / self.backend.run_id
+        (source/'result.json').unlink()
+        with self.assertRaises(FileNotFoundError): self.backend.sample(20)
+        self.assertNotIn('short_control_terminal', self.backend.state)
+        (source/'result.json').symlink_to(source/'controller.json')
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'terminal_evidence_changed'):
+            self.backend.sample(20)
+        self.assertNotIn('short_control_terminal', self.backend.state)
+
+    def test_deferred_copy_requires_verified_coverage_and_offline_account(self):
+        self.status_fixture()
+        self.backend.sample(20)
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'offline_coverage'):
+            self.backend.collect_short_control()
+        self.backend.state['coverage_verified'] = True
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'offline_coverage'):
+            self.backend.collect_short_control()
+
+    def test_latched_capture_cannot_revert_to_pending_or_change_identity(self):
+        status = self.status_fixture()
+        self.backend.sample(20)
+        status['bridge']['run']['recordingStatus'] = 'pending'
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'short_capture_not_saved'):
+            self.backend.sample(21)
+
+    def test_final_collection_orders_logout_before_deferred_artifact_read(self):
+        self.backend.safe_boundary = MagicMock()
+        self.backend.state['coverage_verified'] = True
+        events = []
+        self.backend.disconnect = MagicMock(side_effect=lambda: events.append('logout'))
+        def stop_after_copy():
+            events.append('copy')
+            raise RuntimeError('stop_after_order_verified')
+        self.backend.collect_short_control = MagicMock(side_effect=stop_after_copy)
+        with self.assertRaisesRegex(RuntimeError, 'stop_after_order_verified'):
+            self.backend.collect_final()
+        self.assertEqual(events, ['logout', 'copy'])
 
     def test_stale_scene_changed_run_and_control_overrun_are_refused(self):
         for failure in ('stale', 'other_run', 'late'):
@@ -423,6 +487,7 @@ class IndependentCollectionTests(unittest.TestCase):
         self.backend.disconnect = MagicMock()
         self.backend.persist = MagicMock()
         self.backend.verify_short_capture = MagicMock()
+        self.backend.collect_short_control = MagicMock()
         native_root = self.root / 'native'
         native_root.mkdir()
         for key, name in (('xp_ledger', 'xp.jsonl'), ('native_save', 'save.jsonl')):
