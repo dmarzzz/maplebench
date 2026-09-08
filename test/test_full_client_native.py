@@ -10,7 +10,7 @@ from full_client_capture import CAPTURE_DURATION_POLICY,capture_receipt,verify_v
 from full_client_session import SessionCoordinator,validate_guard_descriptors,AdminServer
 from full_client_trial import existing_lock,validate_spec,TrialError
 from full_client_publish import validate_manifest,verify_capture_bundle
-from full_client_docker_fixture import local_binding
+from docker_binding_fixture import local_binding
 from maple_agent import validate_rpc
 import test_full_client_capture as capture_fixtures
 
