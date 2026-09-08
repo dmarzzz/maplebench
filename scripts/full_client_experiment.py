@@ -212,8 +212,9 @@ def validated_spec(model, fixture):
     spec = {"schema_version": 1, "model": model, "scenario_fingerprint": fixture["scenario"]["sha256"],
             "baseline_sha256": fixture["baseline"]["sha256"], "budgets": copy.deepcopy(fixture["budgets"])}
     if fixture.get("protocol") is not None:
-        require(fixture["protocol"] == "full-client-adaptive-pilot-v1", "invalid_trial_protocol")
-        spec.update(schema_version=2, protocol=fixture["protocol"])
+        versions = {"full-client-adaptive-pilot-v1": 2, "full-client-xp-windows-v1": 3}
+        require(fixture["protocol"] in versions, "invalid_trial_protocol")
+        spec.update(schema_version=versions[fixture["protocol"]], protocol=fixture["protocol"])
     try:
         trial.validate_spec(spec)
     except trial.TrialError as error:
@@ -224,11 +225,25 @@ def validated_spec(model, fixture):
 def fixture_inputs(fixture, runner):
     """No host commands, services, asset inventory, database or model access."""
     scenario = decode(read_ref(fixture["scenario"]))
+    windows = fixture.get("protocol") == "full-client-xp-windows-v1"
+    controller_protocol = "full-client-adaptive-pilot-v1" if windows else fixture.get("protocol")
     require(scoring.same_json(scenario.get("trial_budgets"), fixture["budgets"])
-            and scenario.get("protocol") == fixture.get("protocol"), "fixture_budget_mismatch")
-    if fixture.get("protocol") == "full-client-adaptive-pilot-v1":
+            and scenario.get("protocol") == controller_protocol, "fixture_budget_mismatch")
+    require(("xp_window_protocol" in scenario) == windows, "invalid_trial_protocol")
+    if windows:
+        from full_client_xp_windows import validate_contract
+        from full_client_adaptive import FULL_HORIZON_POLICY
+        try:
+            validate_contract(scenario["xp_window_protocol"])
+        except (ValueError, TypeError, KeyError) as error:
+            raise ExperimentError("invalid_trial_protocol") from error
+        require(scoring.same_json(scenario.get("adaptive_protocol", {}).get("horizon_policy"),
+                                  FULL_HORIZON_POLICY), "invalid_trial_protocol")
+    if controller_protocol == "full-client-adaptive-pilot-v1":
         required = {str(Path(__file__).resolve().parent / name) for name in
                     ("full_client_adaptive.py", "full_client_adaptive_evidence.py", "maple_agent.py")}
+        if windows:
+            required.add(str(Path(__file__).resolve().parent / "full_client_xp_windows.py"))
         require(required <= {ref["path"] for ref in runner["dependencies"]}, "runner_dependencies_missing")
     read_ref(fixture["baseline"], maximum=MAX_BASELINE, keep=False)
     runtime = decode(read_ref(fixture["runtime_manifest"], maximum=MAX_MANIFEST), maximum=MAX_MANIFEST)
@@ -244,6 +259,8 @@ def fixture_inputs(fixture, runner):
     argv = adapter["argv"]
     require(isinstance(argv, list) and len(argv) == 4 and argv[2] == "--config", "invalid_backend_argv")
     config = decode(read_file(absolute(argv[3]), private=True)[0])
+    require(config.get("xp_window_protocol") == ("full-client-xp-windows-v1" if windows else None),
+            "backend_fixture_mismatch")
     require(all(scoring.same_json(config.get(key), fixture[key]) for key in ("scenario", "baseline", "runtime_manifest"))
             and config.get("attempt_root") == runner["state_root"]
             and config.get("world_lock") == runner["world_lock"]
@@ -355,8 +372,11 @@ def build_plan(config, *, id_factory=lambda: uuid.uuid4().hex):
                 "budgets", "adapter_config"} | ({"protocol"} if "protocol" in fixture else set()), "invalid_fixture")
         scenario = decode(read_ref(fixture["scenario"]))
         if scenario.get("protocol") == "full-client-adaptive-pilot-v1":
-            require(fixture.get("protocol", scenario["protocol"]) == scenario["protocol"], "invalid_trial_protocol")
-            fixture["protocol"] = scenario["protocol"]
+            if "xp_window_protocol" in scenario:
+                require(fixture.get("protocol") == "full-client-xp-windows-v1", "invalid_trial_protocol")
+            else:
+                require(fixture.get("protocol", scenario["protocol"]) == scenario["protocol"], "invalid_trial_protocol")
+                fixture["protocol"] = scenario["protocol"]
         fixture["adapter_fingerprint"] = fixture_inputs(fixture, plan["runner"])
     models, reps = plan["models"], plan["repetitions"]
     require(isinstance(models, list) and models and all(isinstance(m, str) and m in MODELS for m in models)

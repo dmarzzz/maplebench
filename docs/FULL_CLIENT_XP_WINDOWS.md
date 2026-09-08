@@ -66,10 +66,13 @@ The arithmetic supports horizons up to 30 minutes (120 complete windows), but
 the full bundle verifier currently accepts only the implemented 300-second
 adaptive controller (20 windows). A 30-minute controller, native runtime
 acceptance, and an accepted publication adapter remain separate requirements.
-The current controller can finish early when its call/token/action limit is
-exhausted. Such a result retains its original net-XP meaning but cannot satisfy
-this full-300-second window contract; it is unknown here. This version does not
-silently add idle gameplay or extend capture after an early controller exit.
+The original adaptive controller can finish early when its call/token/action
+limit is exhausted. Such a result cannot satisfy this full-300-second window
+contract. A newly frozen controller may explicitly enable
+`full-horizon-reserve-v1`: confirmed budget exhaustion then keeps the world under
+passive observation through the deadline, with no extra gameplay inputs. This
+declared policy does not upgrade older evidence; death or infrastructure failure
+can still end the interval early and prevent full coverage.
 The frozen adaptive pilot also rejects later-cycle level changes; supporting
 adaptation across level-ups requires its own controller revision. The ledger
 arithmetic is tested across those transitions without claiming a live adaptive
@@ -193,9 +196,12 @@ an accepted adapter and is never granted by the collector.
 Pin the new `full_client_xp_windows.py` with all existing runtime, trial, scorer,
 adaptive-evidence, and capture dependencies. `CommandAdapter` includes it in
 its automatic source fingerprint. The ordinary standalone trial runner supports
-schema 3. The finite experiment-plan builder and public adaptive gallery still
-accept their previous protocols only; they must explicitly adopt this new one
-before a window cohort can be scheduled or published. Do not silently relabel
+schema 3. The finite experiment builder also accepts an explicitly selected
+`full-client-xp-windows-v1` fixture, only with its matching native configuration,
+pinned scorer, complete window contract, and frozen full-horizon controller
+policy. It emits schema-3 requests; it never infers a scoring upgrade from an
+existing adaptive fixture. The public adaptive gallery still needs a separate
+accepted window adapter before such a cohort can be published. Do not relabel
 an existing plan or reinterpret an old pilot's score.
 
 An offline diagnostic invocation is:
