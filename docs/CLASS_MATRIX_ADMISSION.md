@@ -1,8 +1,10 @@
-# Admission for the next three-class pilot matrix
+# Admission for the four-class pilot matrix
 
 This is a readiness contract for a future finite matrix, not a runtime launch
 plan or a claim that newly provisioned workers are accepted. The target is one
-four-model group for each of Hero, Bowmaster and Ice/Lightning Arch Mage. Keep
+four-model group for each of Hero, Bowmaster, Ice/Lightning Arch Mage and the
+user-selected fourth class, Night Lord: sixteen five-minute results. Night Lord
+requires a new frozen fixture and native qualification before model dispatch. Keep
 each group labeled as a five-minute port pilot. The [roadmap](ROADMAP.md) records
 which effects and cohorts have actually been demonstrated.
 
@@ -47,6 +49,7 @@ ordinary logout/save and the same restored fixture must verify again.
 | Hero | Visible movement, jump, buffs, Brandish damage, ordinary positive saved XP in model runs; R5 has three accepted results and one unscored failure. | Re-prove mapped controls, native damage, capture, save and restoration from the declared Hero fixture. Run a fresh complete four-model group; R5 is not four successful results. A level transition or fixed-cutoff XP claim additionally needs native ledger acceptance. |
 | Bowmaster | Discrete Hurricane damage, Arrow Rain effect/damage, Soul Arrow/Sharp Eyes, jump and restored baseline. R6 has four accepted zero-XP port results. | Re-prove the scoped ranged effects and resource behavior. A faithful continuous-Hurricane claim additionally needs held-channel cadence, native damaging hits while held, correct release/stop behavior and resource/ammunition evidence on a repaired client. The current discrete-cast port must retain its limitation if used unchanged. Real-arrow consumption and Soul Arrow behavior must not be conflated. |
 | Ice/Lightning Arch Mage | Chain Lightning damage, mana use, buffs, jump and directional Teleport in a scripted check. | Re-prove those effects on the new worker. Qualify area/chain behavior with multiple distinct affected entities and corresponding visible/native effects; casting animation or MP loss alone cannot pass this gate. Verify the declared range and Teleport displacement from actual observations. No four-model Mage result set has yet been accepted. |
+| Night Lord | User-selected fourth class; no accepted native fixture or model group yet. | Freeze level, claw, throwing stars, stats and supplies. Prove actual Triple Throw and Avenger damage, projectile consumption, buffs, movement, capture and ordinary persistence before dispatch. Declare excluded or unqualified skills explicitly; source classification alone does not prove gameplay. |
 
 The existing scripted check remains bounded to 30 seconds, 12 input actions,
 100 SDK requests and 45 seconds of recording, with ordinary cleanup and a fresh
@@ -102,10 +105,10 @@ unsubmitted entries. Never replay an uncertain request or reuse an old ID.
 
 ## Execute and publish without confounding the matrix
 
-Once individually qualified, one worker can run Mage while the other runs Bow.
+Once individually qualified, one worker can run Hero while the other prepares Mage.
 After one group has terminal closeout and verified restoration, one declared
-worker can run the fresh Hero group. This is three finite plans, twelve planned
-attempts and at most 144 requests / 2,880,000 reserved tokens. It does not authorize
+worker can run the next qualified Bowmaster or Night Lord group. This is four finite plans, sixteen planned
+attempts and at most 192 requests / 3,840,000 reserved tokens. It does not authorize
 repetitions, replacement attempts or an unbounded queue. Before each admission,
 the full plan bound plus cleanup/backup reserve must fit before that worker's
 fixed shutdown deadline; otherwise reduce scope before admission or defer it.
@@ -115,7 +118,7 @@ Do not assign one model systematically to a faster worker. For repetitions,
 predeclare model-order rotation and worker assignment so hardware/order effects
 are not mistaken for model effects. The current single repetition is not an
 order-balanced estimate. Compare models within a fixture; do not average raw
-Hero, Bow and Mage XP into a winner or pool changed client versions.
+Hero, Bow, Mage and Night Lord XP into a winner or pool changed client versions.
 
 Workers export only checked public packages after saving independent private
 evidence backups. Use the existing finite publication follower and exact

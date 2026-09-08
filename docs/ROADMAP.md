@@ -4,6 +4,14 @@ Decision snapshot: September 8, 2026. This is the current product roadmap; older
 implementation plans remain useful technical references. Checkboxes mean the
 stated acceptance evidence exists, not merely that code or tests exist.
 
+Current execution priority: complete one four-model, five-minute group per class
+for Hero, Bowmaster, Ice/Lightning Arch Mage and Night Lord (sixteen results).
+Night Lord was selected as the fourth class on September 8. Two isolated workers
+prepare and run separate whole class groups in parallel, with one publication
+owner adding each accepted result. Their provisioning is not native qualification.
+Preserve completed pilot results and disclose port limitations; never tune a
+fixture during a group or substitute scripted checks for model runs.
+
 ## Goal
 
 Build a public, reproducible benchmark of coding agents playing through the
