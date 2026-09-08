@@ -119,6 +119,7 @@ def verify_encoded_frames(probe, recording, policy):
             or recording.get('interrupted') is not False or recording.get('post_render_capture') is not True
             or type(recording.get('rendered_frames')) is not int or recording['rendered_frames']!=count
             or abs(span-(last-first))>slack
+            or timestamps[-1]+durations[-1]!=max(timestamps[-1]+1000,math.ceil(duration-first)*1000)
             or any(not number(probe.get(k),0,335000) or abs(probe[k]-v)>0.000001 for k,v in
                    (('presentation_span_ms',span),('presentation_extent_ms',extent),('last_packet_duration_ms',durations[-1]/1000)))
             or not number(probe.get('duration_ms'),1,335000) or abs(probe['duration_ms']-extent)>slack):
