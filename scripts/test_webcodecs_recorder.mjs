@@ -46,8 +46,8 @@ test('explicit snapshots flush before final WebM and stop is idempotent',async()
   assert.equal(result.encoder_receipt.submitted_frames,2);assert.equal(result.encoder_receipt.flushed,true);
   assert.match(result.encoder_receipt.webm_sha256,/^[a-f0-9]{64}$/);
   assert.equal(result.blob.size,result.encoder_receipt.webm_bytes);
-  assert.equal(result.measurements.first_frame_offset_ms,10);
-  assert.equal(result.measurements.last_frame_offset_ms,44.200000000000045);
+  assert.equal(result.measurements.first_frame_offset_ms,0);
+  assert.equal(result.measurements.last_frame_offset_ms,34.200000000000045);
   assert.equal(h.calls.at(-1),'close');assert.ok(h.calls.indexOf('flush')<h.calls.lastIndexOf('close'));
 });
 test('each snapshot is retained until next timestamp gives its duration',async()=>{
@@ -95,13 +95,14 @@ test('readback failure after one frame closes the retained CPU frame',async()=>{
   behavior.readbackFailure=true;h.set(1050);assert.throws(()=>h.recorder.onRendered(),/capture_snapshot_failed/);
   assert.equal(h.frames[0].closed,true);assert.equal(h.recorder.submittedFrames,0);
 });
-test('terminal rounding uses the exact serialized clock operands',async()=>{
+test('first-frame origin keeps terminal rounding on the serialized clock operands',async()=>{
   const h=harness();h.set(0.1);await h.recorder.initialize();h.set(0.2);h.recorder.onRendered();
   h.set(2.2);h.recorder.onRendered();h.set(4.2);const result=await h.recorder.stop();
   const m=result.measurements;
   assert.equal(Math.ceil(4.2-0.2),4);
-  assert.equal(Math.ceil(m.duration_ms-m.first_frame_offset_ms),5);
-  assert.equal(h.instances[0].inputs[1].duration,3000);
+  assert.equal(m.first_frame_offset_ms,0);
+  assert.equal(Math.ceil(m.duration_ms-m.first_frame_offset_ms),4);
+  assert.equal(h.instances[0].inputs[1].duration,2000);
   // The same cancellation occurs in the concrete long-running browser clocks.
   const started=221325.76518336454,first=221485.7757564947,stop=515664.7757564947;
   assert.equal(Math.ceil(stop-first),294179);
@@ -143,10 +144,38 @@ test('canvas resize is refused',async()=>{const h=harness();await h.recorder.ini
 test('wall clock drift is refused',async()=>{const h=harness();await h.recorder.initialize();h.drift(6);
   assert.throws(()=>h.recorder.onRendered(),/capture_wall_clock_drift/);});
 test('long lead, internal and tail gaps are refused',async()=>{
-  const a=harness();await a.recorder.initialize();a.set(1251);assert.throws(()=>a.recorder.onRendered(),/capture_frame_gap/);
+  const a=harness();await a.recorder.initialize();a.set(6001);assert.throws(()=>a.recorder.onRendered(),/capture_first_frame_timeout/);
   const b=harness();await b.recorder.initialize();b.set(1010);b.recorder.onRendered();b.set(2011);
   assert.throws(()=>b.recorder.onRendered(),/capture_frame_gap/);
   const c=harness();await two(c);c.set(1295);await assert.rejects(c.recorder.stop(),/capture_endpoint_gap/);
+});
+test('a 301ms first-frame delay does not invent missing media or weaken endpoint bounds',async()=>{
+  const h=harness();await h.recorder.initialize();assert.equal(h.recorder.startedAt,undefined);
+  h.canvasPixels.fill(81);h.set(1301);h.recorder.onRendered();
+  assert.equal(h.recorder.startedAt,1301);assert.equal(h.recorder.firstFrameAt,1301);
+  assert.equal(h.recorder.startedWall,101301);assert.equal(h.frames[0].timestamp,0);
+  assert.equal(h.frames[0].pixels[0],81);h.set(1401);h.recorder.onRendered();h.set(1411);
+  const result=await h.recorder.stop();assert.equal(result.measurements.first_frame_offset_ms,0);
+  assert.equal(result.measurements.duration_ms,110);assert.equal(result.measurements.max_frame_gap_ms,100);
+});
+test('no first frame times out independently and closes the configured encoder',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const h=harness();await h.recorder.initialize();
+  t.mock.timers.tick(LIMITS.firstFrameTimeoutMs+1);
+  assert.equal(h.recorder.failure,'capture_first_frame_timeout');assert.equal(h.instances[0].state,'closed');
+  assert.equal(h.recorder.frames,0);await assert.rejects(h.recorder.stop(),/capture_first_frame_timeout/);
+});
+test('stop before the first frame fails immediately and clears readiness timers',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const h=harness();await h.recorder.initialize();
+  const a=h.recorder.stop();assert.equal(a,h.recorder.stop());await assert.rejects(a,/incomplete_capture/);
+  t.mock.timers.tick(LIMITS.firstFrameTimeoutMs+1);
+  assert.equal(h.recorder.failure,'incomplete_capture');assert.equal(h.instances[0].state,'closed');
+});
+test('first frame does not restart the fixed outer capture limit',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});const h=harness();await h.recorder.initialize();
+  t.mock.timers.tick(301);h.set(1301);h.recorder.onRendered();
+  t.mock.timers.tick(LIMITS.firstFrameTimeoutMs);assert.equal(h.recorder.failed,false);
+  t.mock.timers.tick(10000-301-LIMITS.firstFrameTimeoutMs);
+  assert.equal(h.recorder.failure,'capture_duration_limit');
 });
 test('unsupported configuration cannot fall back to MediaRecorder',async()=>{
   const h=harness({unsupported:true});await assert.rejects(h.recorder.initialize(),/vp8_configuration_unsupported/);

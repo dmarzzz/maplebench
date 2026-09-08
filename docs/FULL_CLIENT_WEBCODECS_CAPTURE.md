@@ -64,11 +64,22 @@ recorder.onRendered();
 const {blob, encoder_receipt, measurements} = await recorder.stop();
 ```
 
-The factory has a five-second support/configuration bound, then samples arm
-monotonic and wall clocks synchronously. It does not manufacture an initial
-frame. `onRendered()` snapshots immediately, returns true on acceptance, and
-increments `frames`. It throws on overload or capture failure. `submittedFrames`,
-`outputFrames`, `failed`, `startedAt` and `startedWall` are available. There is no
+The factory has a five-second support/configuration bound, then returns a ready
+encoder with no media clock or frames yet. The first real post-render hook must
+arrive within a separate five-second readiness bound. That hook samples the
+media's monotonic and wall origin and copies its actual pixels synchronously;
+its timestamp and first-frame offset are zero. Setup-to-first-render delay is
+not missing media. The fixed maximum capture timer still begins at configuration
+completion and is never restarted by that first frame; the controller also
+keeps its original request-to-stop maximum. No initial frame is manufactured.
+`onRendered()` snapshots immediately, returns true on acceptance, and increments
+`frames`. It throws on overload or capture failure. `submittedFrames`,
+`outputFrames`, and `failed` are available; `startedAt` and `startedWall` become
+available only after the first accepted snapshot. The controller displays
+arming until then, and the input/first-frame handshake still requires `frames>0`.
+Stopping before the first frame fails immediately and closes the encoder. A
+missing first frame produces `capture_first_frame_timeout`; its diagnostic uses
+the capture-request clock, not an invented media origin. There is no
 MediaRecorder fallback. `stop()` returns the same promise on repeated calls,
 flushes within five seconds and completes all hashing/muxing within 15 seconds.
 Failures abort the encoder and never return an uploadable Blob.
@@ -147,7 +158,10 @@ counts, duplicate/missing output, invisible frame rejection, queue limits,
 quantization, clock drift, gaps, resize, unsupported codec, quality-mode support, failed hashes and
 bounded configuration/flush/finalization. CPU snapshot tests also cover exact
 pixel bytes and format, synchronous snapshot ownership across later canvas
-changes, retained-frame closeout and readback errors without fallback.
+changes, retained-frame closeout and readback errors without fallback. A 301 ms
+initial-render delay is accepted with a zero-offset real first frame; separate
+readiness timeout, stop-before-frame and unchanged outer deadline tests prevent
+that startup fix from extending capture or admitting missing frames.
 
 `scripts/check_webcodecs_capture.mjs` runs an isolated headless browser on a
 synthetic canvas through this exact module, then checks ffprobe packet hashes,

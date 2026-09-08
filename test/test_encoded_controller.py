@@ -14,13 +14,13 @@ class EncodedControllerTests(unittest.TestCase):
         fixture="""
 const assert=require('node:assert/strict');
 let capture=null,captureFailure=null,saving=false,pendingUpload=null,closed=false,uploads=0,created=0;
-let failStart=false,failStop=false,finish;
+let failStart=false,failStop=false,finish,now=100,wall=1000;
 const failureCallbacks=[];
 const policy={id:'post-render-encoded-frame-v1'};
 const run={id:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',nativeAcceptance:{capture_duration_policy:policy,capture_max_ms:45000}};
 const ctx=new Proxy({measureText:()=>({width:0})},{get:(o,k)=>k in o?o[k]:()=>{}});
 const document={hidden:false,createElement:()=>({getContext:()=>ctx})};
-const game={width:800,height:600},performance={now:()=>100},clientId='client';Date.now=()=>1000;
+const game={width:800,height:600},performance={now:()=>now},clientId='client';Date.now=()=>wall;
 const notice={},renderHeader=()=>{},setTimeout=()=>1,clearTimeout=()=>{},cancelAnimationFrame=()=>{};
 const ink={},leafPath='',Path2D=function(){},fitText=()=>{};
 const view=()=>({mode:'Native',state:'Running',hp:'HP',mp:'MP',xp:'XP',keys:'Keys',hpFraction:1,mpFraction:1,alive:true});
@@ -33,7 +33,7 @@ const receipt={schema_version:1,codec:'vp8',flushed:true};
 const createPostRenderRecorder=async(canvas,options)=>{
  failureCallbacks.push(options.onFailure);
  created++;assert.equal(options.maxDurationMs,45000);if(failStart)throw Error('Unsupported');
- const r={startedAt:100,startedWall:1000,frames:0,onRendered(){this.frames++;return true;},
+ const r={frames:0,onRendered(){if(!this.frames){this.startedAt=this.firstFrameAt=now;this.startedWall=this.firstFrameWall=wall;}this.frames++;return true;},
  stop(){if(failStop)return Promise.reject(Error('Flush failed'));
  return new Promise(resolve=>{finish=()=>resolve({blob:new Blob(['clip']),encoder_receipt:receipt,measurements});});}};
  return r;
@@ -66,6 +66,19 @@ assert.equal(pendingUpload.metadata.interrupted,false);
 failStart=true;await startRecording('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');assert.equal(capture,null);
 assert.equal(uploads,0);assert.match(notice.textContent,/could not start/);
 assert.equal(captureFailure.code,'encoder_failure_unknown');
+""")
+
+    def test_armed_controller_waits_for_actual_frame_origin_and_keeps_diagnostic_clock_honest(self):
+        self.run_lifecycle("""
+await startRecording(run.id);assert.equal(capture.recorderStarted,true);assert.equal(capture.frames,0);
+assert.equal(capture.startedAt,100);assert.equal(capture.encodedRecorder.startedAt,undefined);
+retainCaptureFailure(capture,'capture_first_frame_timeout');assert.equal(captureFailure.clock_origin,'capture_request');
+captureFailure=null;now=401;wall=1301;capture.onRendered();
+assert.equal(capture.frames,1);assert.equal(capture.startedAt,401);assert.equal(capture.startedWall,1301);
+assert.equal(capture.firstFrameAt,401);assert.equal(capture.firstFrameWall,1301);
+retainCaptureFailure(capture,'encoder_error');assert.equal(captureFailure.clock_origin,'encoder_start');
+assert.equal(captureFailure.first_frame_offset_ms,0);
+failStop=true;await stopRecording();
 """)
 
     def test_failed_flush_cannot_upload_an_accepted_recording(self):
