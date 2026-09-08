@@ -112,6 +112,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers(); self.wfile.write(data)
             return
         if path == '/demo-session':
+            if SESSION is not None and not SESSION.login_allowed():
+                self.send_error(409, 'Client is waiting between trials')
+                return
             auth = json.loads(read_private_file(DEMO_ACCOUNT,16384))
             data = json.dumps(dict(auth, enabled=True)).encode()
             self.send_response(200)
@@ -121,6 +124,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(data)
             return
         if path == '/web/index.html':
+            if SESSION is not None:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                values = query.get('transition', [])
+                target = SESSION.game_entry_redirect(values[0] if len(values) == 1 else None)
+                if target is not None:
+                    self.send_response(303)
+                    self.send_header('Location', target)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
             if not (ROOT/'web/index.html').resolve().is_relative_to(ROOT):
                 self.send_error(404)
                 return

@@ -1078,6 +1078,14 @@ class RuntimeTests(unittest.TestCase):
 
 
 class SafeRuntimeErrorTests(unittest.TestCase):
+    def test_online_snapshot_race_keeps_safe_specific_error_code(self):
+        host=runtime.Host(); host.remaining=MagicMock(return_value=5)
+        config={'command':['/usr/bin/mysql'],'database':'synthetic','character_id':1,'account_id':2}
+        with patch.object(runtime,'collect',side_effect=ValueError('account_still_online')):
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode,'^account_still_online$'):
+                host.snapshot(config,'a'*32)
+        self.assertIn('account_still_online',runtime.RUNTIME_ERROR_CODES)
+
     def test_admin_only_preserves_exact_reviewed_error_envelopes(self):
         host=runtime.Host(); host.remaining=MagicMock(return_value=5)
         cases=[({'ok':False,'error':code},code) for code in
