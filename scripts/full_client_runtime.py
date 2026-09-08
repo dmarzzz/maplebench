@@ -707,6 +707,9 @@ class CosmicRuntime:
         self.state["artifacts"]["reset"] = self.artifact("reset.json", reset)
         return {"reset_verified": True}
 
+    def service_runtime_seconds(self):
+        return self.context["request"]["budgets"]["total_seconds"] + 120
+
     def start_server(self):
         require(self.state.get("reset") and self.stopped(self.unit("cosmic")) and self.account_state() == 0,
                 "fresh_reset_required")
@@ -735,7 +738,7 @@ class CosmicRuntime:
         env.update(self.native_xp_environment(native))
         text = "[Service]\n" + "".join('Environment="' + key + '=' + value.replace('\\', '\\\\').replace('"', '\\"') + '"\n'
                                        for key, value in env.items())
-        text += "MemoryMax=2300M\nMemorySwapMax=0\nCPUQuota=200%\nRestart=no\nKillMode=control-group\nTimeoutStopSec=30\nRuntimeMaxSec=" + str(self.context["request"]["budgets"]["total_seconds"] + 120) + "\n"
+        text += "MemoryMax=2300M\nMemorySwapMax=0\nCPUQuota=200%\nRestart=no\nKillMode=control-group\nTimeoutStopSec=30\nRuntimeMaxSec=" + str(self.service_runtime_seconds()) + "\n"
         def quote(value):
             return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '$$') + '"'
         launch = [self.config["java"]["path"], "-Xmx1536m", "-XX:ActiveProcessorCount=2",
