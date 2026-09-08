@@ -332,6 +332,9 @@ for, and the measurements support an honest per-fixture comparison.
   buffs and MP cost, Hurricane damage before basic attack, and Arrow Rain
   effects/damage. Capture, ordinary save and exact baseline restoration passed.
   Saved net XP was zero; no kill or player-contact damage is established.
+  This accepts the declared port's ranged fixture only. Sustained Hurricane
+  channel fidelity remains unaccepted; it is not a canonical Bowmaster
+  benchmark. A channel repair requires a new client version and fresh cohort.
 - [ ] **M5.2 Accept a magic fixture.** Candidate: Ice/Lightning Arch Mage. Prove
   area effects, affected entities and mana use from a frozen baseline.
   Partial evidence: native-v10 confirms Chain Lightning damage and mana use,

@@ -64,3 +64,32 @@ model differences; freeze and disclose fixture difficulty. Multi-entity area
 behavior, longer hunting, navigation objectives and sampling calibration remain
 roadmap work. In particular, damaging-skill qualification does not satisfy all
 of M5, and native success does not complete M2's four-model publication gate.
+
+
+### Hurricane channel limitation
+
+The accepted Bow check proves discrete ranged damage in this client port. It
+does not qualify sustained Hurricane channeling or canonical Bowmaster fidelity.
+In the pinned upstream client source, `src/client/Gameplay/Stage.cpp` repeats
+held Jump, basic Attack and Pickup in `handle_held_actions`, but has no held-skill
+loop. `Stage::send_key` calls `combat.use_move(action)` for skill events without
+checking the key-down boolean; `src/client/IO/UIStateGame.cpp` forwards both
+press and release. `src/client/Character/Player.cpp` refuses another attack while
+the current attack animation is active.
+
+The controller in `ui/full-client/controller.js` emits a synthetic key-down and
+timed release, then releases again during final cleanup. Duplicate key-up
+callbacks can therefore occur; they are not a continuous channel cadence.
+The generic implementation in `src/client/Gameplay/Combat/Skill.cpp` and
+`SkillAction.cpp` uses ordinary attack actions. Although the native Hurricane
+data contains prepare, keydown and keydownend animation trees, this path does
+not implement those channel stages. Holding a skill key longer does not imply
+continuous native Hurricane damage output.
+
+The observed attack count and server damage rate in a model run remain separate
+measurements. This limitation alone cannot explain every zero-XP result, and a
+zero saved gain is not evidence of a scoring bug. Keep the current range and
+resource qualification scoped to the declared port. Implementing faithful
+channel behavior would change the client version and require fresh native
+qualification and a new cohort; current results must retain their original
+client identity and limitations.
