@@ -46,6 +46,17 @@ class EncodedCaptureTests(unittest.TestCase):
             raw=json.dumps(self.ledger|update,separators=(',',':'))
             self.value['encoder_receipt']=self.encoder|{'ledger_sha256':hashlib.sha256(raw.encode()).hexdigest(),'ledger_bytes':len(raw)}
             with self.subTest(update=update),self.assertRaises(ValueError):verify_video_duration(self.probe|{'encoder_ledger_json':raw},self.recording(),POLICY)
+    def test_terminal_packet_extent_is_bound_to_measured_stop(self):
+        for tail in (9000,11000,200000):
+            ledger=self.ledger|{'durations_us':[500000,500000,tail]}
+            raw=json.dumps(ledger,separators=(',',':'))
+            self.value['encoder_receipt']=self.encoder|{'ledger_sha256':hashlib.sha256(raw.encode()).hexdigest(),'ledger_bytes':len(raw)}
+            extent=1000+tail/1000
+            probe=self.probe|{'encoder_ledger_json':raw,'packet_durations_us':ledger['durations_us'],
+                'last_packet_duration_ms':tail/1000,'duration_ms':extent,'presentation_extent_ms':extent}
+            with self.subTest(tail=tail),self.assertRaisesRegex(ValueError,'recording_encoded_timing_mismatch'):
+                verify_video_duration(probe,self.recording(),POLICY)
+
     def test_original_policy_cannot_accept_new_receipt(self):
         from full_client_capture import CAPTURE_DURATION_POLICY
         with self.assertRaises(ValueError):verify_video_duration(self.probe,self.recording(),CAPTURE_DURATION_POLICY)
