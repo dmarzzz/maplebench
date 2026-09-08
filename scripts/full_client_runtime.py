@@ -432,7 +432,7 @@ class CosmicRuntime:
         # The executor reads the JavaScript dispatcher at each container launch;
         # pin it alongside imported modules, not just the Docker image.
         required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
-                    controls / "controller.js", controls / "waiting.html",
+                    controls / "controller.js", controls / "webcodecs-recorder.js", controls / "waiting.html",
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}
         require(all(str(path) in extras for path in required), "serving_sources_not_frozen")

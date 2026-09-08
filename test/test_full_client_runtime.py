@@ -1039,7 +1039,7 @@ class RuntimeTests(unittest.TestCase):
         script = self.root / "repo/scripts/serve-full-client.py"
         client = self.root / "client"
         required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
-                    *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "waiting.html")),
+                    *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "webcodecs-recorder.js", "waiting.html")),
                     *(client / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))]
         for path in required:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -1086,6 +1086,13 @@ class RuntimeTests(unittest.TestCase):
             self.backend.manifest["extra_files"].pop(0)
             with self.assertRaisesRegex(runtime.RuntimeErrorCode, "serving_sources_not_frozen"):
                 self.backend.web_identity({"MainPID": "123", "User": "synthetic"})
+
+    def test_encoder_module_cannot_be_omitted_from_frozen_serving_sources(self):
+        self.web_fixture()
+        self.backend.manifest['extra_files']=[ref for ref in self.backend.manifest['extra_files']
+                                              if not ref['path'].endswith('/webcodecs-recorder.js')]
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode,'serving_sources_not_frozen'):
+            self.backend.web_identity({'MainPID':'123','User':'synthetic'})
 
     def test_container_dispatcher_cannot_be_omitted_from_frozen_runtime(self):
         self.web_fixture()
