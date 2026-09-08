@@ -478,6 +478,7 @@ class FullClientTests(unittest.TestCase):
                         steps.append(step);kwargs['step_callback'](step)
                     return {'reason':'program_complete','actions':sum(accepts),'steps':steps}
                 with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                     mock.patch('full_client_bridge.time.time',side_effect=lambda:run['startedAtMs']/1000+clock[0]-100), \
                      mock.patch.object(bridge,'request',side_effect=request), \
                      mock.patch.object(bridge,'_wait_for_capture'), \
                      mock.patch('full_client_bridge.execute_program',side_effect=execute):

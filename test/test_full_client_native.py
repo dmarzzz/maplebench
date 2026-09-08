@@ -107,6 +107,33 @@ class NativeTests(unittest.TestCase):
   self.assertFalse((folder/'api-request.json').exists());self.assertFalse(self.bridge.leases)
   checked=validate_manifest(publication);self.assertFalse(checked['ready'])
   self.assertTrue(any('API controller' in reason for reason in checked['reasons']))
+ def test_delayed_worker_keeps_capture_and_input_times_on_request_origin(self):
+  run=self.start();elapsed=[0.0];ready=[]
+  # Five seconds of journal/scheduler delay precede worker entry. The recorder
+  # then acknowledges its first frame before any program or input is allowed.
+  wall=lambda:run['startedAtMs']/1000+5+elapsed[0]
+  def capture(_):
+   elapsed[0]+=.05;ready.append(round(wall()*1000))
+  def request(url,*args,**kwargs):
+   return {'accepted':True,'observation':self.observation} if url.endswith('/v1/action') else self.observation
+  def execute(*args,**kwargs):
+   elapsed[0]+=.1;reply=kwargs['request_fn']('/v1/action',{})
+   step={'kind':'sdk','method':'pressKeys','args':[['JUMP'],100],'result':reply}
+   kwargs['step_callback'](step);elapsed[0]+=.2
+   return {'reason':'program_complete','actions':1,'steps':[step]}
+  with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:500+elapsed[0]),\
+       mock.patch('full_client_bridge.time.time',side_effect=wall),\
+       mock.patch.object(self.bridge,'_wait_for_capture',side_effect=capture),\
+       mock.patch.object(self.bridge,'request',side_effect=request),\
+       mock.patch('full_client_bridge.execute_program',side_effect=execute):
+   self.bridge._run(run)
+  result=json.loads((self.bridge.output/run['id']/'result.json').read_bytes())
+  origin=result['timing']['startedAtMs'];timeline=result['timeline']
+  self.assertEqual(result['controller']['status'],'completed')
+  self.assertEqual(origin+timeline['program_started_ms'],ready[0])
+  self.assertEqual(origin+timeline['first_input_started_ms'],ready[0]+100)
+  self.assertEqual(origin+timeline['program_ended_ms'],result['timing']['endedAtMs'])
+  self.assertGreaterEqual(timeline['program_started_ms'],5000)
  def test_private_native_dispatch_requires_exact_request_and_fd_validation(self):
   coordinator=SessionCoordinator(self.bridge,{'world':str(self.root/'world'),'queue':str(self.root/'queue')})
   coordinator.owner='test';coordinator.page='game';coordinator.desired='game';coordinator.acknowledged=True;coordinator.last_seen=__import__('time').monotonic()
