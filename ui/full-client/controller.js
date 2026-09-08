@@ -118,6 +118,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   let run = {status:'idle',mode:'manual',model:null}, baseline = null, baselineScope = 'session';
   let starting = false, relayConnected = false, disconnectedAt = null, closed = false;
   let acknowledgement = null, activeCommand = null, lastRunId = null, recordedRunId = null, releaseAck = null;
+  let captureFailure = null;
   let capture = null, saving = false, pendingUpload = null, pollTimer, pollAbort;
   const activeRun = () => ['requesting','running'].includes(run.status) || run.workerActive === true || run.leaseReleasePending === true;
   const busy = () => starting || activeRun() || Boolean(activeCommand);
@@ -134,8 +135,8 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     code,keyCode:codes[code],which:codes[code],bubbles:true,cancelable:true
   }));
   const release = code => { clearTimeout(held.get(code)); held.delete(code); key(code,'keyup'); };
-  const releaseAll = interrupted => {
-    if (interrupted && activeCommand) activeCommand.interrupted = true;
+  const releaseAll = (interrupted,reason='interrupted_unknown') => {
+    if (interrupted && activeCommand) { activeCommand.interrupted = true; activeCommand.failure ??= reason; }
     [...new Set([...held.keys(), ...physical])].forEach(release); physical.clear();
   };
   const manualMode = () => { if (baselineScope !== 'session') setBaseline('session'); };
@@ -151,7 +152,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   for (const [text, code, ms] of [['← 1s','ArrowLeft',1000],['→ 1s','ArrowRight',1000],['Jump','Space',180],
     ['Brandish','KeyA',500],['Combo','KeyS',180],['Booster','KeyD',180],['Maple Warrior','KeyF',180],
     ['HP potion','KeyQ',180],['MP potion','KeyW',180]]) button(text, () => hold(code,ms), manualGroup,manualButtons);
-  button('Release keys', () => releaseAll(true), manualGroup);
+  button('Release keys', () => releaseAll(true,'interrupted_operator'), manualGroup);
   for (const type of ['keydown','keyup']) window.addEventListener(type, event => {
     if (!event.isTrusted || !namesByCode[event.code]) return;
     // Preserve keyboard activation of toolbar controls without forwarding their
@@ -164,9 +165,9 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     if (type === 'keydown') physical.add(event.code); else physical.delete(event.code);
     renderHeader();
   }, true);
-  window.addEventListener('blur', () => { releaseAll(true); renderHeader(); });
+  window.addEventListener('blur', () => { releaseAll(true,'interrupted_window_blur'); renderHeader(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { releaseAll(true); if(capture) capture.hidden=true; if (capture?.autoRunId) stopRecording(); }
+    if (document.hidden) { releaseAll(true,'interrupted_hidden'); if(capture) capture.hidden=true; if (capture?.autoRunId) stopRecording(); }
   });
 
   const format = value => Number.isFinite(value) ? value.toLocaleString('en-US') : '—';
@@ -235,6 +236,18 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     while (value.length && ctx.measureText(value).width > width) value = value.slice(0,-1);
     ctx.fillText(value === text ? value : value.slice(0,-1)+'…', x,y);
   };
+  const captureFailureCodes = new Set(["capture_clock_or_duration","capture_wall_clock_drift","capture_frame_limit","capture_dimensions_changed","capture_frame_gap","duplicate_quantized_timestamp","invalid_frame_duration","encoder_backpressure","encoder_output_timing_mismatch","encoder_output_type","encoder_missing_requested_keyframe","capture_byte_limit","encoder_hash_backpressure","encoder_configuration_changed","vp8_hidden_or_mistyped_frame","vp8_keyframe_dimensions","encoded_hash_failed","encoder_stop_timeout","capture_already_stopping","incomplete_capture","capture_endpoint_gap","capture_quantized_endpoint_gap","encoder_flush_timeout","encoder_frame_count_mismatch","ledger_too_large","encoder_error","capture_duration_limit","encoder_configuration_timeout","vp8_configuration_unsupported","webcodecs_unavailable","invalid_canvas","invalid_capture_limit","capture_not_active","capture_already_initialized","render_hook_failed","encoder_initialization_failed","encoder_stop_failed","encoder_failure_unknown"]);
+  const retainCaptureFailure = (item, code) => {
+    if(!item?.encodedMode || item.autoRunId!==run.id || !/^[a-f0-9]{32}$/.test(item.autoRunId) || captureFailure?.run_id===item.autoRunId) return;
+    const recorder=item.encodedRecorder, start=recorder?.startedAt ?? item.startedAt;
+    const offset=at=>Number.isFinite(at)&&Number.isFinite(start)?Math.max(0,Math.min(350000,Math.round(at-start))):null;
+    const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=20000?value:0;
+    captureFailure={schema_version:1,run_id:item.autoRunId,policy_id:'post-render-encoded-frame-v1',
+      code:captureFailureCodes.has(code)?code:'encoder_failure_unknown',
+      clock_origin:recorder?'encoder_start':'capture_request',elapsed_ms:offset(performance.now()) ?? 0,
+      first_frame_offset_ms:offset(recorder?.firstFrameAt),last_frame_offset_ms:offset(recorder?.lastFrameAt),
+      rendered_frames:count(recorder?.frames),submitted_frames:count(recorder?.submittedFrames),encoded_frames:count(recorder?.outputFrames)};
+  };
   async function startRecording(autoRunId = null) {
     if (capture) return;
     if (saving || pendingUpload || closed) return;
@@ -299,9 +312,10 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     if(encoded) {
       item.encodedMode=true;item.durationPolicy=durationPolicy;capture=item;
       const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:335000;
-      item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},encodedLimit);
+      item.maxTimer=setTimeout(()=>{retainCaptureFailure(item,'capture_duration_limit');item.errors++;stopRecording();},encodedLimit);
       try {
-        item.encoderPromise=createPostRenderRecorder(output,{maxDurationMs:encodedLimit,onFailure:()=>{
+        item.encoderPromise=createPostRenderRecorder(output,{maxDurationMs:encodedLimit,onFailure:code=>{
+          retainCaptureFailure(item,code);
           if(capture!==item) return;
           item.errors++; notice.textContent='Encoded frame capture failed; this recording cannot be accepted.';
           stopRecording();
@@ -311,7 +325,8 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
         item.startedAt=item.encodedRecorder.startedAt;item.startedWall=item.encodedRecorder.startedWall;
         item.recorderStarted=true;
         notice.textContent='Recording verified post-render frames.';renderHeader();
-      } catch {
+      } catch (error) {
+        retainCaptureFailure(item,error?.message || 'encoder_initialization_failed');
         item.errors++;clearTimeout(item.maxTimer);
         if(capture===item) capture=null;
         notice.textContent='This browser could not start the required encoded-frame recording.';renderHeader();
@@ -360,7 +375,8 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   }
   Module.MapleBenchOnRendered = () => {
     if (!capture || capture.stopping) return;
-    try { capture.onRendered(); } catch { capture.errors++; notice.textContent='Frame capture failed'; stopRecording(); }
+    const item=capture;
+    try { item.onRendered(); } catch (error) { retainCaptureFailure(item,error?.message || 'render_hook_failed'); item.errors++; notice.textContent='Frame capture failed'; stopRecording(); }
   };
   async function stopRecording() {
     const item=capture;
@@ -380,7 +396,8 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
           clock:item.clockVerified?item.clock:null,terminal_token:item.terminalToken}};
         if(capture===item) capture=null;
         await uploadRecording();
-      } catch {
+      } catch (error) {
+        retainCaptureFailure(item,error?.message || 'encoder_stop_failed');
         if(capture===item) capture=null;
         notice.textContent='Encoded recording did not finish verification; the run has no accepted recording.';
       }
@@ -402,6 +419,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   }
   const sessionAck=new URLSearchParams(location.search).get('transition');
   const updateRun = next => {
+    if(captureFailure && captureFailure.run_id!==next.id) captureFailure=null;
     run=next;
     if(run.id && lastRunId!==run.id && activeRun()) { lastRunId=run.id; setBaseline('run'); details.open=false; }
     if(activeRun() && run.id && recordedRunId!==run.id && !saving) {
@@ -425,26 +443,40 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   };
   const executeInput = async (command, deadline) => {
     if(activeCommand) return;
-    const item={interrupted:false}; activeCommand=item;
+    const item={interrupted:false,failure:null,keydown:false,startedAt:performance.now()}; activeCommand=item;
     const keys=Array.isArray(command.keys)?command.keys.map(name=>(run.adaptiveProtocol||run.nativeAcceptance)?(skillKeyNames[name]||keyNames[name]):keyNames[name]):[];
     let ok=false;
+    const reject=code=>{item.failure ??= code;throw Error(code);};
     try {
-      if(document.hidden || !fresh(observe()) || !relayConnected
-        || cancelledRuns.has(command.runId)
-        || !capture?.recorderStarted || !capture.frames || capture.autoRunId!==command.runId || capture.stopping
-        || (command.runId && command.runId!==run.id)
-        || !keys.length||keys.length>3||new Set(keys).size!==keys.length||keys.some(code=>!code)
-        ||!Number.isInteger(command.durationMs)||command.durationMs<30||command.durationMs>1500
-        || !Number.isFinite(deadline) || performance.now()+command.durationMs>deadline) throw Error('Invalid input');
+      if(document.hidden) reject('hidden_before_input');
+      if(!fresh(observe())) reject('stale_before_input');
+      if(!relayConnected) reject('relay_before_input');
+      if(cancelledRuns.has(command.runId)) reject('cancelled_before_input');
+      if(!capture?.recorderStarted || !capture.frames || capture.autoRunId!==command.runId) reject('capture_unavailable');
+      if(capture.stopping) reject('capture_stopping');
+      if(command.runId && command.runId!==run.id) reject('run_mismatch');
+      if(!keys.length||keys.length>3||new Set(keys).size!==keys.length||keys.some(code=>!code)) reject('invalid_input_keys');
+      if(!Number.isInteger(command.durationMs)||command.durationMs<30||command.durationMs>1500) reject('invalid_input_duration');
+      if(!Number.isFinite(deadline)) reject('invalid_input_deadline');
+      if(performance.now()+command.durationMs>deadline) reject('deadline_before_input');
       releaseAll(false); game.focus();
-      if(performance.now()+command.durationMs>deadline) throw Error('Input deadline reached');
+      if(performance.now()+command.durationMs>deadline) reject('deadline_before_keydown');
+      item.keydown=true;
       for(const code of keys) { key(code,'keydown'); held.set(code,setTimeout(()=>release(code),command.durationMs)); }
       renderHeader();
       await new Promise(resolve=>setTimeout(resolve,command.durationMs));
       ok=!item.interrupted && performance.now()<=deadline;
+      if(!ok) item.failure ??= item.interrupted?'interrupted_unknown':'deadline_after_input';
     } finally {
       keys.filter(Boolean).forEach(release);
-      acknowledgement={id:command.id,ok}; activeCommand=null; renderHeader();
+      acknowledgement={id:command.id,ok};
+      if(!ok) {
+        const elapsed=Math.round(performance.now()-item.startedAt),remaining=Math.round(deadline-performance.now());
+        acknowledgement.failure={code:item.failure||'input_failure_unknown',keydown_issued:item.keydown,
+          elapsed_ms:Number.isSafeInteger(elapsed)&&elapsed>=0&&elapsed<=350000?elapsed:null,
+          remaining_ms:Number.isSafeInteger(remaining)&&remaining>=-350000&&remaining<=3000?remaining:null};
+      }
+      activeCommand=null; renderHeader();
     }
   };
   const poll=async()=>{
@@ -458,7 +490,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
           captureClockReceivedAtMs:capture?.clock?.client_received_ms,
           capture:capture?{runId:capture.autoRunId,started:capture.recorderStarted,renderedFrames:capture.frames,
             interrupted:capture.hidden||capture.errors>0||capture.relayLost||capture.stopping}:null,
-          captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle'})});
+          captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle',captureFailure})});
       if(!response.ok) throw Error('Relay unavailable');
       const state=await response.json(),clientReceivedAtMs=Date.now(),clientReceivedAt=performance.now();
       if(acknowledgement===ack) acknowledgement=null;
@@ -467,8 +499,8 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
         capture.clock={...state.clock,client_received_ms:clientReceivedAtMs};
       }
       if(capture?.clock && run.captureClockAccepted===capture.clock.id) capture.clockVerified=true;
-      if(state.releaseKeys?.runId) { cancelledRuns.add(state.releaseKeys.runId); releaseAll(true); releaseAck=state.releaseKeys.runId; }
-      if(document.hidden || !fresh(observe())) releaseAll(true);
+      if(state.releaseKeys?.runId) { cancelledRuns.add(state.releaseKeys.runId); releaseAll(true,'interrupted_cancelled'); releaseAck=state.releaseKeys.runId; }
+      if(document.hidden || !fresh(observe())) releaseAll(true,document.hidden?'interrupted_hidden':'interrupted_stale_observation');
       if(state.command && !state.releaseKeys) executeInput(state.command,
         commandDeadline(state.command,clientSentAt,clientSentAtMs,clientReceivedAt,clientReceivedAtMs)).catch(()=>{});
       if(state.session?.desiredPage==='waiting' && !busy() && capture) stopRecording();
@@ -476,10 +508,10 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       if(navigation && navigation.page==='waiting' && /^[a-f0-9]{32}$/.test(navigation.id)
           && navigation.url==='/control/wait?transition='+navigation.id
           && !busy() && !capture && !saving && !pendingUpload) {
-        closed=true; releaseAll(true); location.assign(navigation.url);
+        closed=true; releaseAll(true,'interrupted_navigation'); location.assign(navigation.url);
       }
     } catch {
-      relayConnected=false; disconnectedAt ??= Date.now(); releaseAll(true);
+      relayConnected=false; disconnectedAt ??= Date.now(); releaseAll(true,'interrupted_relay');
       if(capture) capture.relayLost=true;
       if(capture?.autoRunId && Date.now()-disconnectedAt>3000) stopRecording();
       renderHeader();
@@ -502,6 +534,6 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   for(const [name,model] of [['Astra','gpt-6-astra'],['Sol','gpt-5.6-sol'],['Terra','gpt-5.6-terra'],['Luna','gpt-5.6-luna']])
     button(name+' API',()=>startRun('api',model),modelGroup,runButtons);
   button('Astra · 60s demo',()=>startRun('api','gpt-6-astra',60),modelGroup,runButtons);
-  window.addEventListener('pagehide',()=>{ closed=true;clearTimeout(pollTimer);pollAbort?.abort();releaseAll(true);stopRecording(); });
+  window.addEventListener('pagehide',()=>{ closed=true;clearTimeout(pollTimer);pollAbort?.abort();releaseAll(true,'interrupted_page_hide');stopRecording(); });
   resize(); renderHeader(); poll();
 })();
