@@ -26,6 +26,8 @@ from full_client_research import summarize, CLASSES, TASKS
 
 ASSETS = ('index.html', 'dashboard.js', 'style.css')
 MAX_VIDEO = 32 * 1024**2
+MAX_ADAPTIVE_VIDEO = 96 * 1024**2
+ADAPTIVE_PROTOCOL = 'full-client-adaptive-pilot-v1'
 VERIFIED = 'runner_verified_receipts_rechecked'
 
 
@@ -51,6 +53,23 @@ def stable_bytes(path, maximum):
     require(len(raw)==before.st_size and all(getattr(before,k)==getattr(after,k)==getattr(current,k)
                                           for k in fields),'publication_file_changed')
     return raw
+
+
+def stable_fingerprint(path,maximum):
+    """Hash large videos in bounded chunks and reject replacement or growth."""
+    require(path.resolve()==path and not path.is_symlink(),'publication_symlink')
+    with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as stream:
+        before=os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink==1
+                and 0<before.st_size<=maximum,'publication_file_limit')
+        hashed=hashlib.sha256();size=0
+        for block in iter(lambda:stream.read(min(1024**2,maximum+1-size)),b''):
+            size+=len(block);require(size<=maximum,'publication_file_limit');hashed.update(block)
+        after=os.fstat(stream.fileno());current=path.lstat()
+    fields=('st_dev','st_ino','st_mode','st_size','st_mtime_ns','st_ctime_ns')
+    require(size==before.st_size and all(getattr(before,k)==getattr(after,k)==getattr(current,k)
+                                       for k in fields),'publication_file_changed')
+    return {'sha256':hashed.hexdigest(),'bytes':size}
 
 
 def write_new(path, raw, mode=0o600):
@@ -127,7 +146,7 @@ def project_member(entry, fixture, attempt_root, recordings):
             # The verified artifact reader used by copy_recording rejects escapes,
             # symlinks and changed bytes. This smaller cap bounds public packages.
             require(0<(folder/video['path']).stat().st_size<=MAX_VIDEO,'public_recording_size_limit')
-            copy_recording(folder,video,recordings/(ident+'.webm'),{})
+            copy_recording(folder,video,recordings/(ident+'.webm'),{},maximum=MAX_VIDEO)
             approved={ident:{'url':'/recordings/'+ident+'.webm','sha256':video['sha256']}}
             row=projection(Reader(),approved)
             require(row['score_verification']==VERIFIED and row['attribution']=='exact'
@@ -147,7 +166,8 @@ def project_member(entry, fixture, attempt_root, recordings):
         return row
 
 
-def file_inventory(site):
+def file_inventory(site,*,maximum_video=MAX_VIDEO):
+    require(maximum_video in (MAX_VIDEO,MAX_ADAPTIVE_VIDEO),'invalid_public_video_limit')
     names=set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}
     found=set()
     for count,p in enumerate(site.iterdir(),1):
@@ -159,8 +179,7 @@ def file_inventory(site):
     for name in sorted(names):
         require(name in ASSETS or name in ('results.json','recording-manifest.json','vercel.json')
                 or re.fullmatch(r'recordings/[a-f0-9]{32}\.webm',name),'unexpected_public_file')
-        raw=stable_bytes(site/name,MAX_VIDEO if name.endswith('.webm') else 4*1024**2)
-        result[name]={'sha256':digest(raw),'bytes':len(raw)}
+        result[name]=stable_fingerprint(site/name,maximum_video if name.endswith('.webm') else 4*1024**2)
     return result
 
 
@@ -171,7 +190,9 @@ def verify_package(package, expected):
             and isinstance(manifest.get('content'),dict) and digest(encoded(manifest['content']))==expected,
             'package_manifest_mismatch')
     content=manifest['content'];site=directory(package/'site')
-    require(content.get('files')==file_inventory(site),'package_content_changed')
+    require(content.get('protocol') in (None,'legacy-full-client-v1',ADAPTIVE_PROTOCOL),'invalid_package_protocol')
+    maximum=MAX_ADAPTIVE_VIDEO if content.get('protocol')==ADAPTIVE_PROTOCOL else MAX_VIDEO
+    require(content.get('files')==file_inventory(site,maximum_video=maximum),'package_content_changed')
     return manifest
 
 
@@ -193,37 +214,46 @@ def publication_state(package, expected):
     return 'unclaimed'
 
 
-def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replace_archive=False, research_profile=None):
+def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replace_archive=False,
+                    research_profile=None, adaptive_scenario=None):
     plan_path=Path(plan_path);attempt_root=directory(attempt_root);output_root=directory(output_root)
     for private in (attempt_root,directory(plan_path.parent)):
         require(not (output_root==private or output_root.is_relative_to(private) or private.is_relative_to(output_root)),
                 'private_inputs_must_be_outside_publication')
     plan=selected_plan(plan_path,plan_sha256)
-    profile=research_profile or {'protocol_id':'legacy-full-client-v1','class_id':'undeclared','task_id':'undeclared'}
-    require(isinstance(profile,dict) and set(profile)=={'protocol_id','class_id','task_id'}
-            and profile['protocol_id']=='legacy-full-client-v1' and profile['class_id'] in CLASSES
-            and profile['task_id'] in TASKS,'legacy_research_profile_required')
+    if adaptive_scenario is not None:
+        from full_client_adaptive_publication import checked_profile, project_member as adaptive_member, VERIFIED as verified
+        profile,scenario=checked_profile(plan,adaptive_scenario,research_profile)
+        project=lambda entry,fixture,root,videos:adaptive_member(entry,fixture,root,videos,scenario)
+        maximum_video=MAX_ADAPTIVE_VIDEO
+    else:
+        profile=research_profile or {'protocol_id':'legacy-full-client-v1','class_id':'undeclared','task_id':'undeclared'}
+        require(isinstance(profile,dict) and set(profile)=={'protocol_id','class_id','task_id'}
+                and profile['protocol_id']=='legacy-full-client-v1' and profile['class_id'] in CLASSES
+                and profile['task_id'] in TASKS,'legacy_research_profile_required')
+        require(all(entry['spec'].get('schema_version')==1 for entry in plan['entries']),'legacy_specs_required')
+        project=project_member;verified=VERIFIED;maximum_video=MAX_VIDEO
     staging=Path(tempfile.mkdtemp(prefix='.cohort-',dir=output_root));site=staging/'site';site.mkdir(mode=0o755)
     recordings=site/'recordings';recordings.mkdir(mode=0o755)
     try:
-        rows=[project_member(entry,plan['fixtures'][0],attempt_root,recordings) for entry in plan['entries']]
+        rows=[project(entry,plan['fixtures'][0],attempt_root,recordings) for entry in plan['entries']]
         fixture=plan['fixtures'][0]
         fingerprint=digest(encoded({**{key:fixture[key]['sha256'] for key in ('scenario','baseline','runtime_manifest')},
                                     'budgets':fixture['budgets']}))
         for row in rows:row['research']={**profile,'fixture_fingerprint':fingerprint,'planned':True}
         groups={}
         for row in rows:
-            if row.get('comparison_group') and row['score_verification']==VERIFIED:
+            if row.get('comparison_group') and row['score_verification']==verified:
                 groups.setdefault(row['comparison_group'],[]).append(row)
-        complete=(all(row['status']=='completed' and row['score_verification']==VERIFIED
+        complete=(all(row['status']=='completed' and row['score_verification']==verified
                       and row.get('recording_publication')=='verified_bytes' for row in rows) and len(groups)==1)
         require(not replace_archive or complete,'four_verified_recordings_required_for_archive_replacement')
         comparisons=[{'id':key,'models':[r['requested_model'] for r in members],'ready':len(members)>=2,'ranked':False,
                       'attempt_ids':[r['id'] for r in members],'scope':'selected_cohort',
                       'reason':'same_frozen_inputs' if len(members)>=2 else 'another_model_required'} for key,members in groups.items()]
-        completed=[r for r in rows if r['status']=='completed' and r['score_verification']==VERIFIED]
+        completed=[r for r in rows if r['status']=='completed' and r['score_verification']==verified]
         snapshot={'schema_version':1,'generated_at_ms':max([r['updated_at_ms'] or 0 for r in rows]),
-            'source':'full_client_private_receipt_projection','verification':'completed_runner_receipts_rechecked',
+            'source':'full_client_private_receipt_projection','verification':verified,'live_status_available':False,
             'ranked':False,'recording_prefix':'./recordings/','truncated':False,'attempts':rows,'comparisons':comparisons,
             'featured_run_id':max(completed,key=lambda r:r['updated_at_ms'] or 0)['id'] if completed else None,
             'cohort':{'id':plan_sha256,'planned':4,'verified':len(completed),'complete':complete,
@@ -231,14 +261,14 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
         snapshot['research_matrix']=summarize(snapshot)
         ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
         for name in ASSETS:write_new(site/name,stable_bytes(ui/name,1024**2),0o644)
-        videos=[{'path':p.name,'bytes':p.stat().st_size,'sha256':digest(stable_bytes(p,MAX_VIDEO))}
+        videos=[{'path':p.name,**stable_fingerprint(p,maximum_video)}
                 for p in sorted(recordings.iterdir())]
         write_new(site/'results.json',encoded(snapshot),0o644)
         write_new(site/'recording-manifest.json',encoded({'schema_version':1,'entries':videos}),0o644)
         write_new(site/'vercel.json',encoded({'framework':None,'buildCommand':None,'outputDirectory':'.'}),0o644)
         content={'schema_version':1,'plan_sha256':plan_sha256,'archive_replacement':replace_archive,
                  'target_path':'/' if replace_archive else '/cohorts/'+plan_sha256[:16]+'/',
-                 'files':file_inventory(site)}
+                 'protocol':profile['protocol_id'],'files':file_inventory(site,maximum_video=maximum_video)}
         content_sha=digest(encoded(content));package=output_root/content_sha
         write_new(staging/'package-manifest.json',encoded({'schema_version':1,'content_sha256':content_sha,'content':content}))
         sync_directory(recordings);sync_directory(site);sync_directory(staging)
@@ -296,6 +326,8 @@ def main(argv=None):
     for name in ('plan','attempt-root','output-root'):prepare.add_argument('--'+name,type=Path,required=True)
     prepare.add_argument('--plan-sha256',required=True);prepare.add_argument('--replace-archive',action='store_true')
     prepare.add_argument('--research-profile',type=Path);prepare.add_argument('--research-profile-sha256')
+    prepare.add_argument('--adaptive-scenario',type=Path,
+                         help='Frozen adaptive scenario; its exact SHA256 must match the pinned plan')
     for name in ('claim','record-deployment'):
         command=commands.add_parser(name);command.add_argument('--package',type=Path,required=True)
         command.add_argument('--content-sha256',required=True)
@@ -308,7 +340,8 @@ def main(argv=None):
             profile=None if args.research_profile is None else Reader().json(directory(args.research_profile.parent),
                 args.research_profile.name,args.research_profile_sha256)
             result=prepare_package(args.plan,args.plan_sha256,args.attempt_root,args.output_root,
-                                   replace_archive=args.replace_archive,research_profile=profile)
+                                   replace_archive=args.replace_archive,research_profile=profile,
+                                   adaptive_scenario=args.adaptive_scenario)
         elif args.command=='claim':result=claim_publication(args.package,args.content_sha256)
         else:result=record_deployment(args.package,args.content_sha256,args.deployment_id,args.url,args.verified_content_sha256)
         print(json.dumps(result,sort_keys=True));return 0

@@ -331,7 +331,7 @@ def _video_probe_limits():
         resource.setrlimit(kind, (limit, limit))
 
 
-def _measure_video_probe(probe):
+def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
     """Measure actual presentation timestamps; never infer duration from FPS.
 
     MediaRecorder WebM often lacks a finalized Segment duration. The last video
@@ -342,6 +342,8 @@ def _measure_video_probe(probe):
     def require(condition, reason):
         if not condition:
             raise EvidenceError(reason)
+    require(type(maximum_ms) is int and maximum_ms in (VIDEO_MAX_MS, 335000),
+            "video: unsupported protocol duration limit")
     require(isinstance(probe, dict) and isinstance(probe.get("streams"), list)
             and len(probe["streams"]) == 1, "video: require one selected decoded video stream")
     stream = probe["streams"][0]
@@ -366,7 +368,7 @@ def _measure_video_probe(probe):
         timestamp = float(packet["pts_time"]) * 1000
         raw_duration = packet.get("duration_time")
         duration = 0 if raw_duration in (None, "N/A") else float(raw_duration) * 1000
-        require(_number(timestamp, -VIDEO_MAX_MS) and timestamp <= VIDEO_MAX_MS
+        require(_number(timestamp, -maximum_ms) and timestamp <= maximum_ms
                 and _number(duration) and duration <= 1000,
                 "video: invalid or out-of-bounds packet timestamps")
         presentations.append((timestamp, duration))
@@ -375,22 +377,24 @@ def _measure_video_probe(probe):
                 for earlier, later in zip(presentations, presentations[1:])),
             "video: duplicate timestamps or excessive gaps in the saved stream")
     extent = max(timestamp + duration for timestamp, duration in presentations) - presentations[0][0]
-    require(_number(extent, 1) and extent <= VIDEO_MAX_MS,
+    require(_number(extent, 1) and extent <= maximum_ms,
             "video: require a bounded nonempty presentation interval")
     headers = []
     for value in (probe.get("format", {}).get("duration"), stream.get("duration")):
         if value not in (None, "N/A"):
             header = float(value) * 1000
-            require(_number(header, 1) and header <= VIDEO_MAX_MS and abs(header - extent) <= SLACK_MS,
+            require(_number(header, 1) and header <= maximum_ms and abs(header - extent) <= SLACK_MS,
                     "video: duration metadata disagrees with decoded packet coverage")
             headers.append(header)
     return {"width": width, "height": height, "frames": frames,
             "duration_ms": headers[0] if headers else extent}
 
 
-def _probe_video(path, expected_sha256):
+def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS):
     """Inspect the actual video stream under a bounded, read-only subprocess."""
     try:
+        if type(maximum_ms) is not int or maximum_ms not in (VIDEO_MAX_MS, 335000):
+            raise EvidenceError("video: unsupported protocol duration limit")
         if os.name != "posix":
             raise EvidenceError("video: safe descriptor-based probing is unavailable on this host")
         reference = {"path": path.name, "sha256": expected_sha256}
@@ -413,7 +417,7 @@ def _probe_video(path, expected_sha256):
                     raise EvidenceError("video: decoder failed, reported corruption, or exceeded output limits")
                 output.seek(0)
                 probe = parse_json(output.read(JSON_LIMIT + 1))
-            measured = _measure_video_probe(probe)
+            measured = _measure_video_probe(probe, maximum_ms=maximum_ms)
         return measured
     except EvidenceError:
         raise

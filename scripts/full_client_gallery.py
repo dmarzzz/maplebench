@@ -35,16 +35,19 @@ def identity(path):
     return (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
 
 
-def copy_recording(source,reference,target,cache):
+def copy_recording(source,reference,target,cache,*,maximum=MAX_VIDEO):
     """Publish only complete verified bytes; never overwrite a conflicting clip."""
+    if type(maximum) is not int or not 0<maximum<=MAX_VIDEO:
+        raise ProjectionError('invalid_gallery_recording_limit')
     expected=reference['sha256']
     cached=cache.get(str(target))
     if target.exists() or target.is_symlink():
         current=identity(target)
+        if current[2]>maximum:raise ProjectionError('gallery_recording_size_limit')
         if cached==(expected,current):
             return
         with open_verified_artifact(target.parent,{'path':target.name,'sha256':expected},
-                                    'gallery_video',maximum=MAX_VIDEO):
+                                    'gallery_video',maximum=maximum):
             pass
         cache[str(target)]=(expected,identity(target))
         return
@@ -52,7 +55,7 @@ def copy_recording(source,reference,target,cache):
     temporary=Path(name)
     try:
         with os.fdopen(fd,'wb') as output:
-            with open_verified_artifact(source,reference,'video',maximum=MAX_VIDEO) as stream:
+            with open_verified_artifact(source,reference,'video',maximum=maximum) as stream:
                 digest=hashlib.sha256()
                 for block in iter(lambda:stream.read(1024*1024),b''):
                     digest.update(block); output.write(block)

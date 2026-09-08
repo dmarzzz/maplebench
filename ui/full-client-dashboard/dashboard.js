@@ -11,6 +11,8 @@
   const badge=status=>{const node=el('span',labels[status]||'Unavailable');node.className='pill';if(Object.hasOwn(labels,status))node.classList.add(status);return node;};
   function publication(row){
     const evidence=row.publication_evidence;
+    if(evidence?.status==='adaptive_checked')return {label:'Adaptive evidence checked',detail:'Every model cycle and original recording checked',tone:'completed'};
+    if(evidence?.status==='aggregate_checked')return {label:'Whole-run score checked',detail:'Recording not yet verified',tone:null};
     if(evidence?.status==='passed')return {label:'Evidence checked',detail:null,tone:'completed'};
     if(evidence?.status==='blocked')return {label:'Publication blocked',
       detail:evidence.reason_code==='receipts_incomplete'?'Receipts incomplete':evidence.reason_code==='evidence_unavailable'?'Evidence unavailable':'Check did not pass',tone:'failed'};
@@ -40,15 +42,17 @@
     $('replay-title').textContent=`${row.returned_model||row.requested_model||'Script / no evaluated model'} · ${row.id.slice(0,12)}`;
     replayVerification(row);
     const cue=row.recording?.playback;
-    replayCue=cue&&Number.isFinite(cue.start_ms)&&cue.start_ms>=0&&cue.start_ms<125000
+    const adaptive=row.research?.protocol_id==='full-client-adaptive-pilot-v1';
+    replayCue=cue&&Number.isFinite(cue.start_ms)&&cue.start_ms>=0&&cue.start_ms<(adaptive?335000:125000)
       &&['first_acknowledged_input','program_start'].includes(cue.basis)?cue:null;
     replayStart=replayCue?replayCue.start_ms/1000:0;
     $('replay-agent').hidden=!replayCue;
     $('replay-agent').textContent=replayCue?.basis==='first_acknowledged_input'?'First input':'Program start';
-    $('replay-timing').textContent=(Number.isFinite(row.timing?.api_ms)?`API wait: ${seconds(row.timing.api_ms)}. `:'')
+    $('replay-timing').textContent=(Number.isFinite(row.timing?.api_ms)?`${adaptive?'Total model wait across all cycles':'API wait'}: ${seconds(row.timing.api_ms)}. `:'')
       +(row.no_op===true?(row.sdk_calls===0?'The program exited without any SDK calls. ':'No input actions were executed in this run. ')+'Showing the full recording.'
       :replayCue?`Opens near ${replayCue.basis==='first_acknowledged_input'?'the first confirmed input':'program start; first-input timing was not recorded'}. Full recording includes the opening wait.`
       :'Showing the full recording; a verified playback cue is unavailable.');
+    if(adaptive)$('replay-timing').textContent+=' The five-minute wall budget includes every model wait; seeking changes playback only.';
     $('replay-playback-status').textContent='Loading recording…';
     stopReplay();player.src=url.href;
     if(!replay.open)replay.showModal();
@@ -100,6 +104,29 @@
     else if(row.action_verification==='receipts_incomplete')node.append(el('small','Action evidence incomplete'));
     else if(row.action_verification!=='receipts_rechecked')node.append(el('small','Action receipts not verified'));
   }
+  function adaptiveDetails(row){
+    if(row.research?.protocol_id!=='full-client-adaptive-pilot-v1')return null;
+    const info=row.adaptive,details=el('details');details.className='adaptive-details';
+    if(info?.verification!=='all_cycle_receipts_rechecked'){
+      details.append(el('summary','Adaptive evidence not yet verified'));return details;
+    }
+    details.append(el('summary',`${info.counters.api_responses_confirmed} model responses · ${seconds(info.wall_elapsed_ms)} of 300s`));
+    details.append(el('p',`${info.full_wall_budget_used?'Full wall budget used':'Ended early'} · ${info.end_reason.replaceAll('_',' ')}. Persisted XP covers the complete run. Peak-rate scoring is unavailable.`));
+    const profile=info.class_profile;
+    if(profile)details.append(el('p',`${profile.class_name}, level ${profile.level}. Declared skills: ${Object.values(profile.skill_keys).join(', ')}.`));
+    const table=el('table'),head=el('tr'),body=el('tbody');
+    for(const name of ['Cycle','Exact model returned','Model wait','Program time','Inputs','Tokens'])head.append(el('th',name));
+    const header=el('thead');header.append(head);table.append(header,body);
+    for(const cycle of info.cycles){
+      const tr=el('tr'),timing=cycle.timing;cell(tr,cycle.index+1);
+      const identity=cell(tr,cycle.returned_model||'No response');identity.append(el('small',cycle.status.replaceAll('_',' ')));
+      cell(tr,Number.isFinite(timing.api_ended_ms)?seconds(timing.api_ended_ms-timing.api_started_ms):'—');
+      cell(tr,Number.isFinite(timing.program_ended_ms)?seconds(timing.program_ended_ms-timing.program_started_ms):'—');
+      cell(tr,`${format(cycle.actions)} acknowledged / ${format(cycle.action_attempts)} attempted`);
+      cell(tr,format(cycle.usage.total_tokens));body.append(tr);
+    }
+    const wrap=el('div');wrap.className='table-wrap';wrap.append(table);details.append(wrap);return details;
+  }
   function renderLive(){
     const rows=snapshot.attempts;
     const row=rows.find(item=>['running','recovering','requesting'].includes(item.status))
@@ -109,7 +136,7 @@
     if(row.status==='completed')liveBadge.textContent='Completed · saved result';
     $('live-badge').replaceWith(Object.assign(liveBadge,{id:'live-badge'}));
     $('live-id').textContent=row.id;
-    const verifiedFeatured=row.id===snapshot.featured_run_id&&row.status==='completed'&&row.score_verification==='runner_verified_receipts_rechecked';
+    const verifiedFeatured=row.id===snapshot.featured_run_id&&row.status==='completed'&&['runner_verified_receipts_rechecked','adaptive_runner_verified_receipts_rechecked'].includes(row.score_verification);
     $('live-title').textContent=row.requested_model?`${row.status==='completed'?(verifiedFeatured?'Latest verified result: ':'Latest result: '):''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
     const phase=phases.find(([key])=>key===row.phase)?.[1]||'Preparing';
     const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
@@ -124,6 +151,7 @@
     $('live-model').textContent=row.returned_model||'Awaiting exact attribution';
     inputDetails($('live-actions'),row);
     const featured=$('featured-recording');featured.replaceChildren();if(row.status==='completed'&&row.recording)recording(featured,row);
+    const adaptive=$('adaptive-evidence');adaptive.replaceChildren();const detail=adaptiveDetails(row);if(detail)adaptive.append(detail);
     const saved=Number.isFinite(row.persisted_xp);
     $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
     $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
@@ -191,6 +219,7 @@
     for(const row of snapshot.attempts){
       const tr=el('tr'),identity=cell(tr);identity.append(el('strong',row.requested_model||'No evaluated model'),el('small',row.id));
       if(row.attribution==='mismatch')identity.append(el('small',`Returned ${row.returned_model}; attribution mismatch`));
+      const detail=adaptiveDetails(row);if(detail)identity.append(detail);
       const state=cell(tr);state.append(badge(row.status));if(row.no_op===true)state.append(el('small','No input actions'));if(row.failure_code)state.append(el('small',row.failure_code.replaceAll('_',' ')));
       if(row.api_outcome==='uncertain')state.append(el('small',row.api_response_saved?'API receipt saved; runner accounting uncertain':'API outcome uncertain'));
       if(row.kind==='integration')state.append(el('small','Unranked integration'));

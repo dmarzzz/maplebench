@@ -11,8 +11,8 @@ PROTOCOLS = {
         'metric':'Persisted net XP','score_key':'persisted_xp','verifier':'runner_verified_receipts_rechecked',
         'status':'Existing evidence'},
     'full-client-adaptive-pilot-v1': {'label':'Five-minute adaptive pilot','clock':'300 seconds of wall time, including inference',
-        'metric':'Whole-run score not yet verified','score_key':None,'verifier':None,
-        'status':'New protocol; results pending'},
+        'metric':'Persisted net XP across all cycles','score_key':'persisted_xp','verifier':'adaptive_runner_verified_receipts_rechecked',
+        'status':'Adaptive pilot; peak-rate score unavailable'},
     'unknown': {'label':'Protocol undeclared','clock':'Unknown','metric':'No comparable score',
         'score_key':None,'verifier':None,'status':'Metadata incomplete'},
 }
@@ -64,6 +64,9 @@ def summarize(snapshot):
                 valid=(status=='completed' and row.get('kind')=='trial' and row.get('mode')=='api'
                        and protocol['verifier'] is not None
                        and row.get('score_verification')==protocol['verifier'] and row.get('attribution')=='exact'
+                       and (column['protocol_id']!='full-client-adaptive-pilot-v1'
+                            or (isinstance(row.get('adaptive'),dict)
+                                and row['adaptive'].get('verification')=='all_cycle_receipts_rechecked'))
                        and column['fixture_fingerprint']!='undeclared' and finite(value))
                 if valid:
                     samples.append(value)

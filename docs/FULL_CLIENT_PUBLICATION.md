@@ -59,11 +59,43 @@ fixture, the document is:
 ```
 
 Omitting the profile reports undeclared class/task metadata. The legacy packager
-refuses an adaptive protocol label; that protocol needs its separate aggregate
-evidence adapter. The general matrix can already display adaptive attempted-set
-denominators, but deliberately cannot award an adaptive whole-run or peak score.
+refuses an adaptive protocol label. Adaptive packages require the explicit path
+below and the separate aggregate evidence adapter. The matrix accepts their
+persisted net XP only after every cycle and native logout evidence is checked;
+the authoritative peak-rate score remains unavailable.
 Columns are separated by protocol, declared class/task and frozen fixture hashes;
 there is no cross-class average or overall winner.
+
+For an adaptive pilot, add `--adaptive-scenario /private/config/scenario.json`
+and supply a pinned research profile such as:
+
+```json
+{"protocol_id":"full-client-adaptive-pilot-v1","class_id":"hero","task_id":"sustained_hunting"}
+```
+
+The scenario bytes must match the plan's frozen scenario hash, all four trial
+specifications must use schema version 2 and the adaptive protocol, and the class
+must match the scenario's explicit class profile. The exported level is checked
+against the persisted character. Task metadata can remain `undeclared`; it is
+never inferred from model actions or video content. Class labels describe the
+declared frozen profile; native skill acceptance is a separate fixture check.
+
+Adaptive packages recompute signed net XP from the complete native save bundle
+and verify every provider request, response, exact returned model, generated
+program and execution receipt. The public projection includes bounded per-cycle
+timing, counts, token usage and artifact digests, with client observations clearly
+diagnostic. It excludes raw prompts, code, model notes, SDK arguments and private
+account identifiers. A legacy score cannot become an aggregate score. Early stops
+retain their actual elapsed time and reason; they are not described as consuming
+the full five-minute budget. The wall budget includes all model inference.
+
+Original adaptive WebM files are capped at 96 MiB and 335 seconds, hashed in
+bounded chunks, checked against capture coverage, and decoded by bounded ffprobe
+before linking. Legacy packages retain their 32 MiB video cap and existing timing
+limits. The larger runtime publication envelope does not widen the repository's
+approved gameplay-sample boundary. Replay can seek to the first verified input;
+the original recording and timing remain unchanged. A corrupt video suppresses
+its link without concealing an independently verified persisted score.
 
 A progress package targets `/cohorts/<plan-digest-prefix>/`. Mount its `site`
 contents at that path in the existing deployment, retaining the existing public
