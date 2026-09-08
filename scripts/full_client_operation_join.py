@@ -19,6 +19,8 @@ JSON ref or null). state_root is the gate's attempt_root. launch exact keys:
 executable, script (protected canonical file refs), argv (exact interpreter,
 script, arguments). Parent must be the actual direct parent, with matching UID,
 PID/start ticks/boot, declared argv and executable. No interpreter flags allowed.
+Finite-group recovery additionally requires a recovery descriptor reference;
+its request stays null, so cleanup cannot carry a replacement gameplay request.
 
 Dispatch directory is derived from the immutable claim authority reference:
 <authority parent>/.operation-dispatch/<operation_id>. The trusted parent creates
@@ -165,8 +167,9 @@ def _identity(pid, uid, budget, launch=None):
 
 
 def _resources(binding, attempt_root, uid, budget):
+    recovery = binding.get("action") == "trial_recover" and binding.get("plan") is not None
     gate.fields(binding, ("action", "attempt_id", "request", "adapter_config", "state_root",
-                          "world_lock", "queue_lock", "plan"), "join_invalid_binding")
+                          "world_lock", "queue_lock", "plan") + (("recovery",) if recovery else ()), "join_invalid_binding")
     need(binding["action"] in ("trial_run", "trial_recover")
          and isinstance(binding["attempt_id"], str) and gate.ID.fullmatch(binding["attempt_id"]),
          "join_invalid_binding")
@@ -177,6 +180,8 @@ def _resources(binding, attempt_root, uid, budget):
         gate.read_ref(binding["request"], uid, budget)
     else:
         need(binding["request"] is None, "join_recovery_request_forbidden")
+        if recovery:
+            gate.read_ref(binding["recovery"], uid, budget)
     gate.read_ref(binding["adapter_config"], uid, budget)
     if binding["plan"] is not None:
         gate.read_ref(binding["plan"], uid, budget)

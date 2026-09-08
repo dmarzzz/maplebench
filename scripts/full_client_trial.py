@@ -222,14 +222,18 @@ def private_directory(path, *, create=False):
     return path
 
 
-def read_private_json(path):
+def read_private_json(path, *, expected_sha256=None):
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     with os.fdopen(fd, "rb") as source:
         info = os.fstat(source.fileno())
         require(stat.S_ISREG(info.st_mode) and info.st_uid in (0, os.geteuid())
                 and not info.st_mode & 0o077, "private_file_required")
-        return decode(source.read(MAX_JSON + 1))
+        raw = source.read(MAX_JSON + 1)
+        require(expected_sha256 is None or isinstance(expected_sha256, str)
+                and SHA.fullmatch(expected_sha256) and hashlib.sha256(raw).hexdigest() == expected_sha256,
+                "recovery_journal_changed")
+        return decode(raw)
 
 
 def validate_spec(spec):
@@ -453,10 +457,10 @@ class TrialRunner:
         self.state["events"].append(event)
         atomic_json(self.root / self.state["attempt_id"] / "journal.json", self.state)
 
-    def _load(self, attempt_id):
+    def _load(self, attempt_id, *, expected_sha256=None):
         require(isinstance(attempt_id, str) and ID.fullmatch(attempt_id), "invalid_attempt_id")
         private_directory(self.root / attempt_id)
-        state = read_private_json(self.root / attempt_id / "journal.json")
+        state = read_private_json(self.root / attempt_id / "journal.json", expected_sha256=expected_sha256)
         require(isinstance(state, dict) and type(state.get("schema_version")) is int
                 and state.get("schema_version") == 1
                 and state.get("attempt_id") == attempt_id
@@ -599,10 +603,10 @@ class TrialRunner:
                 self._quarantine(error)
                 raise
 
-    def recover(self, attempt_id, timeout_seconds=120):
+    def recover(self, attempt_id, timeout_seconds=120, *, expected_journal_sha256=None):
         require(type(timeout_seconds) is int and 1 <= timeout_seconds <= 300, "invalid_recovery_timeout")
         with self._locks():
-            self.state = self._load(attempt_id)
+            self.state = self._load(attempt_id, expected_sha256=expected_journal_sha256)
             require(self.state.get("status") not in ("completed", "recovered"), "attempt_already_terminal")
             require(self.state.get("adapter_fingerprint") == getattr(self.adapter, "fingerprint", None),
                     "recovery_adapter_mismatch")
@@ -648,6 +652,9 @@ def main(argv=None):
     recover.add_argument("--timeout-seconds", type=int, default=120)
     args = parser.parse_args(argv)
     try:
+        require((args.operation_recovery is None and args.operation_recovery_sha256 is None)
+                or (args.command == "recover" and args.operation_envelope is not None),
+                "operation_recovery_forbidden")
         config = read_private_json(args.adapter_config)
         require(isinstance(config, dict) and set(config) == {"argv", "dependencies"}, "invalid_adapter_config")
         runner = TrialRunner(args.state_root, args.world_lock, args.queue_lock,
@@ -662,10 +669,14 @@ def main(argv=None):
             request, request_ref = (admission.private_ref(args.request) if args.command == "run" else (None, None))
             if any(value is not None for value in (args.operation_envelope, args.operation_envelope_sha256,
                                                     args.operation_fd)):
-                with admission.inherited_trial(args, config_ref, request, request_ref):
+                with admission.inherited_trial(args, config_ref, request, request_ref) as joined:
                     # The join descriptor stays here; it is never forwarded to
                     # CommandAdapter or its two-descriptor world/queue bridge.
-                    result = runner.run(request, args.attempt_id)
+                    if args.command == "recover":
+                        result = runner.recover(args.attempt_id, args.timeout_seconds,
+                            expected_journal_sha256=joined["recovery"]["journal"]["sha256"])
+                    else:
+                        result = runner.run(request, args.attempt_id)
             else:
                 authority_ref, claim_ref = admission.argument_refs(args, reconcile=args.command == "recover")
                 authority = admission.gate.read_ref(authority_ref, 0, admission.gate.Budget())

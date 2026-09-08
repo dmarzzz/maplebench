@@ -219,6 +219,8 @@ def add_arguments(parser, *, inherited=False):
         parser.add_argument("--operation-envelope", type=Path)
         parser.add_argument("--operation-envelope-sha256")
         parser.add_argument("--operation-fd", type=int)
+        parser.add_argument("--operation-recovery", type=Path)
+        parser.add_argument("--operation-recovery-sha256")
 
 
 def argument_refs(args, *, reconcile=False):
@@ -238,6 +240,62 @@ def trial_subject(args, config_ref, request_ref):
             "world_lock": str(gate.canonical(args.world_lock)), "queue_lock": str(gate.canonical(args.queue_lock))}
 
 
+def recovery_descriptor(ref, plan_ref, plan, entry, directory, claim_ref, *, owner_uid=0, current=False):
+    """Read an immutable cleanup request; the failed journal copy never changes."""
+    import full_client_experiment as experiment
+    value = gate.read_ref(ref, owner_uid, gate.Budget())
+    gate.fields(value, ("schema_version", "kind", "attempt_id", "plan", "coordinator", "claim",
+                       "journal", "failure", "request", "adapter_config", "timeout_seconds"),
+                "operation_invalid_recovery")
+    ident = entry["attempt_id"]
+    need(type(value["schema_version"]) is int and value["schema_version"] == 1
+         and value["kind"] == "finite_group_recovery" and value["attempt_id"] == ident
+         and value["plan"] == plan_ref and value["claim"] == claim_ref
+         and type(value["timeout_seconds"]) is int and 1 <= value["timeout_seconds"] <= 300,
+         "operation_recovery_mismatch")
+    need(ref["path"] == str(directory / "recoveries" / (ident + ".json"))
+         and value["failure"]["path"] == str(directory / "recoveries" / (ident + ".failed-journal.json"))
+         and value["journal"]["path"] == str(Path(plan["runner"]["state_root"]) / ident / "journal.json")
+         and value["failure"]["sha256"] == value["journal"]["sha256"]
+         and value["coordinator"]["path"] == str(directory / "coordinator.json")
+         and value["request"]["path"] == str(directory / "requests" / (ident + ".json")),
+         "operation_recovery_namespace")
+    fixture = experiment.fixture_for(plan, entry)
+    request = gate.read_ref(value["request"], owner_uid, gate.Budget())
+    failed = gate.read_ref(value["failure"], owner_uid, gate.Budget())
+    need(value["adapter_config"] == fixture["adapter_config"] and request == entry["spec"]
+         and value["request"]["sha256"] == entry["spec_sha256"]
+         and failed.get("attempt_id") == ident and failed.get("request") == request
+         and failed.get("adapter_fingerprint") == fixture["adapter_fingerprint"]
+         and failed.get("status") in ("failed", "interrupted")
+         and failed.get("publication_eligible") is False, "operation_recovery_failure_mismatch")
+    state = gate.read_ref(value["coordinator"], owner_uid, gate.Budget())
+    experiment.validate_state(state, plan)
+    need("closure" not in state and state["status"] in ("running", "stopped") and state["submissions"]
+         and state["submissions"][-1]["attempt_id"] == ident and ident not in state["settled"]
+         and "retirement" not in state["submissions"][-1], "operation_recovery_not_current")
+    if current:
+        need(gate.read_ref(value["journal"], owner_uid, gate.Budget()) == failed, "operation_recovery_journal_changed")
+    return value
+
+
+@contextmanager
+def recovery_dispatch(admission, plan_ref, plan, entry, directory, recovery_ref, parent_launch):
+    need(not admission.completed and admission.claim is not None, "operation_active_claim_required")
+    admission.lease._check()
+    need(admission.lease._active == admission.claim, "operation_active_claim_required")
+    value = recovery_descriptor(recovery_ref, plan_ref, plan, entry, directory, admission.claim,
+                                owner_uid=admission.uid, current=True)
+    runner = plan["runner"]
+    binding = {"action": "trial_recover", "attempt_id": entry["attempt_id"], "request": None,
+               "adapter_config": value["adapter_config"], "recovery": recovery_ref, "plan": plan_ref,
+               **{key: runner[key] for key in ("state_root", "world_lock", "queue_lock")}}
+    base = private_child(Path(admission.authority_ref["path"]).parent, ".operation-dispatch", admission.uid)
+    directory = private_child(base, admission.authority["operation_id"], admission.uid)
+    with join.prepare_join(admission.lease, directory, binding, parent_launch=parent_launch) as prepared:
+        yield prepared
+
+
 @contextmanager
 def inherited_trial(args, config_ref, request, request_ref, *, owner_uid=0):
     """Bind actual CLI inputs to the current coordinator submission before entry."""
@@ -255,7 +313,7 @@ def inherited_trial(args, config_ref, request, request_ref, *, owner_uid=0):
         envelope = gate.read_ref(envelope_ref, owner_uid, gate.Budget())
         claim = gate.read_ref(envelope["claim"], owner_uid, gate.Budget())
         authority = gate.read_ref(claim["authority"], owner_uid, gate.Budget())
-        need(claim["kind"] == "finite_group" and args.command == "run", "operation_join_purpose_mismatch")
+        need(claim["kind"] == "finite_group" and args.command in ("run", "recover"), "operation_join_purpose_mismatch")
         subject = authority["subject"]
         authority = validate_authority(claim["authority"], subject, "finite_group", args.state_root,
             owner_uid=owner_uid, required_sources=(trial.__file__, experiment.__file__,
@@ -268,28 +326,41 @@ def inherited_trial(args, config_ref, request, request_ref, *, owner_uid=0):
         entry = matches[0]
         fixture = experiment.fixture_for(plan, entry)
         expected = trial_subject(args, config_ref, request_ref)
-        need(entry["spec"] == request and request_ref["sha256"] == entry["spec_sha256"]
-             and fixture["adapter_config"] == config_ref
+        need(fixture["adapter_config"] == config_ref
              and all(expected[key] == plan["runner"][key] for key in ("state_root", "world_lock", "queue_lock"))
              and plan["runner"]["trial_script"] in authority["source_files"], "operation_entry_mismatch")
         directory = gate.canonical(subject["experiment_directory"])
-        need(request_ref["path"] == str(directory / "requests" / (args.attempt_id + ".json")),
-             "operation_request_outside_coordinator")
-        state, _ = private_ref(directory / "coordinator.json", owner_uid=owner_uid)
-        experiment.validate_state(state, plan)
-        need(state["status"] == "running" and "closure" not in state and state["submissions"]
-             and state["submissions"][-1]["attempt_id"] == args.attempt_id
-             and state["submissions"][-1]["returncode"] is None
-             and "retirement" not in state["submissions"][-1]
-             and args.attempt_id not in state["settled"]
-             and state["events"][-1]["kind"] == "submission_intent", "operation_submission_not_current")
-        binding = {"action": "trial_run", "attempt_id": args.attempt_id, "request": request_ref,
+        recovery = None
+        if args.command == "run":
+            need(getattr(args, "operation_recovery", None) is None and getattr(args, "operation_recovery_sha256", None) is None,
+                 "operation_recovery_forbidden")
+            need(entry["spec"] == request and request_ref["sha256"] == entry["spec_sha256"], "operation_entry_mismatch")
+            need(request_ref["path"] == str(directory / "requests" / (args.attempt_id + ".json")),
+                 "operation_request_outside_coordinator")
+            state, _ = private_ref(directory / "coordinator.json", owner_uid=owner_uid)
+            experiment.validate_state(state, plan)
+            need(state["status"] == "running" and "closure" not in state and state["submissions"]
+                 and state["submissions"][-1]["attempt_id"] == args.attempt_id
+                 and state["submissions"][-1]["returncode"] is None
+                 and "retirement" not in state["submissions"][-1]
+                 and args.attempt_id not in state["settled"]
+                 and state["events"][-1]["kind"] == "submission_intent", "operation_submission_not_current")
+        else:
+            need(request is None and request_ref is None and args.operation_recovery is not None
+                 and args.operation_recovery_sha256 is not None, "operation_recovery_required")
+            recovery_ref = {"path": str(args.operation_recovery), "sha256": args.operation_recovery_sha256}
+            recovery = recovery_descriptor(recovery_ref, plan_ref, plan, entry, directory, envelope["claim"],
+                                           owner_uid=owner_uid, current=True)
+            need(args.timeout_seconds == recovery["timeout_seconds"], "operation_recovery_timeout_changed")
+        binding = {"action": "trial_run" if recovery is None else "trial_recover", "attempt_id": args.attempt_id, "request": request_ref,
                    "adapter_config": config_ref, "state_root": expected["state_root"],
                    "world_lock": expected["world_lock"], "queue_lock": expected["queue_lock"], "plan": plan_ref}
+        if recovery is not None:
+            binding["recovery"] = recovery_ref
         owns_fd = False
         with join.joined(args.state_root, authority["gate"], envelope_ref, args.operation_fd, binding,
                          owner_uid=owner_uid) as result:
-            yield result
+            yield result if recovery is None else {**result, "recovery": recovery}
     finally:
         if owns_fd:
             os.close(args.operation_fd)
