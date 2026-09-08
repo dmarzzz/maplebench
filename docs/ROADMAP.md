@@ -101,7 +101,7 @@ Bowmaster and Ice/Lightning fixtures are prepared; native acceptance and their
 model cohorts remain pending. Native 15-second XP windows have an independently
 built candidate, but are not deployed or represented as completed research runs.
 
-The corrected cohort has now published two fresh five-minute Hero results:
+The corrected cohort has now published three fresh five-minute Hero results:
 Astra `627d0c5cf8594f798a95de7cec5c0771` earned **+32,000 persisted XP**
 with 101 accepted actions and ten confirmed responses; Sol
 `06be0ac11162442f849454de436214f5` earned **+18,250 persisted XP** with
@@ -115,9 +115,24 @@ continued without operator repair.
 Their final 54.4- and 53.2-second observation-only tails are labeled in the UI.
 The initial Astra publication took 159.538 seconds from completed attempt to
 public verification; the deployment step itself took 36.490 seconds. The
-end-to-end result does not meet the one-minute publication target. Terra and
-Luna are still pending final acceptance in this snapshot; the four-model gate
-and archive retirement remain open.
+end-to-end result does not meet the one-minute publication target.
+
+Terra `5e514dc88454480fbeb7101712f4523c` earned **+18,250 persisted XP**,
+with 83 accepted actions, eight confirmed responses and survival at logout.
+All 3,079 rendered, submitted, encoded and decoded frames agree. Independent
+review shows attacks, monster death and disappearance, native XP gains and rope
+climbing. Public playback advances normally from its first-input cue. Its final
+70 seconds are explicitly labeled observation-only.
+
+Luna `807e3972b1e643829bda03a47a2201ea` failed with an uncertain keyboard
+receipt after four confirmed responses and 28 accepted actions. This occurred
+12.5 seconds into a program, so the earlier program-boundary explanation does
+not establish this failure's cause. Its healthy 879-frame recording and original
+failure receipts are preserved. No browser/display restart or out-of-memory
+failure was found; missing dispatch and poll timing prevents a precise transport
+diagnosis. Original-owner cleanup and permanent closeout completed without
+another API call. The final cohort has three accepted results and one unscored
+failure. The four-model acceptance and archive retirement gates remain open.
 
 ## What RuneBench quality means here
 
