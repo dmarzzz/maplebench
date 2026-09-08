@@ -284,13 +284,66 @@ class FullClientTests(unittest.TestCase):
             controller=json.loads((path/'controller.json').read_text())
             controller.update(status='failed',evidenceStatus='failed',failureAcknowledged=True)
             write_json(path/'controller.json',controller)
-            write_json(path/'release.json',{'runId':path.name,'reason':'operator_acknowledged_failure'})
+            write_json(path/'release.json',{'runId':path.name,'reason':'operator_acknowledged_failure','releasedAtMs':1})
             original={p.name:p.read_bytes() for p in path.iterdir()}
             bridge=FullClientBridge(root)
             with mock.patch('full_client_bridge.time.monotonic',return_value=100):
                 bridge.frame(self.frame(clientSentAtMs=2000,captureState='idle'))
                 self.assertTrue(bridge.fresh())
             self.assertEqual({p.name:p.read_bytes() for p in path.iterdir()},original)
+
+    def test_cancel_release_reply_loss_restart_allows_fresh_login_without_overwrite(self):
+        for recording in ('saved','pending'):
+            with self.subTest(recording=recording), tempfile.TemporaryDirectory() as folder:
+                root,path=self.saved_readiness_run(folder)
+                bridge=FullClientBridge(root);ident=bridge.run['id']
+                bridge.run.update(status='failed',evidenceStatus='failed',recordingStatus=recording)
+                write_json(path/'controller.json',bridge.run)
+                bridge.cancel(ident)
+                self.assertTrue(bridge.run['failureAcknowledged'])
+                self.assertFalse((path/'release.json').exists())
+                bridge.release_failed_run(ident)
+                original=(path/'release.json').read_bytes()
+                bridge.release_failed_run(ident)
+                self.assertEqual((path/'release.json').read_bytes(),original)
+                restarted=FullClientBridge(root)
+                # Existing cancellation still requires the browser's key-release ack.
+                restarted.release_acks.add(ident)
+                with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                    restarted.frame(self.frame(clientSentAtMs=2000,captureState='idle'))
+                    self.assertTrue(restarted.fresh())
+                self.assertEqual((path/'release.json').read_bytes(),original)
+
+    def test_verified_quarantine_release_allows_restart_frames_and_idempotent_ack(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root,path=self.saved_readiness_run(folder);bridge=FullClientBridge(root);ident=bridge.run['id']
+            bridge.run.update(status='failed',evidenceStatus='failed',quarantined=True)
+            write_json(path/'controller.json',bridge.run)
+            write_json(path/'quarantine.json',{'runId':ident,'id':'f'*32,'reason':'invalid_quarantine_evidence'})
+            bridge.quarantines[ident]='f'*32
+            bridge.release_failed_run(ident);release=(path/'release.json').read_bytes()
+            bridge.release_failed_run(ident)
+            self.assertEqual((path/'release.json').read_bytes(),release)
+            restarted=FullClientBridge(root)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                restarted.frame(self.frame(clientSentAtMs=2000,captureState='idle'))
+                self.assertTrue(restarted.fresh())
+
+    def test_release_refuses_busy_unowned_and_corrupt_receipts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root,path=self.saved_readiness_run(folder);bridge=FullClientBridge(root);ident=bridge.run['id']
+            bridge.run.update(status='failed',failureAcknowledged=True)
+            with self.assertRaisesRegex(ControlError,'run_cannot_be_released'):bridge.release_failed_run('f'*32)
+            bridge.pending={'runId':ident}
+            with self.assertRaisesRegex(ControlError,'run_cannot_be_released'):bridge.release_failed_run(ident)
+            bridge.pending=None
+            (path/'release.json').write_text('{"runId":"wrong"}')
+            raw=(path/'release.json').read_bytes()
+            with self.assertRaisesRegex(ControlError,'invalid_failure_release'):bridge.release_failed_run(ident)
+            self.assertEqual((path/'release.json').read_bytes(),raw)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                bridge.frame(self.frame(clientSentAtMs=2000,captureState='idle'))
+                self.assertFalse(bridge.fresh())
 
     def test_dispatch_does_not_count_initial_server_residence_twice(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1191,6 +1244,9 @@ class FullClientTests(unittest.TestCase):
                 self.assertEqual(len(preserved),1)
                 self.assertEqual(preserved[0].read_text(),'{private-corrupt-content')
             bridge.release_failed_run('a'*32)
+            release=(root/('a'*32)/'release.json').read_bytes()
+            bridge.release_failed_run('a'*32)
+            self.assertEqual((root/('a'*32)/'release.json').read_bytes(),release)
             recovered=FullClientBridge(root); recovered.frame(self.frame())
             self.assertEqual(recovered.status()['quarantinedRuns'],['b'*32])
             with self.assertRaisesRegex(ValueError,'corrupt_runs_require_acknowledgment'):
@@ -1208,7 +1264,8 @@ class FullClientTests(unittest.TestCase):
             self.assertEqual(bridge.run['status'],'failed')
             self.assertEqual(bridge.run['reason'],'invalid_controller_evidence')
             self.assertEqual(bridge.status()['quarantinedRuns'],['a'*32])
-            bridge.release_failed_run('a'*32)
+            with self.assertRaisesRegex(ControlError,'invalid_failure_release'):
+                bridge.release_failed_run('a'*32)
             (path/'controller.json').write_text('new corruption')
             recovered=FullClientBridge(root)
             self.assertEqual(recovered.status()['quarantinedRuns'],['a'*32])
