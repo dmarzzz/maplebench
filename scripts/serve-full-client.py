@@ -19,6 +19,7 @@ ROOT = Path(os.environ['MAPLEBENCH_CLIENT_ROOT']).resolve()
 OUTPUT = Path(os.environ.get('MAPLEBENCH_CLIENT_OUTPUT', 'artifacts/full-client')).resolve()
 OUTPUT.mkdir(parents=True, exist_ok=True)
 DEMO_ACCOUNT = Path(os.environ['MAPLEBENCH_DEMO_ACCOUNT_FILE'])
+ENCODER = Path(__file__).resolve().parents[1]/'ui/full-client/webcodecs-recorder.js'
 CONTROLS = Path(__file__).resolve().parents[1]/'ui/full-client/controller.js'
 sys.path.insert(0, str(ROOT / 'web'))
 import assets_server
@@ -137,15 +138,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not (ROOT/'web/index.html').resolve().is_relative_to(ROOT):
                 self.send_error(404)
                 return
-            data = (ROOT/'web/index.html').read_text().replace('</body>', '<script src="/full-client-demo.js"></script></body>').encode()
+            data = (ROOT/'web/index.html').read_text().replace('</body>', '<script type="module" src="/full-client-demo.js"></script></body>').encode()
             self.send_response(200)
             self.send_header('Content-Type','text/html; charset=utf-8')
             self.send_header('Content-Length',str(len(data)))
             self.end_headers()
             self.wfile.write(data)
             return
-        if path == '/full-client-demo.js':
-            data = CONTROLS.read_bytes()
+        if path in ('/full-client-demo.js','/webcodecs-recorder.js'):
+            data = (CONTROLS if path=='/full-client-demo.js' else ENCODER).read_bytes()
             self.send_response(200)
             self.send_header('Content-Type','application/javascript')
             self.send_header('Content-Length',str(len(data)))

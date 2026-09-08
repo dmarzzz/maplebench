@@ -130,9 +130,13 @@ def playback_cue(result,recording,actions):
             or not start<=begin<finish<=end or abs(end-start-duration)>100
             or not number(target,begin,finish) or not number(ack,target,finish)):
         return None
-    offset=target-start
+    origin=0
+    if recording.get('capture_duration_policy',{}).get('id')=='post-render-encoded-frame-v1':
+        origin=recording.get('first_frame_offset_ms')
+        if not number(origin,0,duration):return None
+    offset=target-start-origin
     return {'start_ms':round(max(0,offset-250)),'basis':'first_acknowledged_input',
-            'timing_uncertainty_ms':uncertainty} if 0<=offset<duration else None
+            'timing_uncertainty_ms':uncertainty} if 0<=offset<duration-origin else None
 
 
 def project_member(entry,fixture,attempt_root,recordings,scenario):

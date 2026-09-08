@@ -30,6 +30,18 @@ class CaptureCohortTests(unittest.TestCase):
                 self.assertEqual((p['wall_seconds'],p['program_seconds'],p['max_api_requests']),(300,20,12))
                 self.assertEqual((p['max_output_tokens'],p['max_actions'],p['max_sdk_requests']),(3000,1600,6000))
 
+    def test_encoded_cohort_is_explicit_and_preserves_prior_recipe(self):
+        from full_client_capture import ENCODED_FRAME_POLICY
+        for profile in PROFILES:
+            previous=adaptive.capture_cohort_protocol(profile)
+            current=adaptive.encoded_capture_cohort_protocol(profile)
+            self.assertEqual(current['capture_duration_policy'],ENCODED_FRAME_POLICY)
+            self.assertEqual(previous['capture_duration_policy'],CAPTURE_DURATION_POLICY)
+            self.assertEqual({k:v for k,v in current.items() if k!='capture_duration_policy'},
+                             {k:v for k,v in previous.items() if k!='capture_duration_policy'})
+            self.assertNotEqual(adaptive.digest(current),adaptive.digest(previous))
+            self.assertNotEqual(adaptive.ENCODED_COHORT_RECIPE,adaptive.CAPTURE_COHORT_RECIPE)
+
     def test_recipe_does_not_mutate_or_reidentify_existing_frozen_runs(self):
         previous=copy.deepcopy(adaptive.DEFAULT_PROTOCOL);profile=copy.deepcopy(PROFILES[1])
         old=copy.deepcopy(previous);old['horizon_policy']=copy.deepcopy(adaptive.FULL_HORIZON_POLICY)

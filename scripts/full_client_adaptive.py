@@ -24,6 +24,7 @@ DEFAULT_PROTOCOL = {'schema_version':1,'id':PROTOCOL,'wall_seconds':300,'program
 FULL_HORIZON_POLICY = {'id':'full-horizon-reserve-v1','request_timeout_seconds':50,
     'settlement_reserve_seconds':5,'passive_observation_interval_ms':1000}
 CAPTURE_COHORT_RECIPE = 'full-horizon-capture-cohort-v1'
+ENCODED_COHORT_RECIPE = 'full-horizon-encoded-cohort-v1'
 PASSIVE_STOP_REASONS = frozenset(('request_window_closed','api_request_limit',
     'action_limit','sdk_request_limit','token_reservation_limit'))
 
@@ -72,6 +73,13 @@ def capture_cohort_protocol(profile):
     value=json.loads(json.dumps(DEFAULT_PROTOCOL))
     value.update(profile=profile,max_total_tokens=240000,
         horizon_policy=FULL_HORIZON_POLICY,capture_duration_policy=CAPTURE_DURATION_POLICY)
+    return validate_protocol(value)
+
+def encoded_capture_cohort_protocol(profile):
+    """New explicit frame-accounted recipe; prior cohort presets stay frozen."""
+    from full_client_capture import ENCODED_FRAME_POLICY
+    value=capture_cohort_protocol(profile)
+    value['capture_duration_policy']=ENCODED_FRAME_POLICY
     return validate_protocol(value)
 
 def prompt(protocol):
