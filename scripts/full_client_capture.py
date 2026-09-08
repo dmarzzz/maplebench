@@ -17,7 +17,8 @@ def capture_receipt(value, owner, anchor, clock, terminal):
         raise ValueError('capture_identity_mismatch')
     for key in ('start_wall_ms','end_wall_ms'):
         if not number(value[key]): raise ValueError('invalid_capture_timestamp')
-    if (not number(value['duration_ms'],1,125000) or not number(value['max_frame_gap_ms'],0,125000)
+    maximum=335000 if owner.get('protocol')=='full-client-adaptive-pilot-v1' else 125000
+    if (not number(value['duration_ms'],1,maximum) or not number(value['max_frame_gap_ms'],0,maximum)
             or type(value['rendered_frames']) is not int or not 0 <= value['rendered_frames'] <= 100000
             or type(value['errors']) is not int or not 0 <= value['errors'] <= 100000
             or any(type(value[key]) is not bool for key in ('hidden','relay_lost','interrupted'))):

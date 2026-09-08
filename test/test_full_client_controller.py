@@ -9,7 +9,7 @@ class ControllerTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'),'Node is required for browser timing regressions')
     def test_trial_capture_deadline_and_clock_receive_echo_use_actual_browser_state(self):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
-        timer=next(line.strip() for line in source.splitlines() if 'item.maxTimer=setTimeout' in line)
+        timer='{'+source[source.index('      const captureLimit='):source.index("      notice.textContent='Recording the actual canvas") ]+'}'
         poll=source[source.index('  const poll=async()=>{'):source.index('  const startRun=async')]
         fixture="""
 const assert=require('node:assert/strict');
@@ -24,7 +24,9 @@ item.autoRunId=null;
 """+timer+"""
 assert.equal(limit,120000);item.autoRunId='demo';delete run.readinessPolicy;
 """+timer+"""
-assert.equal(limit,120000);
+assert.equal(limit,120000);run.adaptiveProtocol={id:'full-client-adaptive-pilot-v1',wall_seconds:300};
+"""+timer+"""
+assert.equal(limit,335000);
 let closed=false,pollAbort,acknowledgement=null,sessionAck=null,releaseAck=null,relayConnected=true,disconnectedAt=null;
 const clientId='renderer',performance={now:()=>100},observe=()=>({ready:true,capturedAt:Date.now()}),
  Module={MapleBenchRenderedAt:Date.now(),MapleBenchHud:null},renderHeader=()=>{},releaseAll=()=>{};

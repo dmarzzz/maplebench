@@ -19,6 +19,7 @@ from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute
 from full_client_capture import capture_receipt
 from full_client_docker import DockerBindingError, validate_binding
 from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
+from full_client_adaptive import AdaptiveError, PROTOCOL as ADAPTIVE_PROTOCOL, run_adaptive, validate_protocol
 
 
 class ControlError(ValueError):
@@ -552,7 +553,8 @@ class FullClientBridge:
                 return self._snapshot()
             if not url.endswith('/v1/action') or not isinstance(payload, dict) or payload.get('type') != 'press_keys':
                 raise ValueError('Only full-client keyboard actions are supported')
-            _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]}, SCENARIO)
+            _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},
+                SCENARIO | ({'protocol':ADAPTIVE_PROTOCOL} if self.run.get('protocol')==ADAPTIVE_PROTOCOL else {}))
             if self.pending:
                 raise ValueError('Another input is in flight')
             pending = {'id': uuid.uuid4().hex, 'keys': action['keys'], 'durationMs': action['durationMs'],
@@ -691,10 +693,15 @@ class FullClientBridge:
 
     def start(self, mode, model=None, duration_seconds=22, *, client=None, run_id=None, request_id=None,
               total_token_limit=None, trial_context=None, docker_image_id=None, docker_binding=None,
-              readiness_policy=None, lease_fds=(), private=False):
+              readiness_policy=None, adaptive_protocol=None, lease_fds=(), private=False):
         if mode not in ('script', 'api') or (mode == 'api' and model not in MODELS):
             raise ValueError('Invalid controller selection')
-        if type(duration_seconds) is not int or duration_seconds not in (22, 60):
+        if adaptive_protocol is not None:
+            try:adaptive_protocol=validate_protocol(adaptive_protocol)
+            except AdaptiveError as error:raise ControlError(str(error)) from None
+            if mode!='api' or duration_seconds!=300 or total_token_limit!=adaptive_protocol['max_total_tokens']:
+                raise ControlError('adaptive_controller_budget_mismatch')
+        if type(duration_seconds) is not int or duration_seconds not in ((300,) if adaptive_protocol is not None else (22, 60)):
             raise ValueError('Run duration must be 22 or 60 seconds')
         if mode == 'script' and duration_seconds != 22:
             raise ValueError('Scripted smoke runs last at most 22 seconds')
@@ -737,6 +744,8 @@ class FullClientBridge:
             identity['dockerBinding'] = docker_binding
         if readiness_policy is not None:
             identity['readinessPolicy'] = readiness_policy
+        if adaptive_protocol is not None:
+            identity['adaptiveProtocol'] = adaptive_protocol
         with self.lock:
             claim = self.output/'requests'/f'{request_id}.json'
             if claim.exists():
@@ -784,6 +793,10 @@ class FullClientBridge:
                         'controllerSeconds':duration_seconds+2,'apiTokenUpperBound':None,
                         'workerActive':True,
                         'client':self.client, 'recordingStatus':'pending', 'evidenceStatus':'pending'}
+            if adaptive_protocol is not None:
+                value.update(actionLimit=adaptive_protocol['max_actions'],sdkRequestLimit=adaptive_protocol['max_sdk_requests'],
+                    controllerSeconds=adaptive_protocol['wall_seconds'],cycleProgramSeconds=adaptive_protocol['program_seconds'],
+                    protocol=ADAPTIVE_PROTOCOL,cycleNumber=0)
             folder = self.output/value['id']
             folder.mkdir(parents=True)
             write_json(folder/'request.json', value)
@@ -809,6 +822,8 @@ class FullClientBridge:
         return {k:v for k,v in value.items() if k != 'client' and (private or k != 'dockerBinding')}
 
     def _run(self, run):
+        if run.get('adaptiveProtocol') is not None:
+            return self._run_adaptive(run)
         out = self.output / run['id']
         result = None
         started = time.monotonic()
@@ -1073,3 +1088,145 @@ class FullClientBridge:
                     self.cancel_events.pop(run['id'],None)
                     if not retain_lease:
                         for descriptor in self.leases.pop(run['id'],[]): os.close(descriptor)
+
+    def _run_adaptive(self, run):
+        """Actual adaptive API execution; intentionally separate evidence schema."""
+        out=self.output/run['id'];started=time.monotonic()-(time.time()-run['startedAtMs']/1000);final_controller=None
+        readiness=None;trace=None;api_outcome='not_started';input_deadline=None;first_input={};adaptive_started=None
+        def check_cancelled():
+            with self.lock:
+                try:self._check_cancelled(run['id'])
+                except ControlError as error:raise AdaptiveError(error.code) from None
+        def persist_bytes(name,raw):
+            path=out/name
+            if Path(name).is_absolute() or '..' in Path(name).parts:raise ControlError('invalid_adaptive_artifact_path')
+            path.parent.mkdir(parents=True,exist_ok=True)
+            write_bytes(path,raw)
+            return {'path':name,'sha256':hashlib.sha256(raw).hexdigest()}
+        def persist_json(name,value):
+            return persist_bytes(name,json.dumps(value,allow_nan=False,separators=(',',':')).encode()+b'\n')
+        def request(url,payload=None,timeout=3):
+            sent=time.monotonic()
+            value=self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
+            if url.endswith('/v1/action') and value.get('accepted') is True and not first_input:
+                first_input.update(started=sent,acked=time.monotonic())
+            return value
+        def phase(**value):
+            nonlocal input_deadline,adaptive_started,readiness
+            input_deadline=value['deadline'];adaptive_started=input_deadline-300
+            if value['phase']=='preparing':return
+            if value['phase']=='requesting':
+                if run.get('dockerBinding') is not None:validate_binding(run['dockerBinding'])
+                if readiness is not None and value['cycle']==0:
+                    with self.lock:
+                        readiness=readiness|{'dispatch':self._readiness_dispatch(run,readiness)}
+                        write_json(out/'readiness.json',readiness)
+                        check_cancelled();self._readiness_dispatch(run,readiness)
+            with self.lock:
+                check_cancelled()
+                self.run.update(status=value['phase'],cycleNumber=value['cycle'],
+                    apiRequestsStarted=value['counters']['api_requests_started'],
+                    apiTokenUpperBound=value['counters']['reserved_tokens'])
+                self.run.setdefault('programStartedAtMs',round(time.time()*1000))
+                write_json(out/'controller.json',self.run)
+        def progress(step):
+            with self.lock:
+                if self.run.get('id')==run['id'] and step.get('method')=='pressKeys' and step.get('result',{}).get('accepted') is True:
+                    self.run['actions']+=1
+        def provider(url,body,timeout):
+            nonlocal readiness,api_outcome
+            check_cancelled()
+            remaining=min(timeout,input_deadline-time.monotonic())
+            if remaining<=0:raise AdaptiveError('adaptive_wall_deadline')
+            key=read_private_file(self.key_file).strip();api_outcome='uncertain'
+            try:return bounded_request(url,body,key,remaining)
+            finally:del key
+        def execute(code,**kwargs):
+            return execute_program(code,SCENARIO|{'protocol':ADAPTIVE_PROTOCOL},'http://127.0.0.1:8840',request_fn=request,
+                cancel_event=self.cancel_events.get(run['id']),
+                **({'docker_binding':run['dockerBinding']} if run.get('dockerBinding') else {}),
+                **({'docker_image':run['dockerImageId']} if run.get('dockerImageId') else {}),**kwargs)
+        try:
+            self._wait_for_capture(run['id'])
+            if run.get('trialContext'):
+                initial,readiness=self._wait_for_readiness(run,started)
+            else:initial=request('/v1/observe')
+            value=run_adaptive(run_id=run['id'],model=run['model'],protocol=run['adaptiveProtocol'],
+                initial=initial,observe=lambda timeout:request('/v1/observe',timeout=timeout),request_api=provider,
+                execute=execute,persist_json=persist_json,persist_bytes=persist_bytes,cancel_check=check_cancelled,
+                on_phase=phase,on_step=progress,clock=time.monotonic,wall_clock=time.time)
+            trace=value['trace'];api_outcome=('confirmed' if trace['counters']['api_requests_started']==trace['counters']['api_responses_confirmed']
+                else 'uncertain' if trace['counters']['api_requests_started'] else 'not_started')
+            if first_input:
+                trace['timing'].update(first_input_started_ms=round((first_input['started']-adaptive_started)*1000),
+                    first_input_acked_ms=round((first_input['acked']-adaptive_started)*1000))
+            trace_ref=persist_json('adaptive.json',trace)
+            # This terminal observation is diagnostic and cannot authorize input
+            # after the wall deadline or stand in for persisted XP collection.
+            final=request('/v1/observe')
+            status,reason=trace['status'],trace['reason'];counters=trace['counters']
+            origin=trace['timing']['wall_started_at_ms']-run['startedAtMs']
+            api_cycles=[c for c in trace['cycles'] if c.get('api_outcome')=='confirmed']
+            ended_wall=round(time.time()*1000);terminal_ms=ended_wall-run['startedAtMs']
+            timeline={'adaptive_started_ms':origin,
+                'adaptive_ended_ms':terminal_ms,
+                'api_started_ms':origin+api_cycles[0]['timing']['api_started_ms'] if api_cycles else None,
+                'api_ended_ms':origin+api_cycles[-1]['timing']['api_ended_ms'] if api_cycles else None,
+                'program_started_ms':origin,'program_ended_ms':terminal_ms,
+                'readiness_started_ms':readiness['wait_started_run_ms'] if readiness else None,
+                'readiness_ended_ms':readiness['qualified_run_ms'] if readiness else None,
+                'first_input_started_ms':origin+trace['timing']['first_input_started_ms'] if first_input else None,
+                'first_input_acked_ms':origin+trace['timing']['first_input_acked_ms'] if first_input else None,
+                'status':status}
+            result={'schema_version':1,'protocol':ADAPTIVE_PROTOCOL,'source':'full-client-adaptive-pilot',
+                'controller':run|{'status':status,'reason':reason,'workerActive':False,
+                    'actions':counters['actions'],'returnedModel':run['model'] if counters['api_responses_confirmed'] else None},
+                'initial':initial,'final':final,'readiness':readiness,
+                'readinessSha256':hashlib.sha256((out/'readiness.json').read_bytes()).hexdigest() if readiness else None,
+                'adaptive':trace,'adaptiveTrace':trace_ref,'timeline':timeline,
+                'trialContext':run.get('trialContext'),'program':{'actions':counters['actions'],
+                    'actionAttempts':counters['action_attempts'],'rpcRequests':counters['sdk_requests'],'steps':value['steps'],
+                    'reason':reason,'error':trace['error']},
+                'timing':{'startedAtMs':run['startedAtMs'],'endedAtMs':ended_wall,
+                    'elapsedMs':round((time.monotonic()-started)*1000),
+                    'apiLatencyMs':sum(c['timing'].get('api_ended_ms',c['timing'].get('api_started_ms',0))-c['timing'].get('api_started_ms',0)
+                                       for c in trace['cycles'])},
+                'observedXpDelta':final['character']['exp']-initial['character']['exp']
+                    if final['character']['level']==initial['character']['level'] else None,
+                'persistedNetXp':None,'authoritativePeakXpPerMinute':None,
+                'publicationEligible':False,'publicationBlocker':'adaptive_trial_evidence_adapter_required'}
+            publication={'schema_version':3,'protocol':ADAPTIVE_PROTOCOL,'run_kind':'adaptive_pilot',
+                'result':result,'video':json.loads((out/'recording.json').read_text()) if (out/'recording.json').is_file() else None,
+                'score':None,'publication_eligible':False,'reason':'adaptive_trial_evidence_adapter_required'}
+            with self.lock:
+                check_cancelled();persist_json('result.json',result);persist_json('publication.json',publication)
+                self.run.update(status=status,reason=reason,actions=counters['actions'],apiOutcome=api_outcome,
+                    returnedModel=result['controller']['returnedModel'],evidenceStatus='saved' if status=='completed' else 'failed')
+                final_controller=dict(self.run)
+                write_json(out/'controller.json',final_controller)
+        except Exception as error:
+            reason=error.code if isinstance(error,ControlError) else str(error) if isinstance(error,(AdaptiveError,DockerBindingError)) else type(error).__name__
+            with self.lock:
+                self.run.update(status='failed',reason=reason,failurePhase='adaptive_controller',
+                    apiOutcome=api_outcome,evidenceStatus='failed');final_controller=dict(self.run)
+            try:write_json(out/'failure.json',{'controller':final_controller,'error':reason,'adaptive':trace,'apiOutcome':api_outcome})
+            except OSError:pass
+        finally:
+            # Match the legacy worker's no-replay cleanup contract. Failed leased
+            # attempts retain ownership until explicit cancellation/release.
+            with self.lock:
+                if self.leases.get(run['id']) and self.run.get('status')=='failed' and not self._cancelled(run['id']):
+                    try:
+                        cancellation=self.output/'cancellations'/f'{run["id"]}.json';cancellation.parent.mkdir(parents=True,exist_ok=True)
+                        write_json(cancellation,{'runId':run['id'],'requestedAtMs':round(time.time()*1000),
+                            'reason':'worker_failed','apiOutcomeAtCancellation':api_outcome})
+                    except OSError:self.run.update(reason='release_journal_failed',evidenceStatus='failed')
+                retain=bool(self.leases.get(run['id']) and self.run.get('status')=='failed' and run['id'] not in self.release_acks)
+                self.run.update(workerActive=False,leaseReleasePending=retain)
+                if final_controller is not None:final_controller.update(workerActive=False,leaseReleasePending=retain)
+                try:write_json(out/'controller.json',final_controller or self.run)
+                except OSError:self.run.update(status='failed',reason='evidence_write_failed',evidenceStatus='failed')
+                finally:
+                    self.cancel_events.pop(run['id'],None)
+                    if not retain:
+                        for descriptor in self.leases.pop(run['id'],[]):os.close(descriptor)

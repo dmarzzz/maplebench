@@ -659,7 +659,8 @@ def _verify_readiness_policy(manifest, artifact_root, evidence, scenario):
             and 0 <= receipt["qualified_run_ms"] - receipt["wait_started_run_ms"] <= policy["timeout_ms"]
             and receipt["qualified_at_ms"] - receipt["wait_started_at_ms"] <= policy["timeout_ms"] + SLACK_MS,
             "qualification must follow capture readiness within the frozen timeout")
-    require(manifest["budgets"].get("run_ms") == (scenario["program_seconds"] + 63) * 1000,
+    expected_run_ms = 335000 if scenario.get("protocol") == "full-client-adaptive-pilot-v1" else (scenario["program_seconds"] + 63) * 1000
+    require(manifest["budgets"].get("run_ms") == expected_run_ms,
             "future run budget must include only the frozen ten-second readiness allowance")
     for wall, elapsed in (("wait_started_at_ms", "wait_started_run_ms"), ("qualified_at_ms", "qualified_run_ms")):
         require(abs(receipt[wall] - started - receipt[elapsed]) <= SLACK_MS,
@@ -780,7 +781,7 @@ def verify_capture_bundle(manifest, artifact_root):
     require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
     try:
         measured = capture_receipt(capture, {"id": run_id, "client": result["controller"]["client"],
-                                             "startedAtMs": started}, ready, clock, terminal)
+                                             "startedAtMs": started, "protocol": result.get("protocol")}, ready, clock, terminal)
     except (ValueError, TypeError, KeyError, OverflowError) as error:
         raise EvidenceError("capture: raw measurements failed validation") from error
     require(all(same_json(video.get(key), value) for key, value in measured.items()),

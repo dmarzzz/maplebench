@@ -108,6 +108,8 @@
 
   const keyNames = {LEFT:'ArrowLeft',RIGHT:'ArrowRight',UP:'ArrowUp',DOWN:'ArrowDown',JUMP:'Space',
     ATTACK:'ControlLeft',BRANDISH:'KeyA',COMBO:'KeyS',BOOSTER:'KeyD',MAPLE_WARRIOR:'KeyF',HP_POTION:'KeyQ',MP_POTION:'KeyW'};
+  const skillKeyNames={PRIMARY_SKILL:'KeyA',SECONDARY_SKILL:'KeyS',BUFF_1:'KeyD',BUFF_2:'KeyF'};
+  const skillNamesByCode=Object.fromEntries(Object.entries(skillKeyNames).map(([name,code])=>[code,name]));
   const namesByCode = Object.fromEntries(Object.entries(keyNames).map(([name, code]) => [code, name]));
   const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87};
   const held = new Map(), physical = new Set(), manualButtons = [], runButtons = [];
@@ -177,7 +179,7 @@
       : held.size || physical.size ? 'Manual controls · no active model' : 'Idle · no active model';
     let state = !relayConnected ? 'Relay disconnected · inputs released'
       : !available ? 'Waiting for fresh client state'
-      : run.status === 'requesting' ? (run.mode === 'api' ? 'Awaiting API program · game remains live' : 'Preparing SDK program')
+      : run.status === 'requesting' ? (run.adaptiveProtocol ? `Planning cycle ${(run.cycleNumber || 0)+1} · game remains live` : run.mode === 'api' ? 'Awaiting API program · game remains live' : 'Preparing SDK program')
       : run.status === 'running' ? `Program running · ${run.actions || 0} actions${run.programStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.programStartedAtMs)/1000))} / ${run.programSeconds || 22}s` : ''}`
       : run.id ? `Last ${model || 'scripted SDK'} run: ${run.status}${run.actions != null ? ` · ${run.actions} actions` : ''}${run.reason ? ` · ${run.reason}` : ''}`
       : 'Ready · open Controls & models to start one short run';
@@ -186,7 +188,7 @@
       && Number.isFinite(character.exp) && Number.isFinite(baseline.exp) ? character.exp - baseline.exp : null;
     const xp = delta === null ? (available && baseline && character.level !== baseline.level ? 'XP Δ unavailable (level changed)' : 'XP Δ —')
       : `XP Δ ${delta >= 0 ? '+' : ''}${format(delta)} (${baselineScope})`;
-    const keys = [...new Set([...held.keys(),...physical])].map(code => namesByCode[code] || code).join(' + ') || 'none';
+    const keys = [...new Set([...held.keys(),...physical])].map(code => {const key=(run.adaptiveProtocol?skillNamesByCode[code]:null)||namesByCode[code]||code; return run.adaptiveProtocol?.profile?.skill_keys?.[key]||key;}).join(' + ') || 'none';
     return {mode,state,hp:`HP ${available ? format(character.hp)+' / '+format(character.maxHp) : '—'}`,
       mp:`MP ${available ? format(character.mp)+' / '+format(character.maxMp) : '—'}`,xp,keys:`Keys: ${keys}`,
       hpFraction:available ? fraction(character.hp,character.maxHp) : 0,
@@ -292,7 +294,7 @@
       const mimeType = ['video/webm;codecs=vp8','video/webm'].find(type => MediaRecorder.isTypeSupported(type));
       if (!mimeType) throw Error('WebM capture is unavailable');
       draw(); item.stream=output.captureStream(30);
-      item.recorder=new MediaRecorder(item.stream,{mimeType,videoBitsPerSecond:5000000});
+      item.recorder=new MediaRecorder(item.stream,{mimeType,videoBitsPerSecond:run.adaptiveProtocol?2000000:5000000});
       item.recorder.onstart=()=>{item.recorderStarted=true;item.startedAt=performance.now();item.startedWall=Date.now();};
       item.recorder.ondataavailable=event=>{
         if(event.data.size) { item.chunks.push(event.data); item.bytes+=event.data.size; }
@@ -315,7 +317,9 @@
       };
       item.recorder.onerror=()=>{ item.errors++; notice.textContent='Recording failed; capture stopped.'; stopRecording(); };
       capture=item; item.recorder.start(1000);
-      item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},item.autoRunId&&run.readinessPolicy?125000:120000);
+      const captureLimit=run.adaptiveProtocol?.id==='full-client-adaptive-pilot-v1'&&run.adaptiveProtocol.wall_seconds===300
+        ?335000:item.autoRunId&&run.readinessPolicy?125000:120000;
+      item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},captureLimit);
       notice.textContent='Recording the actual canvas and controller/telemetry header.'; renderHeader();
     } catch {
       cancelAnimationFrame(item.animation); item.stream?.getTracks().forEach(track=>track.stop());
@@ -372,7 +376,7 @@
   const executeInput = async (command, deadline) => {
     if(activeCommand) return;
     const item={interrupted:false}; activeCommand=item;
-    const keys=Array.isArray(command.keys)?command.keys.map(name=>keyNames[name]):[];
+    const keys=Array.isArray(command.keys)?command.keys.map(name=>run.adaptiveProtocol?(skillKeyNames[name]||keyNames[name]):keyNames[name]):[];
     let ok=false;
     try {
       if(document.hidden || !fresh(observe()) || !relayConnected

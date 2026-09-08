@@ -608,7 +608,10 @@ class ExperimentTests(unittest.TestCase):
             parent.wait(timeout=3)
             while time.monotonic() < until:
                 proc = Path(f"/proc/{pid}/stat")
-                if not proc.exists() or proc.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                try:
+                    if not proc.exists() or proc.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                        break
+                except (FileNotFoundError, ProcessLookupError):
                     break
                 time.sleep(.02)
             else:

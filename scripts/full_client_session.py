@@ -180,6 +180,7 @@ class SessionCoordinator:
                     total_token_limit=request.get('total_token_limit'),trial_context=request.get('trial_context'),
                     docker_image_id=request.get('docker_image_id'),docker_binding=request.get('docker_binding'),
                     readiness_policy=request.get('readiness_policy'),
+                    **({'adaptive_protocol':request['adaptive_protocol']} if request.get('adaptive_protocol') is not None else {}),
                     lease_fds=descriptors,private=True)
         raise ControlError('unknown_admin_operation')
 
