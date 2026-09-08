@@ -16,11 +16,17 @@ PROFILES = {
                   'skill_keys':{'PRIMARY_SKILL':'Hurricane','SECONDARY_SKILL':'Arrow Rain','BUFF_1':'Soul Arrow : Bow','BUFF_2':'Sharp Eyes'}},
     'ice_lightning_arch_mage': {'id':'ice-lightning-v1','class_name':'Ice/Lightning Arch Mage','level':180,
                               'skill_keys':{'PRIMARY_SKILL':'Chain Lightning','SECONDARY_SKILL':'Teleport','BUFF_1':'Magic Guard','BUFF_2':'Spell Booster'}},
+    'night_lord': {'id':'night-lord-v1','class_name':'Night Lord','level':180,
+                   'skill_keys':{'PRIMARY_SKILL':'Triple Throw','SECONDARY_SKILL':'Avenger','BUFF_1':'Claw Booster','BUFF_2':'Haste'}},
 }
 
 def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL):
     if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
         raise ValueError('invalid_native_fixture')
+    # This new, scoped fixture has no historical v1/v2/v3 recipe. An explicit
+    # v4 request binds its profile and source without changing prior fixtures.
+    if class_id=='night_lord' and protocol!=NATIVE_V4_PROTOCOL:
+        raise ValueError('night_lord_requires_native_v4')
     return {'id':protocol,'class_id':class_id,'profile':json.loads(json.dumps(PROFILES[class_id])),
             'baseline_sha256':baseline_sha256,'wall_seconds':30,'max_actions':12,'max_sdk_requests':100,
             'capture_max_ms':45000,'capture_duration_policy':dict(CAPTURE_DURATION_POLICY if protocol==PROTOCOL else ENCODED_FRAME_POLICY)}
