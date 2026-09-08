@@ -11,29 +11,65 @@ from full_client_xp_windows import (IDENTITY,WINDOW_MS,MAX_LEDGER_BYTES,score_le
 PROTOCOL='native-xp-ledger-acceptance-v1'
 
 
-def verify_control(control,scenario,identity,window,baseline_sha256):
+def verify_control(control,scenario,identity,window,baseline_sha256,actual,program_raw):
     from full_client_native import validate_contract as native_contract,program
-    fields={'schema_version','protocol','run_id','model','api_calls','submission_attempts',
-            'started_at_ms','ended_at_ms','accepted_actions','sdk_requests','program_sha256'}
     require(isinstance(scenario,dict) and set(scenario)=={'protocol','native_contract','xp_window_protocol'}
             and scenario['protocol']==PROTOCOL,'native_scenario_required')
     native=native_contract(scenario['native_contract'])
     require(native['baseline_sha256']==baseline_sha256,'native_fixture_mismatch')
-    require(isinstance(control,dict) and set(control)==fields and type(control['schema_version']) is int
-            and control['schema_version']==1 and control['protocol']==PROTOCOL and control['run_id']==identity['run_id']
-            and control['model'] is None and type(control['api_calls']) is int and control['api_calls']==0
-            and type(control['submission_attempts']) is int and control['submission_attempts']==1
-            and integer(control['accepted_actions'],1,native['max_actions'])
-            and integer(control['sdk_requests'],control['accepted_actions'],native['max_sdk_requests'])
-            and control['program_sha256']==hashlib.sha256(program(native).encode()).hexdigest(),
-            'single_zero_api_native_control_required')
+    expected_program=program(native).encode();program_hash=hashlib.sha256(expected_program).hexdigest()
+    require(program_raw==expected_program and isinstance(actual,dict),'original_native_program_required')
+    owner=actual.get('controller',{});execution=actual.get('program',{});timeline=actual.get('timeline',{});timing=actual.get('timing',{})
+    require({'protocol','nativeAcceptance','api','trialContext','source','model_api_requests','publication_eligible','score','programSha256','controller','program','timeline','timing'}<=set(actual)
+            and actual.get('protocol')==native['id'] and same_json(actual.get('nativeAcceptance'),native)
+            and actual.get('api') is None and actual.get('trialContext') is None
+            and actual.get('source')=='client telemetry; unscored integration run'
+            and type(actual.get('model_api_requests')) is int and actual['model_api_requests']==0
+            and actual.get('publication_eligible') is False and actual.get('score') is None
+            and actual.get('programSha256')==program_hash
+            and isinstance(owner,dict) and {'id','mode','model','returnedModel','trialContext','protocol','nativeAcceptance','status','reason','workerActive','actions'}<=set(owner) and owner.get('id')==identity['run_id']
+            and owner.get('mode')=='script' and owner.get('model') is None and owner.get('returnedModel') is None
+            and owner.get('trialContext') is None and owner.get('protocol')==native['id']
+            and same_json(owner.get('nativeAcceptance'),native)
+            and owner.get('status')=='completed' and owner.get('workerActive') is False
+            and isinstance(execution,dict) and execution.get('reason')=='program_complete'
+            and execution.get('error') is None and owner.get('reason')=='program_complete'
+            and timeline.get('status')=='completed','original_native_success_required')
+    steps=execution.get('steps')
+    require(isinstance(steps,list) and 1<=len(steps)<=native['max_sdk_requests'],'native_sdk_steps_required')
+    rpc=[];actions=0
+    for step in steps:
+        require(isinstance(step,dict) and step.get('kind')=='sdk' and integer(step.get('rpcId'),1)
+                and step.get('method') in ('observe','pressKeys','wait')
+                and isinstance(step.get('args'),list) and isinstance(step.get('result'),dict),
+                'invalid_native_sdk_step')
+        rpc.append(step['rpcId'])
+        if step['method']=='pressKeys':
+            require(step['result'].get('accepted') is True,'native_input_not_accepted');actions+=1
+    require(len(set(rpc))==len(rpc) and rpc==sorted(rpc)
+            and integer(actions,1,native['max_actions'])
+            and type(execution.get('actions')) is int and execution['actions']==actions
+            and type(owner.get('actions')) is int and owner['actions']==actions
+            and type(execution.get('actionAttempts')) is int and execution['actionAttempts']==actions
+            and type(execution.get('rpcRequests')) is int and execution['rpcRequests']==len(steps),
+            'native_sdk_count_mismatch')
     require(isinstance(window,dict) and set(window)=={'start_at_ms','deadline_at_ms','window_ms'}
             and all(integer(window[k]) for k in window) and window['window_ms']==WINDOW_MS
             and window['deadline_at_ms']-window['start_at_ms']==300000
-            and integer(control['started_at_ms']) and integer(control['ended_at_ms'])
-            and control['started_at_ms']==window['start_at_ms']
-            and 0<control['ended_at_ms']-control['started_at_ms']<=native['wall_seconds']*1000,
-            'fixed_native_control_window_required')
+            and all(integer(timing.get(k)) for k in ('startedAtMs','endedAtMs','elapsedMs','apiLatencyMs'))
+            and timing['apiLatencyMs']==0 and abs(timing['endedAtMs']-timing['startedAtMs']-timing['elapsedMs'])<=25
+            and all(integer(timeline.get(k)) for k in ('program_started_ms','program_ended_ms')),
+            'native_control_timing_required')
+    started=timing['startedAtMs']+timeline['program_started_ms'];ended=timing['startedAtMs']+timeline['program_ended_ms']
+    require(window['start_at_ms']<=timing['startedAtMs']<=started
+            and started-window['start_at_ms']<=5000
+            and 0<ended-started<=native['wall_seconds']*1000
+            and ended<=timing['endedAtMs']<=window['start_at_ms']+45000,'fixed_native_control_window_required')
+    derived={'schema_version':1,'protocol':PROTOCOL,'run_id':identity['run_id'],'model':None,'api_calls':0,
+            'started_at_ms':started,'ended_at_ms':ended,'accepted_actions':actions,
+            'sdk_requests':len(steps),'program_sha256':program_hash}
+    require(same_json(control,derived),'normalized_native_control_mismatch')
+    return derived
 
 
 def verify_coverage(raw,identity,window):
@@ -93,7 +129,7 @@ def verify_bundle(manifest, root):
             and type(manifest['schema_version']) is int and manifest['protocol']==PROTOCOL,'unsupported_manifest')
     arts=manifest['artifacts'];identity={k:manifest[k] for k in IDENTITY}
     expected={'xp_ledger','native_save','native_log','initial_db','final_db','session','scenario','controller_result',
-              'baseline_sql','baseline_snapshot','reset','server_log','coverage'}
+              'baseline_sql','baseline_snapshot','reset','server_log','coverage','native_result','native_program'}
     require(isinstance(arts,dict) and set(arts)==expected,'incomplete_artifact_bundle')
     for name,field in (('baseline_sql','baseline_sha256'),('scenario','scenario_fingerprint')):
         require(arts[name].get('sha256')==manifest[field],'frozen_artifact_hash_mismatch')
@@ -124,7 +160,9 @@ def verify_bundle(manifest, root):
             'normalization':manifest['normalization'],'experience_table_sha256':manifest['experience_table_sha256']}),
             'unfrozen_native_window')
     validate_contract(scenario['xp_window_protocol'])
-    verify_control(controller,scenario,identity,window,manifest['baseline_sha256'])
+    actual=read_json_artifact(root,arts,'native_result')
+    program_raw=read_artifact_bytes(root,arts['native_program'],'native_program',maximum=65536)
+    verify_control(controller,scenario,identity,window,manifest['baseline_sha256'],actual,program_raw)
     coverage=read_artifact_bytes(root,arts['coverage'],'coverage',maximum=256*1024)
     verify_coverage(coverage,identity,window)
     require(session.get('controller_started_at_ms')==window['start_at_ms']

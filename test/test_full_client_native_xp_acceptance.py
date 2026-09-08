@@ -19,8 +19,19 @@ class NativeEnvelopeTests(unittest.TestCase):
   table=hashlib.sha256(json.dumps([1000000000]*199,separators=(',',':')).encode()).hexdigest()
   native=contract('hero',sql['sha256']);scenario={'protocol':PROTOCOL,'native_contract':native,'xp_window_protocol':{'id':WINDOWS,'window_ms':15000,'wall_seconds':300,'normalization':NORM,'experience_table_sha256':table}}
   scenario_ref=self.save('scenario',scenario)
-  self.save('controller_result',{'schema_version':1,'protocol':PROTOCOL,'run_id':'a'*32,'model':None,'api_calls':0,'submission_attempts':1,
+  self.save('controller_result',{'schema_version':1,'protocol':PROTOCOL,'run_id':'a'*32,'model':None,'api_calls':0,
       'started_at_ms':1000000,'ended_at_ms':1020000,'accepted_actions':8,'sdk_requests':30,'program_sha256':hashlib.sha256(program(native).encode()).hexdigest()})
+  steps=[{'kind':'sdk','rpcId':i+1,'method':'pressKeys' if i<8 else 'observe',
+      'args':[['ATTACK'],100] if i<8 else [],'result':{'accepted':True} if i<8 else {'character':{'alive':True}}} for i in range(30)]
+  self.save('native_program',program(native).encode())
+  self.save('native_result',{'protocol':native['id'],'nativeAcceptance':native,'api':None,'trialContext':None,
+      'source':'client telemetry; unscored integration run','model_api_requests':0,'publication_eligible':False,'score':None,
+      'programSha256':hashlib.sha256(program(native).encode()).hexdigest(),
+      'controller':{'id':'a'*32,'mode':'script','model':None,'returnedModel':None,'trialContext':None,
+        'protocol':native['id'],'nativeAcceptance':native,'status':'completed','reason':'program_complete','workerActive':False,'actions':8},
+      'program':{'reason':'program_complete','error':None,'actions':8,'actionAttempts':8,'rpcRequests':30,'steps':steps},
+      'timeline':{'status':'completed','program_started_ms':0,'program_ended_ms':20000},
+      'timing':{'startedAtMs':1000000,'endedAtMs':1020100,'elapsedMs':20100,'apiLatencyMs':0}})
   self.ledger=Ledger(initial={'level':180,'exp':0},origin=999900,threshold=1000000000);self.ledger.transition(1005000,180,4500);self.ledger.commit(1302000);self.save('xp_ledger',self.ledger.bytes())
   self.save('native_save',(json.dumps({'schema_version':1,'source':'cosmic_persisted_character',**IDENTITY,'kind':'save_committed','committed_at_ms':1302000})+'\n').encode())
   self.save('native_log',b'MapleBench persistence journal initialized\nMapleBench XP ledger initialized\n')
@@ -43,6 +54,22 @@ class NativeEnvelopeTests(unittest.TestCase):
    original=(self.root/self.arts['controller_result']['path']).read_bytes();self.edit('controller_result',**change)
    with self.subTest(change=change),self.assertRaises(EvidenceError):verify_bundle(self.manifest,self.root)
    self.save('controller_result',original)
+ def test_forged_normalized_success_cannot_hide_actual_failed_or_interrupted_result(self):
+  original=(self.root/self.arts['native_result']['path']).read_bytes()
+  for kind in ('failed','api','context','step','count','program','clock'):
+   value=json.loads(original)
+   if kind=='failed':value['controller']['status']='failed'
+   elif kind=='api':value['api']={'model':'gpt-6-astra'}
+   elif kind=='context':value['trialContext']={'baseline_sha256':'0'*64}
+   elif kind=='step':value['program']['steps'][0]['result']['accepted']=False
+   elif kind=='count':value['program']['rpcRequests']=29
+   elif kind=='program':value['programSha256']='0'*64
+   else:value['timing']['endedAtMs']+=500
+   self.save('native_result',value)
+   with self.subTest(kind=kind),self.assertRaises(EvidenceError):verify_bundle(self.manifest,self.root)
+  self.save('native_result',original)
+  self.save('native_program',b'// forged program')
+  with self.assertRaises(EvidenceError):verify_bundle(self.manifest,self.root)
  def test_short_hold_missing_duplicate_or_disconnected_status_refused(self):
   original=copy.deepcopy(self.rows)
   for change in ('short','gap','duplicate','offline','clock'):

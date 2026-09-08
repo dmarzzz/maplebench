@@ -6,7 +6,12 @@ world, grant locks, restore a database, or accept adaptive API evidence. The
 existing adaptive window verifier remains unchanged.
 
 The frozen scenario binds the ordinary finite native recipe, baseline hash,
-experience-table hash and normalization. One control submission must make zero
+experience-table hash and normalization. The original native `result.json` and exact program bytes are mandatory hashed
+artifacts. Completed terminal state, native contract, null model/API/trial context,
+accepted SDK steps and counters, program fingerprint and measured wall interval
+are checked directly. Normalized control values are derived from those originals
+and must match exactly; a standalone normalized success claim is insufficient.
+The executor must separately prove its single submission intent. Control must make zero
 API calls, use no model, and finish within the recipe's 30-second bound. The
 session remains owned for a separate fixed 300-second interval. At most 301
 compact status samples cover that interval with a monotonic clock, bounded gaps,
