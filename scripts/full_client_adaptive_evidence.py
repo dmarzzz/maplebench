@@ -33,10 +33,54 @@ def references(result):
     return [ref for ref, _ in refs]
 
 
-def verify_result(result, root, *, protocol, model):
+def native_level_check(trace, root, context):
+    """A progression variant needs actual hashed native transaction/save coverage.
+
+    The native bundle caller additionally verifies DB snapshots, ordinary logout,
+    header/session identity, native logs and frozen scenario references. This
+    helper cannot grant a native score or replace that enclosing verification.
+    """
+    from full_client_xp_windows import validate_contract, score_ledger, MAX_LEDGER_BYTES
+    require(isinstance(context,dict) and set(context)=={'contract','identity','initial','final',
+        'window','committed_at_ms','ledger'}
+        and all(isinstance(context[k],dict) for k in ('contract','identity','initial','final','window','ledger')))
+    contract=validate_contract(context['contract']);policy=trace['limits']['progression_policy']
+    require(policy['xp_window_protocol']==contract['id']
+        and context['identity'].get('run_id')==trace['run_id']
+        and context['initial'].get('level')==trace['limits']['profile']['level']
+        and same_json(context['window'],{'start_at_ms':trace['timing']['wall_started_at_ms'],
+            'deadline_at_ms':trace['timing']['wall_deadline_at_ms'],'window_ms':contract['window_ms']}))
+    raw=read_artifact_bytes(root,context['ledger'],'native_progression',maximum=MAX_LEDGER_BYTES)
+    score=score_ledger(raw,identity=context['identity'],initial=context['initial'],final=context['final'],
+        window=context['window'],normalization=contract['normalization'],committed_at_ms=context['committed_at_ms'])
+    require(score['experience_table_sha256']==contract['experience_table_sha256'])
+    changes=[]
+    for line in raw.splitlines():
+        row=parse_json(line)
+        if row['kind']=='header':changes.append((row['wall_ms'],row['level']))
+        elif row['kind']=='xp_transaction':changes.append((row['wall_ms'],row['after_level']))
+    def check(observation,low,high):
+        level=observation.get('character',{}).get('level');initial=context['initial']['level']
+        require(type(level) is int and initial<=level<=policy['maximum_level'])
+        # Render freshness is <1500ms. Native millisecond/monotonic calibration
+        # permits 25ms; SDK receipts have only their enclosing program interval.
+        begin=trace['timing']['wall_started_at_ms']+low-1525
+        end=trace['timing']['wall_started_at_ms']+high+25
+        current=initial;allowed={initial}
+        for at,after in changes:
+            if at<begin:current=after;allowed={after}
+            elif at<=end:allowed.update(range(current,after+1));current=after
+            else:break
+        require(level in allowed)
+    return check
+
+
+def verify_result(result, root, *, protocol, model, native_progression=None):
     p = validate_protocol(protocol)
     trace = result['adaptive']
     horizon=p.get('horizon_policy')
+    progression=p.get('progression_policy')
+    require(progression is not None or native_progression is None)
     reserve_ms=(50+p['program_seconds']+5)*1000 if horizon else None
     for ref in references(result):
         read_artifact_bytes(root, ref, 'adaptive', maximum=16 * 1024 * 1024)
@@ -63,6 +107,8 @@ def verify_result(result, root, *, protocol, model):
             and timing['wall_elapsed_ms'] == min(300000, timing['controller_ended_ms'])
             and timing['cleanup_overrun_ms'] == max(0, timing['controller_ended_ms'] - 300000)
             and timing['cleanup_overrun_ms'] <= 5000)
+    check_level=native_level_check(trace,root,native_progression) if progression else None
+    if check_level:check_level(result['initial'],0,0)
     total = {key: 0 for key in ('api_requests_started', 'api_responses_confirmed', 'reserved_tokens',
              'actual_input_tokens', 'actual_output_tokens', 'actual_total_tokens',
              'actions', 'action_attempts', 'sdk_requests')}
@@ -79,6 +125,7 @@ def verify_result(result, root, *, protocol, model):
         require(type(t.get('observed_ms')) is int and last <= t['observed_ms'] <= 300000
                 and cycle['requested_model'] == model)
         if horizon:observation(cycle['observation'])
+        if check_level:check_level(cycle['observation'],t['observed_ms'],t['observed_ms'])
         if cycle['status'] == 'budget_rejected':
             require(index == len(trace['cycles'])-1 and stopped_for == 'token_reservation_limit'
                     and cycle['api_outcome'] == 'not_started' and cycle['request'] is None and cycle['response'] is None
@@ -180,6 +227,7 @@ def verify_result(result, root, *, protocol, model):
                 and type(execution.get('rpcRequests')) is int and execution['rpcRequests'] >= len(cycle_steps))
         held_ms=0; seen=set()
         observation(cycle['observation']); observation(cycle['pre_execution_observation'])
+        if check_level:check_level(cycle['pre_execution_observation'],t['program_started_ms'],t['program_started_ms'])
         for step_index, step in enumerate(cycle_steps):
             if step.get('kind')=='rejected_rpc':
                 rpc=step.get('rpc'); invalid=False
@@ -198,8 +246,11 @@ def verify_result(result, root, *, protocol, model):
             receipt=step.get('result'); require(isinstance(receipt,dict) and receipt.get('error') in (None,''))
             if method=='pressKeys':
                 require(receipt.get('accepted') is True); observation(receipt.get('observation'))
+                if check_level:check_level(receipt['observation'],t['program_started_ms'],t['program_ended_ms'])
                 held_ms+=argument['durationMs']
-            elif method=='observe':observation(receipt)
+            elif method=='observe':
+                observation(receipt)
+                if check_level:check_level(receipt,t['program_started_ms'],t['program_ended_ms'])
             else:
                 waited=receipt.get('waitedMs')
                 require(type(waited) is int and 0<=waited<=argument
@@ -248,6 +299,7 @@ def verify_result(result, root, *, protocol, model):
                     and all(type(v) is bool if k=='alive' else type(v) in (int,float) and math.isfinite(v)
                             for k,v in sample['character'].items()))
                 observation(sample|{'ready':True})
+                if check_level:check_level(sample,sample['observed_ms'],sample['observed_ms'])
                 previous=sample['observed_ms'];dead=sample['character']['alive'] is False
             require(wait['ended_ms']-previous<=5000)
             if trace['reason']=='death':require(dead)

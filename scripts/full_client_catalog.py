@@ -6,6 +6,8 @@ checks those public bytes and their shape; it never re-scores native evidence.
 """
 import argparse
 import copy
+from html import escape
+import unicodedata
 import json
 import os
 from pathlib import Path
@@ -24,7 +26,7 @@ from full_client_trial import publish_attempt
 from full_client_vercel import checked_payload, MAX_PAYLOAD, PUBLIC_NAME
 from maple_agent import MODELS
 
-CLASSES={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage'}
+CLASSES={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage','night_lord':'Night Lord'}
 ROW_FIELDS=set(project_attempt(Reader(),'0'*32,None,None,{},None,0,'/recordings/'))|{
     'controller_status','live','renderer_fresh','protocol_id','adaptive','sdk_calls','research','recording_publication'}
 SNAPSHOT_FIELDS={'schema_version','generated_at_ms','source','verification','live_status_available','ranked',
@@ -160,12 +162,39 @@ def copy_file(source,name,target,expected):
             'catalog_source_changed')
 
 
+def cohort_annotations(value,included):
+    require(isinstance(value,list) and len(value)<=6,'catalog_annotations_limit')
+    known={row['id']:row for row in included};seen=set();seen_text=set();notes=[]
+    for item in value:
+        require(isinstance(item,dict) and set(item)=={'plan_sha256','text'},'catalog_annotation_schema')
+        plan=item['plan_sha256'];text=item['text']
+        require(isinstance(plan,str) and SHA.fullmatch(plan) and plan in known,'catalog_annotation_unknown_cohort')
+        require(plan not in seen,'catalog_annotation_duplicate');seen.add(plan)
+        require(isinstance(text,str) and 1<=len(text)<=400 and text==text.strip()
+                and not any(unicodedata.category(c).startswith('C') for c in text)
+                and not re.search(r'[<>\[\]{}\\`*#]|://|(?:^|\s)/|[\w.+-]+@[\w.-]+|(?:\d{1,3}\.){3}\d{1,3}|(?:token|password|secret|api_key)\s*[:=]',text,re.IGNORECASE),
+                'catalog_annotation_text')
+        require(text not in seen_text,'catalog_annotation_duplicate');seen_text.add(text)
+        notes.append({'plan_sha256':plan,'text':text,'url':known[plan]['url'],
+                      'class_id':known[plan]['class_id']})
+    return sorted(notes,key=lambda row:row['plan_sha256'])
+
+
+def annotated_index(raw,notes):
+    text=raw.decode('utf-8');require(text.count('</header>')==1,'catalog_annotation_html_anchor')
+    body=''.join('<article><h3><a href="'+escape(note['url'],quote=True)+'">'
+                 +escape(CLASSES[note['class_id']])+' cohort</a></h3><p>'
+                 +escape(note['text'],quote=True)+'</p></article>' for note in notes)
+    section='<section class="research-intro" aria-label="Operator cohort limitations"><h2>Cohort limitations</h2>'+body+'</section>'
+    return text.replace('</header>','</header>'+section,1).encode('utf-8')
+
+
 def compose(request,output_root):
     require(isinstance(request,dict) and type(request.get('schema_version')) is int
-        and ((request['schema_version']==1 and set(request)=={'schema_version','cohorts','primary_content_sha256','archive'})
-             or (request['schema_version']==2 and set(request)=={'schema_version','cohorts','primary_content_sha256','archive','previous_cohorts'}))
+        and ((request['schema_version']==1 and set(request)-{'annotations'}=={'schema_version','cohorts','primary_content_sha256','archive'})
+             or (request['schema_version']==2 and set(request)-{'annotations'}=={'schema_version','cohorts','primary_content_sha256','archive','previous_cohorts'}))
         and isinstance(request['cohorts'],list)
-        and 1<=len(request['cohorts'])<=3,'catalog_request_schema')
+        and 1<=len(request['cohorts'])<=4,'catalog_request_schema')
     packages=[]
     for item in request['cohorts']:
         require(isinstance(item,dict) and set(item)=={'package','content_sha256'},'catalog_package_selection')
@@ -188,7 +217,9 @@ def compose(request,output_root):
     packages.sort(key=lambda p:list(CLASSES).index(p['class_id']))
     assets=[{name:p['manifest']['content']['files'][name] for name in ASSETS} for p in packages]
     require(all(same_json(assets[0],value) for value in assets),'catalog_mixed_assets')
-    archive=request['archive'];old=None;old_files={};retired=bool((archive or previous) and any(p['complete'] for p in packages))
+    primary_complete=next(p['complete'] for p in packages if p['manifest']['content_sha256']==primary)
+    replaced_previous=all(any(p['complete'] and p['class_id']==prior['class_id'] for p in packages) for prior in previous)
+    archive=request['archive'];old=None;old_files={};retired=bool((archive or previous) and primary_complete and replaced_previous)
     retained_previous=[] if retired else previous
     if archive is not None:
         require(isinstance(archive,dict) and set(archive)=={'site','inventory','inventory_sha256'},'catalog_archive_inventory_required')
@@ -250,6 +281,8 @@ def compose(request,output_root):
         'catalog':{'schema_version':request['schema_version'],'planned':len(new_rows),'verified':sum(verified(r) for r in new_rows),
             'complete_cohorts':sum(p['complete'] for p in packages),'cohorts':cohorts,'poll_interval_ms':10000,
             'archive_state':'retired' if retired else 'retained' if old or previous else 'not_supplied'}}
+    notes=cohort_annotations(request.get('annotations',[]),cohorts+previous_metadata)
+    if notes:snapshot['catalog']['annotations']=notes
     if request['schema_version']==2:snapshot['catalog']['previous_cohorts']=previous_metadata
     snapshot['research_matrix']=summarize(snapshot) if request['schema_version']==1 else summarize(snapshot|{'attempts':new_rows,'comparisons':[g for g in comparisons if g.get('scope')!='previous_cohort']})
     root_names=set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}
@@ -259,6 +292,7 @@ def compose(request,output_root):
         planned_files.update({prefix+name:value for name,value in content['files'].items()})
     ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
     root_data={name:stable_bytes(ui/name,1024**2) for name in ASSETS}
+    if notes:root_data['index.html']=annotated_index(root_data['index.html'],notes)
     root_data.update({'results.json':encoded(snapshot),
         'vercel.json':encoded({'framework':None,'buildCommand':None,'outputDirectory':'.'}),
         'recording-manifest.json':encoded({'schema_version':1,'entries':[
@@ -290,6 +324,7 @@ def compose(request,output_root):
             'archive_inventory_sha256':archive['inventory_sha256'] if archive else None,'archive_retired':retired,'files':files}
         if request['schema_version']==2:
             content.update(schema_version=2,previous_content_sha256=[p['manifest']['content_sha256'] for p in previous])
+        if notes:content['annotations']=notes
         ident=digest(encoded(content));write_new(stage/'catalog-manifest.json',encoded({'schema_version':1,'content_sha256':ident,'content':content}))
         destination=output_root/ident
         if os.path.lexists(destination):

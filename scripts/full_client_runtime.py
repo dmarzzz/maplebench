@@ -36,11 +36,13 @@ from full_client_score import (SOURCE, JSON_LIMIT, EvidenceError, parse_json, re
                                open_verified_artifact, same_json, verify_trial_bundle)
 from full_client_trial import (RELAY_ERROR_CODES, RUNTIME_ERROR_CODES, atomic_json,
                                private_directory, read_private_json, validate_spec)
+import full_client_xp_windows as xp_windows
 
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 RUN = re.compile(r"[0-9a-f]{32}\Z")
 UNIT = re.compile(r"[A-Za-z0-9_.@-]+\.service\Z")
 NATIVE_CLASS = "server/bots/MapleBenchPersistence.class"
+XP_NATIVE_CLASS = "server/bots/MapleBenchXpLedger.class"
 MAX_SQL = 64 * 1024 * 1024
 MAX_VIDEO = 512 * 1024 * 1024
 MAX_PROCESS_FDS = 4096
@@ -364,6 +366,39 @@ class CosmicRuntime:
         require(self.baseline.get("account_logged_in") == 0 and all(
             self.baseline["character"].get(k) == db[k] for k in ("character_id", "account_id")),
             "baseline_identity_mismatch")
+        self.xp_window_contract()
+
+    def xp_window_contract(self):
+        """Both private runtime and frozen scenario must explicitly opt in."""
+        configured = self.config.get("xp_window_protocol")
+        contract = getattr(self, "scenario", {}).get("xp_window_protocol")
+        adaptive = getattr(self, "scenario", {}).get("adaptive_protocol")
+        progression = adaptive.get("progression_policy") if isinstance(adaptive, dict) else None
+        if configured is None:
+            require(contract is None and progression is None, "xp_window_opt_in_required")
+            return None
+        require(configured == xp_windows.PROTOCOL
+                and self.scenario.get("protocol") == "full-client-adaptive-pilot-v1",
+                "unsupported_xp_window_protocol")
+        try:
+            return xp_windows.validate_contract(contract)
+        except (EvidenceError, TypeError, KeyError):
+            raise RuntimeErrorCode("invalid_xp_window_contract") from None
+
+    def trial_protocol(self):
+        return xp_windows.PROTOCOL if self.xp_window_contract() else self.scenario.get("protocol")
+
+    def native_xp_environment(self, native):
+        contract = self.xp_window_contract()
+        if contract is None:
+            return {}
+        initial = self.state["initial"]["character"]
+        require(same_json(initial, self.baseline["character"]), "restored_baseline_mismatch")
+        norm = contract["normalization"]
+        values = (str(native / "xp.jsonl"), str(initial["level"]), str(initial["exp"]),
+                  *(str(norm[k][part]) for k in ("server_xp_multiplier", "simulation_speed_multiplier")
+                    for part in ("numerator", "denominator")))
+        return dict(zip(xp_windows.XP_ENV_NAMES, values))
 
     def frozen(self):
         """Full byte inventory; callers must keep this outside the online session."""
@@ -381,7 +416,10 @@ class CosmicRuntime:
         with open_verified_artifact(path.parent, {"path": path.name, "sha256": jar["sha256"]},
                                     "server_jar", maximum=512 * 1024 * 1024) as stream:
             with zipfile.ZipFile(stream) as archive:
-                require(NATIVE_CLASS in archive.namelist(), "native_persistence_class_missing")
+                native_classes = {name for name in (NATIVE_CLASS, XP_NATIVE_CLASS) if name in archive.namelist()}
+        require(NATIVE_CLASS in native_classes, "native_persistence_class_missing")
+        if self.xp_window_contract():
+            require(XP_NATIVE_CLASS in native_classes, "native_xp_ledger_class_missing")
         cosmic, web = self.unit("cosmic"), self.unit("web")
         require(pwd.getpwnam(cosmic.get("User", "")).pw_uid != 0
                 and pwd.getpwnam(web.get("User", "")).pw_uid != 0
@@ -566,7 +604,7 @@ class CosmicRuntime:
         except ValueError:
             return False
         return (not any(Path(path).name == "zz-maplebench-trial.conf" for path in paths)
-                and not any(item.split("=", 1)[0] in ENV_NAMES for item in environment))
+                and not any(item.split("=", 1)[0] in (*ENV_NAMES, *xp_windows.XP_ENV_NAMES) for item in environment))
 
     def validate_process(self, unit):
         user = pwd.getpwnam(unit.get("User", ""))
@@ -669,13 +707,16 @@ class CosmicRuntime:
         self.state["artifacts"]["reset"] = self.artifact("reset.json", reset)
         return {"reset_verified": True}
 
+    def service_runtime_seconds(self):
+        return self.context["request"]["budgets"]["total_seconds"] + 120
+
     def start_server(self):
         require(self.state.get("reset") and self.stopped(self.unit("cosmic")) and self.account_state() == 0,
                 "fresh_reset_required")
         before = self.unit("cosmic")
         user = pwd.getpwnam(before.get("User", ""))
         require(user.pw_uid != 0, "nonroot_service_user_required")
-        require(not any(name in before.get("Environment", "") for name in ENV_NAMES),
+        require(not any(name in before.get("Environment", "") for name in (*ENV_NAMES, *xp_windows.XP_ENV_NAMES)),
                 "existing_trial_environment")
         native_root = absolute(self.config["native_output_root"])
         native_info = native_root.lstat()
@@ -694,9 +735,10 @@ class CosmicRuntime:
         # The normal worker's service enables the legacy bot/SDK adapter. An
         # ordinary full-client trial must explicitly override that inherited mode.
         env["MAPLEBENCH_ENABLED"] = "false"
+        env.update(self.native_xp_environment(native))
         text = "[Service]\n" + "".join('Environment="' + key + '=' + value.replace('\\', '\\\\').replace('"', '\\"') + '"\n'
                                        for key, value in env.items())
-        text += "MemoryMax=2300M\nMemorySwapMax=0\nCPUQuota=200%\nRestart=no\nKillMode=control-group\nTimeoutStopSec=30\nRuntimeMaxSec=" + str(self.context["request"]["budgets"]["total_seconds"] + 120) + "\n"
+        text += "MemoryMax=2300M\nMemorySwapMax=0\nCPUQuota=200%\nRestart=no\nKillMode=control-group\nTimeoutStopSec=30\nRuntimeMaxSec=" + str(self.service_runtime_seconds()) + "\n"
         def quote(value):
             return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '$$') + '"'
         launch = [self.config["java"]["path"], "-Xmx1536m", "-XX:ActiveProcessorCount=2",
@@ -733,21 +775,41 @@ class CosmicRuntime:
         unit = self.owned_server()
         logs = self.host.command([self.config["journalctl"], "--no-pager", "--output=cat",
                                   "_SYSTEMD_INVOCATION_ID=" + self.state["invocation_id"]])
-        require(b"MapleBench persistence journal failed" not in logs and b"Error saving chr" not in logs,
+        require(b"MapleBench persistence journal failed" not in logs and b"Error saving chr" not in logs
+                and b"MapleBench XP ledger failed" not in logs,
                 "native_startup_or_save_failed")
         initialized = logs.count(b"MapleBench persistence journal initialized")
+        xp_initialized = logs.count(b"MapleBench XP ledger initialized")
+        xp_contract = self.xp_window_contract()
         online = logs.count(b"Cosmic is now online after ")
-        require(initialized <= 1 and online <= 1, "native_startup_markers_ambiguous")
+        require(initialized <= 1 and online <= 1 and xp_initialized <= (1 if xp_contract else 0),
+                "native_startup_markers_ambiguous")
         ports_ready = set(self.config["game_ports"]) <= self.host.listening_ports(int(unit["MainPID"]))
         diagnostics = {"invocation_id": self.state["invocation_id"], "log_bytes": len(logs),
                        "journal_initializations": initialized, "online_markers": online,
                        "listeners_ready": ports_ready}
+        if xp_contract:
+            diagnostics["xp_journal_initializations"] = xp_initialized
         # Keep only safe counts for the exact owned instance. Persist changes so
         # a timeout remains inspectable without copying native log contents.
         if self.state.get("startup_readiness") != diagnostics:
             self.state["startup_readiness"] = diagnostics
             self.persist()
-        return initialized == 1 and online == 1 and ports_ready
+        ready = initialized == 1 and online == 1 and ports_ready
+        if ready and xp_contract:
+            require(xp_initialized == 1, "native_xp_initialization_missing")
+            try:
+                raw = self.read_stable(Path(self.state["native_directory"]) / "xp.jsonl", 65536)
+                proof = xp_windows.verify_native_header(raw, identity=self.identity(),
+                    initial={k:self.state["initial"]["character"][k] for k in ("level", "exp")}, contract=xp_contract)
+                require(self.state["server_start_requested_at_ms"] <= proof["wall_ms"] <= self.host.now(),
+                        "native_xp_header_invalid")
+                require(self.state.get("xp_header", proof) == proof, "native_xp_header_invalid")
+            except (EvidenceError, OSError, TypeError, KeyError):
+                raise RuntimeErrorCode("native_xp_header_invalid") from None
+            self.state["xp_header"] = proof
+            self.persist()
+        return ready
 
     def wait_for_server_ready(self):
         while True:
@@ -811,7 +873,8 @@ class CosmicRuntime:
         if adaptive:
             from full_client_adaptive import prompt as adaptive_prompt
             prompt = adaptive_prompt(protocol)
-            require(spec.get("schema_version") == 2 and spec.get("protocol") == self.scenario["protocol"],
+            require(spec.get("schema_version") == (3 if self.xp_window_contract() else 2)
+                    and spec.get("protocol") == self.trial_protocol(),
                     "bridge_budget_mismatch")
         else:
             require(duration in (22, 60) and type(duration) is int, "unsupported_program_duration")
@@ -930,7 +993,7 @@ class CosmicRuntime:
                 "controller_host_clock_mismatch")
         self.validate_settlement()
         usage = verified["counters"]
-        return {"status": "completed", "protocol": self.scenario["protocol"],
+        return {"status": "completed", "protocol": self.trial_protocol(),
                 "requested_model": spec["model"], "returned_model": spec["model"],
                 "api_requests": usage["api_requests_started"], "output_tokens": usage["actual_output_tokens"],
                 "total_tokens": usage["actual_total_tokens"], "actions": usage["actions"],
@@ -1181,14 +1244,53 @@ class CosmicRuntime:
         if adaptive:
             evidence["protocol"] = self.scenario["protocol"]
         arts["session"] = self.artifact("session.json", session)
-        arts["persistence"] = self.artifact("persistence.json", evidence)
+        windows = self.xp_window_contract()
+        if windows is None:
+            arts["persistence"] = self.artifact("persistence.json", evidence)
         self.ownership()
         self.owned_server()
         self.frozen()
-        score = verify_trial_bundle(evidence, self.directory, arts)
+        if windows:
+            evidence, score = self.collect_xp_windows(windows)
+        else:
+            score = verify_trial_bundle(evidence, self.directory, arts)
         arts["score"] = self.artifact("score.json", score)
         self.write_publication_candidate(score, arts)
         return {"evidence": evidence, "artifacts": arts}
+
+    def collect_xp_windows(self, contract):
+        """Only after ordinary logout; missing evidence is recorded as unknown."""
+        require(self.account_state() == 0 and self.state.get("ordinary_logout"),
+                "normal_committed_logout_required")
+        arts = self.state["artifacts"]
+        status = {"schema_version":1, "protocol":xp_windows.PROTOCOL, "run_id":self.run_id,
+                  "status":"unknown", "task_score":None, "publication_eligible":False}
+        try:
+            raw = self.read_stable(Path(self.state["native_directory"]) / "xp.jsonl", xp_windows.MAX_LEDGER_BYTES)
+            arts["xp_ledger"] = self.artifact("native-xp.jsonl", raw=raw)
+            require(self.state.get("xp_header", {}).get("sha256") == hashlib.sha256(raw.splitlines(keepends=True)[0]).hexdigest(),
+                    "native_xp_header_invalid")
+            names = {"native_save":"save", "baseline_sql":"baseline", "controller_result":"result"}
+            refs = {name:arts[names.get(name,name)] for name in ("xp_ledger", "native_save", "native_log", "initial_db",
+                "final_db", "session", "scenario", "controller_result", "baseline_sql", "baseline_snapshot", "reset", "server_log")}
+            timing = self.state["result"]["adaptive"]["timing"]
+            evidence = {"schema_version":1, "protocol":xp_windows.PROTOCOL, **self.identity(),
+                "window":{"start_at_ms":timing["wall_started_at_ms"], "deadline_at_ms":timing["wall_deadline_at_ms"], "window_ms":15000},
+                "normalization":contract["normalization"], "experience_table_sha256":contract["experience_table_sha256"],
+                "baseline_sha256":self.config["baseline"]["sha256"], "scenario_fingerprint":self.config["scenario"]["sha256"],
+                "artifacts":refs}
+            arts["xp_manifest"] = self.artifact("xp-window-manifest.json", evidence)
+            score = xp_windows.verify_trial_bundle(evidence, self.directory, arts)
+            status.update(status="verified_native_windows", task_score=score["task_score"])
+        except (EvidenceError, RuntimeErrorCode, OSError, ValueError, TypeError, KeyError, IndexError):
+            status["reason"] = "missing_or_inconsistent_native_window_evidence"
+            arts["xp_window_status"] = self.artifact("xp-window-status.json", status)
+            self.state["xp_window_status"] = status
+            self.persist()
+            raise RuntimeErrorCode("xp_window_evidence_incomplete") from None
+        arts["xp_window_status"] = self.artifact("xp-window-status.json", status)
+        self.state["xp_window_status"] = status
+        return evidence, score
 
     def write_publication_candidate(self, score, arts):
         recording = parse_json(read_artifact_bytes(self.directory, arts["recording"], "recording"))
@@ -1204,6 +1306,11 @@ class CosmicRuntime:
             candidate.update(schema_version=3, protocol=self.scenario["protocol"], run_kind="adaptive_pilot",
                 candidate_status="awaiting_adaptive_publication_review", publication_eligible=False,
                 authoritative_peak_xp_per_minute=None, authoritative_window_status="not_collected")
+        if self.xp_window_contract():
+            candidate.update(schema_version=4, protocol=xp_windows.PROTOCOL, run_kind="xp_window_pilot",
+                candidate_status="awaiting_native_window_publication_acceptance", publication_eligible=False,
+                authoritative_peak_xp_per_minute=score["peak_normalized_xp_per_minute"],
+                authoritative_window_status="verified_native_windows")
         self.artifact("publication-candidate.json", candidate)
 
     def settle_owned_controller(self):
@@ -1396,7 +1503,7 @@ class CosmicRuntime:
         else:
             self.frozen()
         require(same_json(self.scenario.get("trial_budgets"), spec["budgets"])
-                and (spec.get("protocol") == self.scenario.get("protocol")), "scenario_trial_budgets_mismatch")
+                and (spec.get("protocol") == self.trial_protocol()), "scenario_trial_budgets_mismatch")
         if self.state is None:
             if operation == "cleanup":
                 status = self.status()

@@ -23,6 +23,8 @@ DEFAULT_PROTOCOL = {'schema_version':1,'id':PROTOCOL,'wall_seconds':300,'program
 # Optional policy: absent means the original pilot's exact prompt and stop behavior.
 FULL_HORIZON_POLICY = {'id':'full-horizon-reserve-v1','request_timeout_seconds':50,
     'settlement_reserve_seconds':5,'passive_observation_interval_ms':1000}
+NATIVE_PROGRESSION_POLICY = {'id':'native-xp-level-progression-v1',
+    'xp_window_protocol':'full-client-xp-windows-v1','maximum_level':200}
 CAPTURE_COHORT_RECIPE = 'full-horizon-capture-cohort-v1'
 ENCODED_COHORT_RECIPE = 'full-horizon-encoded-cohort-v1'
 PASSIVE_STOP_REASONS = frozenset(('request_window_closed','api_request_limit',
@@ -38,7 +40,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 def validate_protocol(value):
-    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','capture_duration_policy'},'invalid_adaptive_protocol')
+    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','progression_policy','capture_duration_policy'},'invalid_adaptive_protocol')
     require(value.get('schema_version')==1 and type(value['schema_version']) is int
             and value.get('id')==PROTOCOL and type(value.get('wall_seconds')) is int
             and value['wall_seconds']==300,'invalid_adaptive_protocol')
@@ -60,6 +62,9 @@ def validate_protocol(value):
             and isinstance(profile['skill_keys'],dict) and set(profile['skill_keys'])<=KEYS
             and all(isinstance(v,str) and re.fullmatch('[A-Za-z0-9 ()+/:,-]{1,80}',v) for v in profile['skill_keys'].values()),
             'invalid_adaptive_profile')
+    if 'progression_policy' in value:
+        require(digest(value['progression_policy'])==digest(NATIVE_PROGRESSION_POLICY)
+                and 'horizon_policy' in value and profile['level']<=200,'invalid_adaptive_progression_policy')
     return json.loads(json.dumps(value))
 
 
@@ -117,6 +122,13 @@ remaining (50 seconds for inference, {p['program_seconds']} for execution, 5 for
 Once that reserve or a confirmed aggregate budget is exhausted, the harness only
 observes the live world until the 300-second deadline. It does not press keys or
 call the model during that wait. Death, cancellation and failures still stop early.
+'''
+    if 'progression_policy' in p:
+        text+=f'''Frozen native progression policy: the initial level is {p['profile']['level']}.
+Ordinary native XP may raise the level up to 200 during this run. Re-observe the
+new HP/MP and level after a level-up. The harness does not allocate ability or
+skill points, alter stats, restore HP, or reset the character for you. Native
+ledger and ordinary persisted-save evidence are required to verify this variant.
 '''
     return text
 
@@ -218,7 +230,10 @@ The returned trace is not a persisted-XP or publication-validation receipt.
             final=current
             require(isinstance(current,dict) and current.get('ready') is True and isinstance(current.get('character'),dict),
                     'adaptive_observation_unavailable')
-            require(current['character'].get('level')==protocol['profile']['level'],'adaptive_profile_level_mismatch')
+            level=current['character'].get('level')
+            require(type(level) is int and (protocol['profile']['level']<=level<=200
+                if index>0 and 'progression_policy' in protocol else level==protocol['profile']['level']),
+                'adaptive_profile_level_mismatch')
             if current['character'].get('alive') is False:stop('death');break
             if not window_open():finish('request_window_closed');break
             cycle={'index':index,'requested_model':model,'returned_model':None,'status':'preparing',
