@@ -11,6 +11,17 @@ alone does not cover codec-internal pending work, so both pending encode calls
 and submitted-minus-output counts are bounded. Codec support is checked rather
 than assumed. [W3C WebCodecs specification](https://www.w3.org/TR/webcodecs/).
 
+Encoding requires `latencyMode: "quality"`: WebCodecs permits bitrate/framerate
+driven frame drops in `realtime` mode and forbids them in `quality` mode. Support
+that changes or omits this setting is refused before encoding.
+[WebCodecs latency modes](https://www.w3.org/TR/webcodecs/#latency-mode).
+Chromium 152.0.7977.82 disables VP8's drop threshold in quality mode while keeping
+its fast VP8 speed setting and realtime encoding deadline.
+[Chromium VP8 implementation](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.82/media/video/vpx_video_encoder.cc).
+This producer change requires fresh source pins. It retains the eight-frame
+pending limit, 30 fps hint, 2 Mbps bitrate and every-hook capture; overload still
+fails. Existing evidence and capture-policy acceptance rules remain unchanged.
+
 WebM uses a single VP8 track, a 1 ms timestamp scale, explicit BlockDuration for
 every frame, delta-frame references, a duration header and keyframe cues. There
 is no guessed duration, default frame rate, frame lacing or audio. Ledger Tags
@@ -112,7 +123,7 @@ evidence merely because encoding passed.
 
 `node --test scripts/test_webcodecs_recorder.mjs` covers ordered timing, exact
 counts, duplicate/missing output, invisible frame rejection, queue limits,
-quantization, clock drift, gaps, resize, unsupported codec, failed hashes and
+quantization, clock drift, gaps, resize, unsupported codec, quality-mode support, failed hashes and
 bounded configuration/flush/finalization.
 
 `scripts/check_webcodecs_capture.mjs` runs an isolated headless browser on a
