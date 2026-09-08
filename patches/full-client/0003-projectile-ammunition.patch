@@ -1,0 +1,45 @@
+--- a/src/client/Character/Player.cpp
++++ b/src/client/Character/Player.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "Player.h"
++#include "../Gameplay/Combat/AmmunitionPolicy.h"
+ #include "PlayerStates.h"
+ 
+ #include "../Constants.h"
+@@ -301,7 +302,9 @@
+         const Job& job      = stats.get_job();
+         uint16_t hp         = stats.get_stat(Maplestat::HP);
+         uint16_t mp         = stats.get_stat(Maplestat::MP);
+-        uint16_t bullets    = inventory.get_bulletcount();
++        uint16_t bullets    = effective_ammunition(inventory.get_bulletcount(),
++            weapon == Weapon::BOW || weapon == Weapon::CROSSBOW,
++            has_buff(Buffstat::SOULARROW));
+ 
+         return move.can_use(level, weapon, job, hp, mp, bullets);
+     }
+@@ -324,7 +327,9 @@
+             case Weapon::CROSSBOW:
+             case Weapon::CLAW:
+             case Weapon::GUN:
+-                degenerate = !inventory.has_projectile();
++                degenerate = !has_ranged_projectile(inventory.has_projectile(),
++                    weapontype == Weapon::BOW || weapontype == Weapon::CROSSBOW,
++                    has_buff(Buffstat::SOULARROW));
+                 attacktype = degenerate ? Attack::CLOSE : Attack::RANGED;
+                 break;
+             case Weapon::WAND:
+--- a/src/client/Gameplay/Combat/Skill.cpp
++++ b/src/client/Gameplay/Combat/Skill.cpp
+@@ -296,6 +296,10 @@
+             return FBR_WEAPONTYPE;
+         }
+ 
++        // Buffs do not consume ammunition, even when NX omits bullet fields.
++        if (!is_attack())
++            return FBR_NONE;
++
+         switch (weapon)
+         {
+         case Weapon::BOW:
