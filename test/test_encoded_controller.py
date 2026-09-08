@@ -9,15 +9,15 @@ import unittest
 class EncodedControllerTests(unittest.TestCase):
     def run_lifecycle(self, checks):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
-        start=source[source.index('  async function startRecording('):source.index('  Module.MapleBenchOnRendered =')]
+        start=source[source.index('  const captureFailureCodes ='):source.index('  Module.MapleBenchOnRendered =')]
         stop=source[source.index('  async function stopRecording()'):source.index('  const recordButton =')]
         fixture="""
 const assert=require('node:assert/strict');
-let capture=null,saving=false,pendingUpload=null,closed=false,uploads=0,created=0;
+let capture=null,captureFailure=null,saving=false,pendingUpload=null,closed=false,uploads=0,created=0;
 let failStart=false,failStop=false,finish;
 const failureCallbacks=[];
 const policy={id:'post-render-encoded-frame-v1'};
-const run={id:'native',nativeAcceptance:{capture_duration_policy:policy,capture_max_ms:45000}};
+const run={id:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',nativeAcceptance:{capture_duration_policy:policy,capture_max_ms:45000}};
 const ctx=new Proxy({measureText:()=>({width:0})},{get:(o,k)=>k in o?o[k]:()=>{}});
 const document={hidden:false,createElement:()=>({getContext:()=>ctx})};
 const game={width:800,height:600},performance={now:()=>100},clientId='client';Date.now=()=>1000;
@@ -47,7 +47,7 @@ const uploadRecording=async()=>{uploads++;assert.equal(pendingUpload.metadata.sc
 
     def test_flush_precedes_upload_and_original_policy_is_retained(self):
         self.run_lifecycle("""
-await startRecording('native');assert.equal(created,1);assert.equal(capture.frames,0);
+await startRecording('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');assert.equal(created,1);assert.equal(capture.frames,0);
 capture.onRendered();capture.onRendered();assert.equal(capture.frames,2);
 capture.clockVerified=true;capture.clock={id:'clock'};capture.terminalToken='terminal';
 const ending=stopRecording();assert.equal(capture.stopping,true);assert.equal(uploads,0);
@@ -63,20 +63,22 @@ assert.equal(pendingUpload.metadata.interrupted,false);
 
     def test_unsupported_encoder_has_no_fallback_or_upload(self):
         self.run_lifecycle("""
-failStart=true;await startRecording('native');assert.equal(capture,null);
+failStart=true;await startRecording('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');assert.equal(capture,null);
 assert.equal(uploads,0);assert.match(notice.textContent,/could not start/);
+assert.equal(captureFailure.code,'encoder_failure_unknown');
 """)
 
     def test_failed_flush_cannot_upload_an_accepted_recording(self):
         self.run_lifecycle("""
-await startRecording('native');capture.onRendered();failStop=true;await stopRecording();
+await startRecording('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');capture.onRendered();failStop=true;await stopRecording();
 assert.equal(capture,null);assert.equal(uploads,0);assert.equal(pendingUpload,null);
 assert.match(notice.textContent,/no accepted recording/);
+assert.equal(captureFailure.code,'encoder_failure_unknown');
 """)
 
     def test_late_failure_from_old_recorder_cannot_stop_replacement(self):
         self.run_lifecycle("""
-await startRecording('native');const oldCapture=capture;
+await startRecording('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');const oldCapture=capture;
 failStop=true;await stopRecording();assert.equal(capture,null);
 failStop=false;await startRecording('replacement');const replacement=capture;
 const previousNotice=notice.textContent;

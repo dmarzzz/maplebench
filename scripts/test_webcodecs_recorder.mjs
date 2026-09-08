@@ -8,9 +8,9 @@ function harness(behavior={}){
     close(){assert.equal(this.closed,false);this.closed=true;calls.push('frame-close');}}
   class Encoder{
     static async isConfigSupported(config){if(behavior.hangConfig)return new Promise(()=>{});
-      return {supported:!behavior.unsupported,config};}
+      return {supported:!behavior.unsupported,config:{...config,...behavior.supportOverride}};}
     constructor(callbacks){this.callbacks=callbacks;this.state='unconfigured';this.encodeQueueSize=0;this.inputs=[];instances.push(this);}
-    configure(){this.state='configured';calls.push('configure');}
+    configure(config){this.config={...config};this.state='configured';calls.push('configure');}
     encode(frame,options){this.inputs.push({...frame,...options});calls.push('encode');}
     async flush(){calls.push('flush');if(!this.inputs.length)return;
       if(behavior.hangFlush)return new Promise(()=>{});
@@ -105,6 +105,19 @@ test('long lead, internal and tail gaps are refused',async()=>{
 test('unsupported configuration cannot fall back to MediaRecorder',async()=>{
   const h=harness({unsupported:true});await assert.rejects(h.recorder.initialize(),/vp8_configuration_unsupported/);
   assert.equal(h.instances.length,0);
+});
+test('every submitted frame requires quality mode without changing capture budgets',async()=>{
+  const h=harness();await two(h);await h.recorder.stop();
+  assert.deepEqual(h.instances[0].config,{codec:'vp8',width:32,height:24,bitrate:2000000,
+    framerate:30,latencyMode:'quality',hardwareAcceleration:'prefer-software'});
+  assert.equal(LIMITS.maxPendingFrames,8);
+});
+test('support that changes or omits quality mode is refused before encoding',async()=>{
+  for(const latencyMode of ['realtime',undefined]) {
+    const h=harness({supportOverride:{latencyMode}});
+    await assert.rejects(h.recorder.initialize(),/vp8_configuration_unsupported/);
+    assert.equal(h.instances.length,0);assert.equal(h.recorder.submittedFrames,0);
+  }
 });
 test('failed chunk hash invalidates completed encoding',async()=>{
   const h=harness({hash:async()=>{throw Error('bad digest');}});await two(h);
