@@ -9,6 +9,7 @@ PROTOCOL = 'scripted-native-acceptance-v1'
 NATIVE_V2_PROTOCOL = 'scripted-native-acceptance-v2'
 NATIVE_V3_PROTOCOL = 'scripted-native-acceptance-v3'
 NATIVE_V4_PROTOCOL = 'scripted-native-acceptance-v4'
+NATIVE_V5_PROTOCOL = 'scripted-native-acceptance-v5'
 PROFILES = {
     'hero': {'id':'hero-180','class_name':'Hero','level':180,
              'skill_keys':{'PRIMARY_SKILL':'Brandish','SECONDARY_SKILL':'Combo Attack','BUFF_1':'Booster','BUFF_2':'Maple Warrior'}},
@@ -19,8 +20,10 @@ PROFILES = {
 }
 
 def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL):
-    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
+    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,NATIVE_V5_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
         raise ValueError('invalid_native_fixture')
+    if protocol==NATIVE_V5_PROTOCOL and class_id!='hero':
+        raise ValueError('native_v5_requires_hero')
     return {'id':protocol,'class_id':class_id,'profile':json.loads(json.dumps(PROFILES[class_id])),
             'baseline_sha256':baseline_sha256,'wall_seconds':30,'max_actions':12,'max_sdk_requests':100,
             'capture_max_ms':45000,'capture_duration_policy':dict(CAPTURE_DURATION_POLICY if protocol==PROTOCOL else ENCODED_FRAME_POLICY)}
@@ -57,6 +60,7 @@ if(nearby.length){const dx=nearby[0].x-first.character.x;
 def program(value):
     value=validate_contract(value);class_id=value['class_id']
     if value['id']==PROTOCOL:return _legacy_program(value)
+    if value['id']==NATIVE_V5_PROTOCOL:return _hero_targeted_program(value)
     if value['id']==NATIVE_V3_PROTOCOL and class_id!='hero':return _targeted_program(value)
     if value['id']==NATIVE_V4_PROTOCOL and class_id!='hero':return _targeted_program(value,horizontal_limit=300)
     # These are finite physical key inputs. No arbitrary user program or game API
@@ -158,3 +162,46 @@ await sdk.pressKeys([direction,'SECONDARY_SKILL'],300);
 
 def fingerprint(value):
     return hashlib.sha256((json.dumps(validate_contract(value),sort_keys=True,separators=(',',':'))+'\n').encode()).hexdigest()
+
+def _hero_targeted_program(value):
+    # Explicit V5 only. Preserve every historical program and its capture bounds.
+    code="""// Scripted native acceptance v5; no model and no ranked result.
+await sdk.wait(1000);
+await sdk.observe();
+await sdk.pressKeys(['JUMP'],300);
+await sdk.observe();
+await sdk.wait(1100);
+await sdk.observe();
+"""
+    for key in ('SECONDARY_SKILL','BUFF_1','BUFF_2'):
+        code+=f"await sdk.pressKeys(['{key}'],300);\nawait sdk.observe();\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    code+="""// Observed height/range is a positioning heuristic, never damage proof.
+const targets=scene=>scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=45)
+  .sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x));
+for(let step=0;step<4;step++){
+  const scene=await sdk.observe(), nearby=targets(scene);
+  if(!nearby.length)break;
+  const dx=nearby[0].x-scene.character.x;
+  if(Math.abs(dx)<=110)break;
+  await sdk.pressKeys([dx<0?'LEFT':'RIGHT'],Math.min(1500,Math.max(300,Math.round(Math.abs(dx)*5))));
+  await sdk.observe();
+  await sdk.wait(150);
+}
+// Brandish comes before the basic-attack delay. Each of these two finite
+// attacks gets its own immediate observation, facing input and post-face check.
+// A departed/crossed target skips that attack; there is no retry or extra chase.
+for(const [key,hold] of [['PRIMARY_SKILL',1200],['ATTACK',600]]){
+  const aim=await sdk.observe(), nearby=targets(aim);
+  if(!nearby.length||Math.abs(nearby[0].x-aim.character.x)>110)continue;
+  const direction=nearby[0].x<aim.character.x?'LEFT':'RIGHT';
+  await sdk.pressKeys([direction],30);
+  const faced=await sdk.observe(), current=targets(faced);
+  if(!current.some(m=>Math.abs(m.x-faced.character.x)<=110&&(direction==='LEFT'?m.x<=faced.character.x:m.x>=faced.character.x)))continue;
+  await sdk.pressKeys([key],hold);
+  await sdk.wait(1100);
+  await sdk.observe();
+}
+await sdk.wait(1500);
+await sdk.observe();
+"""
+    return code
