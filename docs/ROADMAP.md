@@ -101,6 +101,24 @@ Bowmaster and Ice/Lightning fixtures are prepared; native acceptance and their
 model cohorts remain pending. Native 15-second XP windows have an independently
 built candidate, but are not deployed or represented as completed research runs.
 
+The corrected cohort has now published two fresh five-minute Hero results:
+Astra `627d0c5cf8594f798a95de7cec5c0771` earned **+32,000 persisted XP**
+with 101 accepted actions and ten confirmed responses; Sol
+`06be0ac11162442f849454de436214f5` earned **+18,250 persisted XP** with
+93 accepted actions and nine confirmed responses. Both survived. Their original
+recordings independently decoded to all 3,035 and 3,056 submitted frames,
+respectively, and actual public desktop/mobile playback passed. Video review
+confirmed movement, combat, monster disappearance and matching native HUD XP.
+Sol's invalid-hold program error remains in its trace; subsequent programs
+continued without operator repair.
+
+Their final 54.4- and 53.2-second observation-only tails are labeled in the UI.
+The initial Astra publication took 159.538 seconds from completed attempt to
+public verification; the deployment step itself took 36.490 seconds. The
+end-to-end result does not meet the one-minute publication target. Terra and
+Luna are still pending final acceptance in this snapshot; the four-model gate
+and archive retirement remain open.
+
 ## What RuneBench quality means here
 
 RuneBench provides a useful model: agents use a TypeScript SDK and reference
@@ -176,7 +194,7 @@ Already verified foundations:
 - [x] A successful run has attributable, saved and inspected gameplay evidence.
 - [x] A public Vercel page serves the verified Astra recording.
 
-There are **20 remaining release deliverables** below, with four of 24 accepted.
+There are **19 remaining release deliverables** below, with five of 24 accepted.
 These are acceptance
 counts, not equal effort units or a percentage-complete estimate. Some supporting
 code already exists. Track code-ready, live-accepted and published separately;
@@ -222,11 +240,15 @@ Gate: one independent cloud worker can execute the accepted full-client protocol
 and retain valid evidence without relying on the viewing laptop's renderer.
 Its infrastructure and deployment status are inspectable in agent-devops.
 
-### M2 — A shareable four-model showcase: 0/4
+### M2 — A shareable four-model showcase: 1/4
 
-- [ ] **M2.1 Deploy the focused session fix.** A fresh protected release passes
+- [x] **M2.1 Deploy the focused session fix.** A fresh protected release passes
   its focused regressions and live checks; stale game entry cannot reopen the
   owned waiting session. Actual controls, frames and current model label verify.
+  Accepted September 8: the corrected release passed focused and actual Docker
+  checks; fresh Astra and Sol trials completed ordinary reset/login/logout and
+  recording verification. Their exact model labels and gameplay were checked
+  in the original videos and on the public site.
 - [ ] **M2.2 Complete one new four-entry plan.** Astra, Sol, Terra and Luna each
   receive the frozen fixture and budgets. All four outcomes have complete
   evidence, and normal services are restored. Valid poor outcomes count; a
