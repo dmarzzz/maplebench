@@ -49,6 +49,27 @@ test('each snapshot is retained until next timestamp gives its duration',async()
   assert.equal(h.instances[0].inputs[0].duration,34000);h.set(1044);await h.recorder.stop();
   assert.equal(h.instances[0].inputs[1].duration,1000);
 });
+test('terminal rounding uses the exact serialized clock operands',async()=>{
+  const h=harness();h.set(0.1);await h.recorder.initialize();h.set(0.2);h.recorder.onRendered();
+  h.set(2.2);h.recorder.onRendered();h.set(4.2);const result=await h.recorder.stop();
+  const m=result.measurements;
+  assert.equal(Math.ceil(4.2-0.2),4);
+  assert.equal(Math.ceil(m.duration_ms-m.first_frame_offset_ms),5);
+  assert.equal(h.instances[0].inputs[1].duration,3000);
+  // The same cancellation occurs in the concrete long-running browser clocks.
+  const started=221325.76518336454,first=221485.7757564947,stop=515664.7757564947;
+  assert.equal(Math.ceil(stop-first),294179);
+  assert.equal(Math.ceil((stop-started)-(first-started)),294180);
+});
+test('quantized terminal tail must fit 250ms even when raw tail fits',async()=>{
+  const a=harness();await a.recorder.initialize();a.set(1010);a.recorder.onRendered();
+  a.set(1044.9);a.recorder.onRendered();a.set(1294.8);
+  await assert.rejects(a.recorder.stop(),/capture_quantized_endpoint_gap/);
+  assert.equal(a.recorder.failed,true);
+  const b=harness();await b.recorder.initialize();b.set(1010);b.recorder.onRendered();
+  b.set(1044.9);b.recorder.onRendered();b.set(1294.0);await b.recorder.stop();
+  assert.equal(b.instances[0].inputs[1].duration,250000);
+});
 for(const [name,behavior,code] of [['missing output',{drop:true},'encoder_output_timing_mismatch'],
   ['duplicate output',{duplicate:true},'encoder_output_timing_mismatch'],
   ['changed timestamp',{timestamp:true},'encoder_output_timing_mismatch'],

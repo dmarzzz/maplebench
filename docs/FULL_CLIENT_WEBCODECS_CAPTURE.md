@@ -46,8 +46,13 @@ close snapshots promptly after submission. The first post-render snapshot is
 PTS 0. Later timestamps are `floor(render_monotonic_ms - first_render_ms) * 1000`
 integer microseconds. Duplicate quantized timestamps are a failure, not a drop.
 Durations are the difference to the next timestamp. The final duration ends at
-the ceiling of the stop offset, with a minimum one-millisecond terminal tick.
-This rounding introduces at most one millisecond of endpoint quantization.
+`ceil(duration_ms - first_frame_offset_ms) * 1000`, with a minimum one-millisecond
+terminal tick after the last PTS. Use those exact serialized operands in both
+the producer and verifier; algebraically equivalent floating-point subtraction
+can fall on the other side of a tick boundary. A quantized final duration above
+250 ms fails capture even if the raw tail is within 250 ms. Never clamp it.
+The rounding contributes one timestamp tick, plus floating-point representation
+error at an exact tick boundary.
 
 Raw capture measurements retain arm→stop time and first/last frame offsets.
 Video time instead begins at the first rendered frame. Replay cues must subtract
