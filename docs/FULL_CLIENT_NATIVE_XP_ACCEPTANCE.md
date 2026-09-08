@@ -53,6 +53,11 @@ offline database reconciliation. A complete zero-transaction interval remains
 insufficient evidence for the positive XP hook.
 
 The outer operation has a 900-second cap and reserves 180 seconds for cleanup.
+Wrapper preflight consumes that original deadline. Executor entry requires at
+least 720 seconds still available; it never creates a replacement 900-second
+window. After inventory, enough foreground time for bounded startup, login,
+300-second observation and 45-second collection must remain before any restore.
+The same 345-second foreground check runs immediately before native submission.
 Startup has a 90-second cap and login a 60-second cap. The owned transient game
 service has an 840-second limit; the normal model runtime limit is unchanged.
 No cap extends an infrastructure lease. Every phase remains subject to the

@@ -192,6 +192,28 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(self.host.admin.call_count, 1)
         self.assertNotIn('coverage_verified', self.backend.state)
 
+    def test_insufficient_window_time_refuses_before_native_intent_or_submission(self):
+        self.window_fixture()
+        self.host.remaining.return_value = 344.99
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'window_time_insufficient'):
+            self.backend.native_window()
+        self.host.admin.assert_not_called()
+        self.assertEqual(self.backend.state['intents'], [])
+
+    def test_wrapper_preflight_time_does_not_extend_original_deadline(self):
+        self.backend.validate_fresh_owner = MagicMock()
+        self.backend.safe_boundary = MagicMock()
+        self.host.deadline = time.monotonic() + 880
+        self.host.remaining.side_effect = [880, 494]
+        original = self.host.deadline
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'preflight_unconfirmed'):
+            executor.execute_owned(self.backend)
+        self.assertEqual(self.host.deadline, original)
+        self.assertNotIn('restore_baseline', self.backend.state['intents'])
+        failure = json.loads((self.backend.directory / 'failure.json').read_text())
+        self.assertEqual(failure['phase'], 'preflight')
+        self.assertEqual(failure['reason'], 'native_xp_preflight_time_insufficient')
+
     def status_fixture(self, *, elapsed=20_000):
         self.backend.safe_boundary = MagicMock()
         self.backend.owned_server = MagicMock()
