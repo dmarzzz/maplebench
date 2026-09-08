@@ -15,6 +15,7 @@ class EncodedControllerTests(unittest.TestCase):
 const assert=require('node:assert/strict');
 let capture=null,saving=false,pendingUpload=null,closed=false,uploads=0,created=0;
 let failStart=false,failStop=false,finish;
+const failureCallbacks=[];
 const policy={id:'post-render-encoded-frame-v1'};
 const run={id:'native',nativeAcceptance:{capture_duration_policy:policy,capture_max_ms:45000}};
 const ctx=new Proxy({measureText:()=>({width:0})},{get:(o,k)=>k in o?o[k]:()=>{}});
@@ -30,6 +31,7 @@ const measurements={start_wall_ms:1000,end_wall_ms:1200,duration_ms:200,
  rendered_frames:2,max_frame_gap_ms:180};
 const receipt={schema_version:1,codec:'vp8',flushed:true};
 const createPostRenderRecorder=async(canvas,options)=>{
+ failureCallbacks.push(options.onFailure);
  created++;assert.equal(options.maxDurationMs,45000);if(failStart)throw Error('Unsupported');
  const r={startedAt:100,startedWall:1000,frames:0,onRendered(){this.frames++;return true;},
  stop(){if(failStop)return Promise.reject(Error('Flush failed'));
@@ -70,6 +72,20 @@ assert.equal(uploads,0);assert.match(notice.textContent,/could not start/);
 await startRecording('native');capture.onRendered();failStop=true;await stopRecording();
 assert.equal(capture,null);assert.equal(uploads,0);assert.equal(pendingUpload,null);
 assert.match(notice.textContent,/no accepted recording/);
+""")
+
+    def test_late_failure_from_old_recorder_cannot_stop_replacement(self):
+        self.run_lifecycle("""
+await startRecording('native');const oldCapture=capture;
+failStop=true;await stopRecording();assert.equal(capture,null);
+failStop=false;await startRecording('replacement');const replacement=capture;
+const previousNotice=notice.textContent;
+failureCallbacks[0]();
+assert.equal(capture,replacement);assert.equal(replacement.stopping,false);
+assert.equal(replacement.errors,0);assert.equal(oldCapture.errors,0);
+assert.equal(notice.textContent,previousNotice);assert.equal(uploads,0);
+replacement.onRendered();replacement.onRendered();
+const ending=stopRecording();finish();await ending;assert.equal(uploads,1);
 """)
 
 

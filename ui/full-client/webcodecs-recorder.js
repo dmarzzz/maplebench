@@ -184,9 +184,13 @@ export class PostRenderRecorder {
       need(endAt-this.lastFrameAt<=ENCODED_FRAME_POLICY.max_endpoint_gap_ms,'capture_endpoint_gap');
       need(Math.abs(endWall-this.startedWall-(endAt-this.startedAt))<=ENCODED_FRAME_POLICY.max_wall_drift_ms,'capture_wall_clock_drift');
       this._maxGap=Math.max(this._maxGap,endAt-this.lastFrameAt);
+      // Use the identical serialized operands the independent verifier receives.
       // A stop in the same 1ms tick still writes one explicit terminal tick.
-      const endTimestamp=Math.max(this._pending.timestamp+1000,Math.ceil(endAt-this.firstFrameAt)*1000);
-      this._submit(endTimestamp-this._pending.timestamp);
+      const durationMs=endAt-this.startedAt,firstOffsetMs=this.firstFrameAt-this.startedAt;
+      const endTimestamp=Math.max(this._pending.timestamp+1000,Math.ceil(durationMs-firstOffsetMs)*1000);
+      const finalDuration=endTimestamp-this._pending.timestamp;
+      need(finalDuration<=ENCODED_FRAME_POLICY.max_endpoint_gap_ms*1000,'capture_quantized_endpoint_gap');
+      this._submit(finalDuration);
       let timer;
       try{await Promise.race([this._encoder.flush(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('encoder_flush_timeout')),LIMITS.flushTimeoutMs);})]);}
       finally{clearTimeout(timer);}
@@ -202,9 +206,9 @@ export class PostRenderRecorder {
         encoded_frames:this.outputFrames,flushed:true,ledger_sha256:await this._hash(ledgerBytes),ledger_bytes:ledgerBytes.length,
         webm_sha256:await this._hash(await blob.arrayBuffer()),webm_bytes:blob.size};
       this._outputs=[];this._inputs=[];this._hashes=[];
-      return {blob,encoder_receipt,measurements:{start_wall_ms:this.startedWall,end_wall_ms:endWall,duration_ms:endAt-this.startedAt,
+      return {blob,encoder_receipt,measurements:{start_wall_ms:this.startedWall,end_wall_ms:endWall,duration_ms:durationMs,
         first_frame_wall_ms:this.firstFrameWall,last_frame_wall_ms:this.lastFrameWall,
-        first_frame_offset_ms:this.firstFrameAt-this.startedAt,last_frame_offset_ms:this.lastFrameAt-this.startedAt,
+        first_frame_offset_ms:firstOffsetMs,last_frame_offset_ms:this.lastFrameAt-this.startedAt,
         rendered_frames:this.frames,max_frame_gap_ms:this._maxGap}};
     }catch(error){this._fail(error.message);throw error;}
   }

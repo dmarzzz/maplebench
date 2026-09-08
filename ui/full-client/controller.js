@@ -302,6 +302,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},encodedLimit);
       try {
         item.encoderPromise=createPostRenderRecorder(output,{maxDurationMs:encodedLimit,onFailure:()=>{
+          if(capture!==item) return;
           item.errors++; notice.textContent='Encoded frame capture failed; this recording cannot be accepted.';
           stopRecording();
         }});
