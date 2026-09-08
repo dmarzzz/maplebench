@@ -24,3 +24,26 @@ public payload. Original private packages remain unchanged. No retirement occurs
 merely because four scores exist, a previous cohort is complete, or a model failed.
 All output still passes the existing 100-file/512MiB allowlist and payload checks.
 Schema 1 requests retain their previous behavior.
+
+## Immutable operator cohort limitations
+
+Either request schema optionally accepts `annotations`, at most six objects with
+exactly `plan_sha256` and `text`. Each plan must identify an active or retained
+previous cohort included in this catalog. Notes targeting a retired cohort are
+rejected. A plan and note text may appear only once. Omission or an empty list
+preserves the existing catalog digest and bytes.
+
+Text is stripped plain prose, 1–400 characters. Markup, control characters,
+links, email/IP address shapes, absolute paths, credential assignments, and extra
+fields are rejected. This validation does not replace the operator's review for
+personal information. Ampersands and quotes are escaped for HTML. The composer
+derives the affected cohort link from the verified package; callers cannot
+supply a destination.
+
+Notes appear directly below the root page header under “Cohort limitations,”
+linked to the affected cohort. They are included in `catalog.annotations` in
+root results and in the content-derived catalog manifest. The changed root HTML
+and results remain hash-bound by the deployment inventory. All original nested
+cohort files, recordings, results, grouping and retirement rules remain intact.
+Direct links to original cohort pages preserve their original evidence; share
+the root catalog URL when the operator caveat must be visible.
