@@ -419,6 +419,20 @@ def inspect_attempt(plan, entry):
 
 
 def launch_trial(plan, entry, request_path, timeout_seconds, *, operation_join=None):
+    return _launch_runner(plan, entry, ["run", "--request", str(request_path), "--attempt-id", entry["attempt_id"]],
+                          timeout_seconds, operation_join=operation_join)
+
+
+def launch_recovery(plan, entry, timeout_seconds, *, operation_join, recovery_ref, recovery_seconds):
+    """Explicit cleanup only; neither a request file nor run command is accepted."""
+    reference(recovery_ref)
+    require(integer(recovery_seconds, 1, 300), "invalid_recovery_timeout")
+    return _launch_runner(plan, entry, ["recover", "--attempt-id", entry["attempt_id"],
+        "--timeout-seconds", str(recovery_seconds)], timeout_seconds, operation_join=operation_join,
+        extra_args=["--operation-recovery", recovery_ref["path"], "--operation-recovery-sha256", recovery_ref["sha256"]])
+
+
+def _launch_runner(plan, entry, action_args, timeout_seconds, *, operation_join=None, extra_args=()):
     """Production launcher: leave the runner's independent lock-retaining guard alone."""
     require(sys.platform.startswith("linux") and os.geteuid() == 0, "linux_root_required")
     runner, fixture = plan["runner"], fixture_for(plan, entry)
@@ -444,7 +458,7 @@ def launch_trial(plan, entry, request_path, timeout_seconds, *, operation_join=N
         argv += ["--operation-envelope", operation_join["envelope"]["path"],
                  "--operation-envelope-sha256", operation_join["envelope"]["sha256"],
                  "--operation-fd", str(pass_fds[0])]
-    argv += ["run", "--request", str(request_path), "--attempt-id", entry["attempt_id"]]
+    argv += [*extra_args, *action_args]
     process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True, cwd="/", preexec_fn=parent_death_signal,
         pass_fds=pass_fds,
@@ -460,6 +474,105 @@ def launch_trial(plan, entry, request_path, timeout_seconds, *, operation_join=N
                 process.kill()  # Only this runner PID, never the guard/bridge.
                 process.wait(timeout=2)
         raise
+
+
+def recover_entry(coordinator, operation, plan_ref, attempt_id, journal_sha256, coordinator_sha256,
+                  recovery_seconds, parent_launch, *, launcher=launch_recovery):
+    """Explicit one-child cleanup. Leave the group pending for resume or seal."""
+    import full_client_operation_admission as admission
+    require(isinstance(attempt_id, str) and RUN.fullmatch(attempt_id)
+            and all(isinstance(value, str) and SHA.fullmatch(value) for value in (journal_sha256, coordinator_sha256))
+            and integer(recovery_seconds, 1, 300), "invalid_recovery_request")
+    require(not operation.completed and operation.claim is not None, "operation_active_claim_required")
+    plan, directory = coordinator.plan, coordinator.directory
+    with coordinator.locked():
+        coordinator.load()
+        require(coordinator.state_sha == coordinator_sha256 and "closure" not in coordinator.state
+                and coordinator.state["submissions"]
+                and coordinator.state["submissions"][-1]["attempt_id"] == attempt_id
+                and "retirement" not in coordinator.state["submissions"][-1]
+                and attempt_id not in coordinator.state["settled"], "recovery_not_current_submission")
+        entry = plan["entries"][len(coordinator.state["submissions"]) - 1]
+        for submission in coordinator.state["submissions"][:-1]:
+            prior = plan["entries"][submission["ordinal"]]
+            observed = inspect_attempt(plan, prior)
+            if "retirement" in submission:
+                require(observed["status"] == "missing", "retired_attempt_appeared")
+            else:
+                require(observed["terminal_clean"], "prior_attempt_unresolved")
+        require(all(not os.path.lexists(Path(plan["runner"]["state_root"]) / future["attempt_id"])
+                    for future in plan["entries"][len(coordinator.state["submissions"]):]),
+                "unsubmitted_attempt_already_exists")
+        fixture = fixture_for(plan, entry)
+        configuration = decode(read_ref(fixture["adapter_config"], private=True))
+        runner = trial.TrialRunner(plan["runner"]["state_root"], plan["runner"]["world_lock"],
+            plan["runner"]["queue_lock"], trial.CommandAdapter(configuration["argv"], configuration["dependencies"]))
+        area = private_directory(directory / "recoveries", create=True)
+        descriptor_path = area / (attempt_id + ".json")
+        completion_path = area / (attempt_id + ".complete.json")
+        created = not os.path.lexists(descriptor_path)
+        with runner._locks():
+            if created:
+                failed = runner._load(attempt_id, expected_sha256=journal_sha256)
+                require(failed["status"] in ("failed", "interrupted") and failed["request"] == entry["spec"]
+                        and failed.get("adapter_fingerprint") == fixture["adapter_fingerprint"], "recovery_requires_failed_attempt")
+                raw = read_file(runner.root / attempt_id / "journal.json", private=True, expected=journal_sha256)[0]
+                failure_path = area / (attempt_id + ".failed-journal.json")
+                if os.path.lexists(failure_path):
+                    read_file(failure_path, private=True, expected=journal_sha256)
+                else:
+                    fd = os.open(failure_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+                    sync_directory(area)
+                descriptor = {"schema_version": 1, "kind": "finite_group_recovery", "attempt_id": attempt_id,
+                    "plan": plan_ref, "coordinator": {"path": str(directory / "coordinator.json"), "sha256": coordinator_sha256},
+                    "claim": operation.claim, "journal": {"path": str(runner.root / attempt_id / "journal.json"), "sha256": journal_sha256},
+                    "failure": {"path": str(failure_path), "sha256": journal_sha256},
+                    "request": {"path": str(directory / "requests" / (attempt_id + ".json")), "sha256": entry["spec_sha256"]},
+                    "adapter_config": fixture["adapter_config"], "timeout_seconds": recovery_seconds}
+                write_json(descriptor_path, descriptor, create=True)
+            descriptor_ref = pin(descriptor_path)
+            descriptor = admission.recovery_descriptor(descriptor_ref, plan_ref, plan, entry, directory, operation.claim,
+                                                       owner_uid=operation.uid, current=created)
+            require(descriptor["journal"]["sha256"] == journal_sha256
+                    and descriptor["coordinator"]["sha256"] == coordinator_sha256
+                    and descriptor["timeout_seconds"] == recovery_seconds, "recovery_descriptor_changed")
+
+        def complete():
+            with runner._locks():
+                evidence = admission.trial_terminal(runner, attempt_id, entry["spec"], owner_uid=operation.uid)
+                current = runner._load(attempt_id)
+                failed = admission.gate.read_ref(descriptor["failure"], operation.uid, admission.gate.Budget())
+                require(current["status"] == "recovered" and current.get("publication_eligible") is False
+                        and current["events"][:len(failed["events"])] == failed["events"]
+                        and current["api_outcome"] == failed["api_outcome"]
+                        and current["charged_usage"] == failed["charged_usage"], "recovery_evidence_changed")
+                value = {"schema_version": 1, "status": "entry_recovered", "recovery": descriptor_ref,
+                         "evidence": evidence, "new_api_requests": 0, "coordinator_changed": False,
+                         "group_claim_completed": False, "publication_eligible": False}
+                if os.path.lexists(completion_path):
+                    require(decode(read_file(completion_path, private=True)[0]) == value, "recovery_receipt_changed")
+                else:
+                    write_json(completion_path, value, create=True)
+                require(read_file(directory / "coordinator.json", private=True)[1] == coordinator_sha256,
+                        "coordinator_journal_changed")
+                return value
+
+        if not created:
+            try:
+                return complete()
+            except (ValueError, OSError, trial.TrialError, admission.gate.GateError):
+                raise ExperimentError("recovery_outcome_uncertain") from None
+        # The descriptor is durable before preparing or entering the only child.
+        try:
+            with admission.recovery_dispatch(operation, plan_ref, plan, entry, directory, descriptor_ref, parent_launch) as dispatch:
+                launcher(plan, entry, recovery_seconds + LAUNCH_GRACE_SECONDS, operation_join=dispatch,
+                         recovery_ref=descriptor_ref, recovery_seconds=recovery_seconds)
+        except (OSError, subprocess.SubprocessError):
+            # A lost process reply is resolved only from saved cleanup evidence.
+            pass
+        return complete()
 
 
 class Experiment:
@@ -880,7 +993,7 @@ def main(argv=None):
     create = commands.add_parser("plan", help="Offline: validate inputs and write a new immutable private plan")
     create.add_argument("--config", type=Path, required=True)
     create.add_argument("--output", type=Path, required=True)
-    for name in ("run", "resume", "seal", "report"):
+    for name in ("run", "resume", "seal", "report", "recover-entry"):
         command = commands.add_parser(name)
         command.add_argument("--plan", type=Path, required=True)
         command.add_argument("--directory", type=Path, required=True)
@@ -888,6 +1001,11 @@ def main(argv=None):
             command.add_argument("--output", type=Path, required=True)
         if name == "seal":
             command.add_argument("--journal-sha256", required=True)
+        if name == "recover-entry":
+            command.add_argument("--attempt-id", required=True)
+            command.add_argument("--journal-sha256", required=True)
+            command.add_argument("--coordinator-sha256", required=True)
+            command.add_argument("--timeout-seconds", type=int, default=120)
         if name != "report":
             admission.add_arguments(command)
     args = parser.parse_args(argv)
@@ -920,6 +1038,11 @@ def main(argv=None):
                                                                   executable_ref=plan["runner"]["python"])
                         coordinator = Experiment(plan, args.directory,
                             entry_admission=admission.trial_dispatch(operation, plan_ref, parent_launch))
+                        if args.command == "recover-entry":
+                            result = recover_entry(coordinator, operation, plan_ref, args.attempt_id,
+                                args.journal_sha256, args.coordinator_sha256, args.timeout_seconds, parent_launch)
+                            print(json.dumps(result, sort_keys=True))
+                            return 0
                         path = coordinator.directory / "coordinator.json"
                         sealed = False
                         if args.command != "run":
