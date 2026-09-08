@@ -230,6 +230,20 @@ def fixture_inputs(fixture, runner):
     require(scoring.same_json(scenario.get("trial_budgets"), fixture["budgets"])
             and scenario.get("protocol") == controller_protocol, "fixture_budget_mismatch")
     require(("xp_window_protocol" in scenario) == windows, "invalid_trial_protocol")
+    protocol = None
+    if controller_protocol == "full-client-adaptive-pilot-v1":
+        from full_client_adaptive import validate_protocol
+        try:
+            protocol = validate_protocol(scenario.get("adaptive_protocol"))
+        except (ValueError, TypeError, KeyError) as error:
+            raise ExperimentError("invalid_trial_protocol") from error
+        budgets = fixture["budgets"]
+        require(budgets.get("controller_seconds") == protocol["wall_seconds"]
+                and budgets.get("max_api_requests") == protocol["max_api_requests"]
+                and budgets.get("max_actions") == protocol["max_actions"]
+                and budgets.get("max_output_tokens") == protocol["max_api_requests"] * protocol["max_output_tokens"]
+                and budgets.get("max_total_tokens") == protocol["max_total_tokens"], "fixture_budget_mismatch")
+        require("progression_policy" not in protocol or windows, "invalid_trial_protocol")
     if windows:
         from full_client_xp_windows import validate_contract
         from full_client_adaptive import FULL_HORIZON_POLICY
@@ -237,8 +251,7 @@ def fixture_inputs(fixture, runner):
             validate_contract(scenario["xp_window_protocol"])
         except (ValueError, TypeError, KeyError) as error:
             raise ExperimentError("invalid_trial_protocol") from error
-        require(scoring.same_json(scenario.get("adaptive_protocol", {}).get("horizon_policy"),
-                                  FULL_HORIZON_POLICY), "invalid_trial_protocol")
+        require(scoring.same_json(protocol.get("horizon_policy"), FULL_HORIZON_POLICY), "invalid_trial_protocol")
     if controller_protocol == "full-client-adaptive-pilot-v1":
         required = {str(Path(__file__).resolve().parent / name) for name in
                     ("full_client_adaptive.py", "full_client_adaptive_evidence.py", "maple_agent.py")}

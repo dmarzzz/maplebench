@@ -372,8 +372,10 @@ class CosmicRuntime:
         """Both private runtime and frozen scenario must explicitly opt in."""
         configured = self.config.get("xp_window_protocol")
         contract = getattr(self, "scenario", {}).get("xp_window_protocol")
+        adaptive = getattr(self, "scenario", {}).get("adaptive_protocol")
+        progression = adaptive.get("progression_policy") if isinstance(adaptive, dict) else None
         if configured is None:
-            require(contract is None, "xp_window_opt_in_required")
+            require(contract is None and progression is None, "xp_window_opt_in_required")
             return None
         require(configured == xp_windows.PROTOCOL
                 and self.scenario.get("protocol") == "full-client-adaptive-pilot-v1",

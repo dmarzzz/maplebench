@@ -73,10 +73,38 @@ contract. A newly frozen controller may explicitly enable
 passive observation through the deadline, with no extra gameplay inputs. This
 declared policy does not upgrade older evidence; death or infrastructure failure
 can still end the interval early and prevent full coverage.
-The frozen adaptive pilot also rejects later-cycle level changes; supporting
-adaptation across level-ups requires its own controller revision. The ledger
-arithmetic is tested across those transitions without claiming a live adaptive
-level-up run occurred.
+The default adaptive pilot still rejects later-cycle level changes. A newly
+frozen native-window variant may add this exact `adaptive_protocol` field:
+
+```json
+"progression_policy": {
+  "id": "native-xp-level-progression-v1",
+  "xp_window_protocol": "full-client-xp-windows-v1",
+  "maximum_level": 200
+}
+```
+
+This requires the full-horizon policy and the existing explicit native-window
+runtime/scenario opt-in. The initial observed level must exactly match the frozen
+profile; subsequent observations may use levels from that initial level through
+200. It performs no stat/skill allocation, healing or restoration. The exact
+prompt and scenario hash change, and this variant needs fresh source/runtime and
+baseline acceptance. Current pilots and their receipts are not reinterpreted.
+
+Aggregate verification refuses this policy without hashed native-ledger context.
+The native bundle verifies the ordinary session, offline DB states, reset, save
+and native logs, then supplies that context to the adaptive verifier. It rechecks
+the ledger's chain, actual progression, frozen XP table, multipliers and terminal
+coverage. Every observed level must be supported by native transitions within
+the corresponding observation or enclosing SDK program interval, with the
+existing 1500ms render freshness and 25ms native clock allowance. Intermediate
+levels in a native overflow transaction may occur within that interval. Legacy
+adaptive publication cannot supply this context and remains ineligible for this
+variant; a dedicated native-window publisher is still required.
+
+Synthetic end-to-end tests cover level180→181, level200 cap, stale/future client
+level claims, missing or unrelated ledgers, and death without full coverage.
+They do not claim that a live adaptive level-up run has occurred.
 
 ## Journal and failure behavior
 
@@ -199,7 +227,8 @@ its automatic source fingerprint. The ordinary standalone trial runner supports
 schema 3. The finite experiment builder also accepts an explicitly selected
 `full-client-xp-windows-v1` fixture, only with its matching native configuration,
 pinned scorer, complete window contract, and frozen full-horizon controller
-policy. It emits schema-3 requests; it never infers a scoring upgrade from an
+policy. Planning validates the complete adaptive contract and matching trial/API
+caps before admission, including malformed-object rejection. It emits schema-3 requests; it never infers a scoring upgrade from an
 existing adaptive fixture. The public adaptive gallery still needs a separate
 accepted window adapter before such a cohort can be published. Do not relabel
 an existing plan or reinterpret an old pilot's score.

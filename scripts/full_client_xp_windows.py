@@ -210,9 +210,8 @@ def verify_bundle(manifest, root):
     require(scenario.get('protocol')==controller.get('protocol')==ADAPTIVE,'unsupported_controller_protocol')
     require(all(controller.get('initial',{}).get('character',{}).get(k)==initial['character'].get(k)
                 for k in ('level','exp')),'controller_baseline_mismatch')
-    verified=verify_result(controller,root,protocol=scenario['adaptive_protocol'],model=controller['controller']['model'])
     t=controller['adaptive']['timing'];window=manifest['window']
-    require(verified['wall_elapsed_ms']==300000 and controller['controller']['id']==identity['run_id']
+    require(t['wall_elapsed_ms']==300000 and controller['controller']['id']==identity['run_id']
             and same_json(window,{'start_at_ms':t['wall_started_at_ms'],'deadline_at_ms':t['wall_deadline_at_ms'],'window_ms':WINDOW_MS})
             and same_json(scenario.get('xp_window_protocol'),{'id':PROTOCOL,'window_ms':WINDOW_MS,'wall_seconds':300,
                 'normalization':manifest['normalization'],'experience_table_sha256':manifest['experience_table_sha256']}),
@@ -261,6 +260,15 @@ def verify_bundle(manifest, root):
     header=parse_json(raw.splitlines()[0])
     require(initial['captured_at_ms']<=header['wall_ms']<=session['login_at_ms'],'native_header_outside_new_session')
     require(score['experience_table_sha256']==manifest['experience_table_sha256'],'unfrozen_native_experience_table')
+    progression=None
+    if scenario['adaptive_protocol'].get('progression_policy'):
+        progression={'contract':scenario['xp_window_protocol'],'identity':identity,
+            'initial':{k:initial['character'][k] for k in ('level','exp')},
+            'final':{k:final['character'][k] for k in ('level','exp')},'window':window,
+            'committed_at_ms':committed,'ledger':arts['xp_ledger']}
+    verified=verify_result(controller,root,protocol=scenario['adaptive_protocol'],
+        model=controller['controller']['model'],native_progression=progression)
+    require(verified['wall_elapsed_ms']==300000,'unfrozen_or_incomplete_control_window')
     return score|{'artifacts_verified':True,'baseline_reset_verified':True,
         'scenario_fingerprint':manifest['scenario_fingerprint'],'baseline_sha256':manifest['baseline_sha256'],
         'publication_blocker':'new_native_runtime_and_baseline_acceptance_required'}
