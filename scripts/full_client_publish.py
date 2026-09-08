@@ -799,7 +799,8 @@ def verify_capture_bundle(manifest, artifact_root):
             and _text(terminal["id"]) and _number(terminal["serverIssuedAtMs"]),
             "capture: invalid terminal server receipt")
     require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
-    native = result.get("protocol") == "scripted-native-acceptance-v1"
+    from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL
+    native = result.get("protocol") in (NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL)
     owner = {"id": run_id, "client": result["controller"]["client"], "startedAtMs": started,
              "protocol": result.get("protocol"), "adaptiveProtocol":result.get('adaptive',{}).get('limits',{})}
     if native:
@@ -808,7 +809,7 @@ def verify_capture_bundle(manifest, artifact_root):
         require(result["controller"].get("mode") == "script" and result["controller"].get("model") is None
                 and result["controller"].get("returnedModel") is None and result.get("api") is None
                 and result.get("trialContext") is None and type(result.get("model_api_requests")) is int
-                and result["model_api_requests"] == 0 and result["controller"].get("protocol") == "scripted-native-acceptance-v1"
+                and result["model_api_requests"] == 0 and result["controller"].get("protocol") == config["id"] == result["protocol"]
                 and all(result.get("timeline", {}).get(key) is None for key in ("api_started_ms", "api_ended_ms"))
                 and same_json(config,result["controller"].get("nativeAcceptance")),
                 "capture: native acceptance cannot carry a model identity")

@@ -126,7 +126,7 @@ const releaseAll=()=>{};
     def test_native_recipe_dispatches_neutral_physical_keys(self):
         self.run_dispatch("""
 (async()=>{
- run.id='native';run.nativeAcceptance={id:'scripted-native-acceptance-v1'};capture.autoRunId='native';
+ run.id='native';run.nativeAcceptance={id:'scripted-native-acceptance-v2'};capture.autoRunId='native';
  await executeInput({id:'native-buff',runId:'native',keys:['BUFF_1'],durationMs:30},clock+1000);
  assert.equal(acknowledgement.ok,true);assert.equal(events.filter(x=>x==='keydown').length,1);
  await executeInput({id:'native-skill',runId:'native',keys:['PRIMARY_SKILL'],durationMs:30},clock+1000);
