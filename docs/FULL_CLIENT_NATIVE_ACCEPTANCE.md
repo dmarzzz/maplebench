@@ -1,10 +1,14 @@
 # Scripted native acceptance
 
-`scripted-native-acceptance-v1` is a private setup check with zero model calls. It cannot be admitted as an API trial or published as a model result. It checks native controls and the recording contract before a new cohort is frozen.
+`scripted-native-acceptance-v2` is a private setup check with zero model calls. It cannot be admitted as an API trial or published as a model result. It checks native controls and the recording contract before a new cohort is frozen. The earlier v1 recipe and its failed evidence keep their original identity and frozen source.
 
 The private Unix control operation is `start_native`. Its exact fields are `op`, `run_id`, `request_id`, `native_acceptance`, `docker_image_id`, `docker_binding`, and `lock_paths`. Run and request IDs must be the same fresh 32-character hexadecimal ID. The two existing world and queue lock descriptions must arrive through `SCM_RIGHTS`; the coordinator verifies Linux kernel exclusive-lock receipts and the bridge keeps duplicates while the worker or key release remains active. Public HTTP controls do not expose this operation.
 
 Generate `native_acceptance` with `full_client_native.contract(class_id, baseline_sha256)`. Accepted classes are `hero`, `bowmaster`, and `ice_lightning_arch_mage`. Each class has a fixed profile and physical-key program. No arbitrary program or model identity is accepted. Soul Arrow is cast before Bowmaster attacks. The request freezes 30 seconds of program time, at most 12 key actions and 100 SDK requests, and a 45-second recording ceiling. These are upper bounds; the finite recipe ordinarily finishes earlier.
+
+The v2 recipe waits for the scene to settle, tests a 300 ms jump before any buffs, and observes immediately afterward. Skills have at least 1,100 ms between inputs so their animations can settle. After buffs, at most four observed approach steps of 1,500 ms bring the character toward a nearby monster, with a short facing input when within 110 pixels. Target selection uses a 45-pixel height band; the observation does not expose foothold identity. Movement can fail to reach a target, and the recipe does not turn that into a contact claim.
+
+Review actual vertical displacement in the observations and recording, and require visible damage or native combat evidence for monster contact. A key acknowledgement, animation, MP cost, or unchanged monster count alone does not establish those effects. The independent saved-XP check and capture verification must still pass. Class acceptance remains a separate explicit review; this recipe never awards a model score.
 
 The post-render capture policy is frozen directly in this native request, independently of the adaptive API protocol. Schema-2 capture measurements, the exact saved video hash and decoded presentation timestamps are verified through the same capture verifier. `verify_capture_bundle` permits native capture inspection but retains an explicit script identity, zero API count and no API planning interval. This does not grant model-publication eligibility.
 

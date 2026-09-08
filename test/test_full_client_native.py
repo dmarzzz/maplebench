@@ -4,15 +4,33 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from full_client_native import PROTOCOL,contract,validate_contract,program,fingerprint
+from full_client_native import NATIVE_V2_PROTOCOL as PROTOCOL,contract,validate_contract,program,fingerprint
 from full_client_bridge import FullClientBridge,ControlError
-from full_client_capture import CAPTURE_DURATION_POLICY,capture_receipt,verify_video_duration
+from full_client_capture import ENCODED_FRAME_POLICY,capture_receipt,verify_video_duration
 from full_client_session import SessionCoordinator,validate_guard_descriptors,AdminServer
 from full_client_trial import existing_lock,validate_spec,TrialError
 from full_client_publish import validate_manifest,verify_capture_bundle
 from docker_binding_fixture import local_binding
 from maple_agent import validate_rpc
 import test_full_client_capture as capture_fixtures
+
+def encoded_native_fixture():
+ fixture=capture_fixtures.CaptureTests();fixture.setUp()
+ ledger={'schema_version':1,'codec':'vp8','timebase_us':1000,'flushed':True,
+  'submitted_timestamps_us':[0,800000,1600000,2496000],
+  'encoded_timestamps_us':[0,800000,1600000,2496000],
+  'durations_us':[800000,800000,896000,1000],'encoded_sha256':['d'*64]*4}
+ raw=json.dumps(ledger,separators=(',',':'))
+ receipt={'schema_version':1,'codec':'vp8','timebase_us':1000,'submitted_frames':4,'encoded_frames':4,
+  'flushed':True,'ledger_sha256':hashlib.sha256(raw.encode()).hexdigest(),'ledger_bytes':len(raw),
+  'webm_sha256':'d'*64,'webm_bytes':12345}
+ fixture.value.update(schema_version=3,capture_duration_policy=dict(ENCODED_FRAME_POLICY),
+  first_frame_offset_ms=2,last_frame_offset_ms=2498,rendered_frames=4,max_frame_gap_ms=896,encoder_receipt=receipt)
+ fixture.probe={'duration_ms':2497,'presentation_span_ms':2496,'presentation_extent_ms':2497,
+  'last_packet_duration_ms':1,'frames':4,'packet_timestamps_us':ledger['submitted_timestamps_us'],
+  'packet_durations_us':ledger['durations_us'],'packet_sha256':ledger['encoded_sha256'],
+  'encoder_ledger_json':raw,'webm_sha256':'d'*64,'webm_bytes':12345}
+ return fixture
 
 class NativeTests(unittest.TestCase):
  def setUp(self):
@@ -35,13 +53,26 @@ class NativeTests(unittest.TestCase):
   with mock.patch('full_client_bridge.threading.Thread'):
    return self.bridge.start('script',None,30,**(self.options|changes))
  def test_frozen_contract_rejects_unbounded_or_arbitrary_program(self):
-  for change in ({'wall_seconds':31},{'max_actions':13},{'code':'arbitrary'},{'profile':{}},{'capture_duration_policy':None}):
+  for change in ({'id':'scripted-native-acceptance-v1'},{'wall_seconds':31},{'max_actions':13},{'code':'arbitrary'},{'profile':{}},{'capture_duration_policy':None}):
    with self.subTest(change=change),self.assertRaises((ValueError,TypeError)):validate_contract(self.config|change)
   self.assertEqual(validate_contract(self.config),self.config);self.assertEqual(len(fingerprint(self.config)),64)
  def test_bowmaster_casts_soul_arrow_before_basic_bow_attack(self):
   code=program(contract('bowmaster','a'*64))
   self.assertLess(code.index("['BUFF_1']"),code.index("['ATTACK']"));self.assertNotIn('BRANDISH',code)
   self.assertLessEqual(code.count('sdk.pressKeys('),12)
+ def test_legacy_contract_and_fixed_program_bytes_remain_unchanged(self):
+  from full_client_native import PROTOCOL as LEGACY_PROTOCOL
+  expected={
+   'hero':('01d2efa4d4d5768a17cc52824ce4e91fa2eb82f7378214053c587d5d9e790086','2a63ac0c85ccc9d9fddcbde0d7db7a7e4e862f6b0894331a1e1eff08c6dd1cee'),
+   'bowmaster':('f9746c8db2fa69028ce7fb89fcf775b75f24e6b53178146b91206a421b6a6124','85bf6411d14e223122e74dd1c6f4665bb961a8b3532a62d5d4a28eb08e8e7f7b'),
+   'ice_lightning_arch_mage':('8dc03f0185e3059ad577c68d6b35ea716796b4b59defdd717d5ec447142408f0','ad4ba154a75b9b3bed759b58086f00f638d77a933c5e619eedb7e3721f8a29c3')}
+  for class_id,(code_hash,contract_hash) in expected.items():
+   value=contract(class_id,'a'*64,protocol=LEGACY_PROTOCOL)
+   self.assertEqual(validate_contract(value),value)
+   self.assertEqual(hashlib.sha256(program(value).encode()).hexdigest(),code_hash)
+   self.assertEqual(fingerprint(value),contract_hash)
+  self.assertEqual(self.config['id'],'scripted-native-acceptance-v2')
+  self.assertEqual(self.config['capture_duration_policy'],ENCODED_FRAME_POLICY)
  def test_native_sdk_accepts_neutral_keys_but_rejects_hero_labels(self):
   def request(key):return {'type':'rpc','id':1,'method':'pressKeys','args':[[key],100]}
   self.assertEqual(validate_rpc(request('PRIMARY_SKILL'),{'adapter':'full-client','protocol':PROTOCOL})[1]['keys'],['PRIMARY_SKILL'])
@@ -118,16 +149,15 @@ class NativeTests(unittest.TestCase):
    validate_spec({'schema_version':2,'protocol':PROTOCOL,'model':'gpt-6-astra','scenario_fingerprint':'a'*64,
                   'baseline_sha256':'b'*64,'budgets':{}})
  def test_native_capture_policy_is_independent_and_not_accepted_as_api(self):
-  fixture=capture_fixtures.CaptureTests();fixture.setUp();owner=fixture.owner|{'protocol':PROTOCOL,'mode':'script','model':None,'nativeAcceptance':self.config}
-  raw=fixture.value|{'schema_version':2,'capture_duration_policy':dict(CAPTURE_DURATION_POLICY),'first_frame_offset_ms':2,'last_frame_offset_ms':2498}
+  fixture=encoded_native_fixture();owner=fixture.owner|{'protocol':PROTOCOL,'mode':'script','model':None,'nativeAcceptance':self.config}
+  raw=fixture.value
   recording=capture_receipt(raw,owner,fixture.anchor,fixture.clock,fixture.terminal)
-  probe={'duration_ms':2497,'presentation_span_ms':2496,'presentation_extent_ms':2497,'last_packet_duration_ms':1,'frames':150}
-  verify_video_duration(probe,recording,CAPTURE_DURATION_POLICY)
-  for changes in ({'mode':'api'},{'model':'gpt-6-astra'},{'adaptiveProtocol':{'capture_duration_policy':CAPTURE_DURATION_POLICY}}):
+  verify_video_duration(fixture.probe,recording|{'sha256':'d'*64},ENCODED_FRAME_POLICY)
+  for changes in ({'mode':'api'},{'model':'gpt-6-astra'},{'adaptiveProtocol':{'capture_duration_policy':ENCODED_FRAME_POLICY}}):
    with self.assertRaisesRegex(ValueError,'invalid_native_capture_identity'):capture_receipt(raw,owner|changes,fixture.anchor,fixture.clock,fixture.terminal)
  def test_capture_bundle_verifies_native_timeline_without_fake_api_interval(self):
-  fixture=capture_fixtures.CaptureTests();fixture.setUp();owner=fixture.owner|{'protocol':PROTOCOL,'mode':'script','model':None,'nativeAcceptance':self.config}
-  raw=fixture.value|{'schema_version':2,'capture_duration_policy':dict(CAPTURE_DURATION_POLICY),'first_frame_offset_ms':2,'last_frame_offset_ms':2498}
+  fixture=encoded_native_fixture();owner=fixture.owner|{'protocol':PROTOCOL,'mode':'script','model':None,'nativeAcceptance':self.config}
+  raw=fixture.value
   refs={}
   def artifact(name,value):
    path=self.root/(name+'.json');data=json.dumps(value).encode();path.write_bytes(data);refs[name]={'path':path.name,'sha256':hashlib.sha256(data).hexdigest()}
