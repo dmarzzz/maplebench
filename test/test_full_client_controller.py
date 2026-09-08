@@ -65,6 +65,7 @@ assert.equal(limit,45000);
 let closed=false,pollAbort,acknowledgement=null,sessionAck=null,releaseAck=null,relayConnected=true,disconnectedAt=null;
 const clientId='renderer',performance={now:()=>100},observe=()=>({ready:true,capturedAt:Date.now()}),
  Module={MapleBenchRenderedAt:Date.now(),MapleBenchHud:null},renderHeader=()=>{},releaseAll=()=>{};
+let captureFailure=null;
 let capture={clock:{id:'clock',client_received_ms:123456},autoRunId:'trial',recorderStarted:true,frames:17},saving=false,pendingUpload=null;
 let sent;
 const fetch=async(url,options)=>{sent=JSON.parse(options.body);closed=true;return{ok:false};};
@@ -121,6 +122,22 @@ const releaseAll=()=>{};
         result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+dispatch+checks],
             capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'),'Node is required for the browser dispatcher regression')
+    def test_first_interrupt_subcode_retains_keydown_without_accepting_input(self):
+        self.run_dispatch('''
+(async()=>{
+ run.id='new';capture.autoRunId='new';
+ const promise=executeInput({id:'interrupted',runId:'new',keys:['LEFT'],durationMs:30},clock+1000);
+ activeCommand.interrupted=true;activeCommand.failure='interrupted_window_blur';
+ await promise;
+ assert.equal(acknowledgement.ok,false);assert.equal(acknowledgement.failure.keydown_issued,true);
+ assert.equal(acknowledgement.failure.code,'interrupted_window_blur');
+ capture.stopping=true;
+ await executeInput({id:'stopped',runId:'new',keys:['LEFT'],durationMs:30},clock+1000).catch(()=>{});
+ assert.equal(acknowledgement.failure.code,'capture_stopping');assert.equal(acknowledgement.failure.keydown_issued,false);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+''')
 
     @unittest.skipUnless(shutil.which('node'),'Node is required for the browser dispatcher regression')
     def test_native_recipe_dispatches_neutral_physical_keys(self):

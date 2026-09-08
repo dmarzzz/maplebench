@@ -105,6 +105,48 @@ def read_private_file(path, maximum=65536):
         return contents
 
 
+INPUT_FAILURE_CODES=frozenset(('hidden_before_input','stale_before_input','relay_before_input',
+ 'cancelled_before_input','capture_unavailable','capture_stopping','run_mismatch','invalid_input_keys',
+ 'invalid_input_duration','invalid_input_deadline','deadline_before_input','deadline_before_keydown',
+ 'deadline_after_input','interrupted_unknown','interrupted_operator','interrupted_window_blur',
+ 'interrupted_hidden','interrupted_cancelled','interrupted_stale_observation','interrupted_navigation',
+ 'interrupted_relay','interrupted_page_hide','input_failure_unknown'))
+
+def input_failure(value):
+    if (not isinstance(value,dict) or set(value)!={'code','keydown_issued','elapsed_ms','remaining_ms'}
+            or not isinstance(value['code'],str) or value['code'] not in INPUT_FAILURE_CODES
+            or type(value['keydown_issued']) is not bool):raise ControlError('invalid_input_failure')
+    for key,minimum,maximum in (('elapsed_ms',0,350000),('remaining_ms',-350000,3000)):
+        if value[key] is not None and not (type(value[key]) is int and minimum<=value[key]<=maximum):
+            raise ControlError('invalid_input_failure')
+    return dict(value)
+
+
+CAPTURE_FAILURE_CODES = frozenset(['capture_clock_or_duration', 'capture_wall_clock_drift', 'capture_frame_limit', 'capture_dimensions_changed', 'capture_frame_gap', 'duplicate_quantized_timestamp', 'invalid_frame_duration', 'encoder_backpressure', 'encoder_output_timing_mismatch', 'encoder_output_type', 'encoder_missing_requested_keyframe', 'capture_byte_limit', 'encoder_hash_backpressure', 'encoder_configuration_changed', 'vp8_hidden_or_mistyped_frame', 'vp8_keyframe_dimensions', 'encoded_hash_failed', 'encoder_stop_timeout', 'capture_already_stopping', 'incomplete_capture', 'capture_endpoint_gap', 'capture_quantized_endpoint_gap', 'encoder_flush_timeout', 'encoder_frame_count_mismatch', 'ledger_too_large', 'encoder_error', 'capture_duration_limit', 'encoder_configuration_timeout', 'vp8_configuration_unsupported', 'webcodecs_unavailable', 'invalid_canvas', 'invalid_capture_limit', 'capture_not_active', 'capture_already_initialized', 'render_hook_failed', 'encoder_initialization_failed', 'encoder_stop_failed', 'encoder_failure_unknown'])
+
+def capture_failure(value):
+    """Untrusted browser diagnostics are bounded enums/counters, never score proof."""
+    fields={'schema_version','run_id','policy_id','code','clock_origin','elapsed_ms',
+            'first_frame_offset_ms','last_frame_offset_ms','rendered_frames','submitted_frames','encoded_frames'}
+    if (not isinstance(value,dict) or set(value)!=fields or type(value['schema_version']) is not int
+            or value['schema_version']!=1 or not isinstance(value['run_id'],str)
+            or not re.fullmatch('[a-f0-9]{32}',value['run_id'])
+            or value['policy_id']!='post-render-encoded-frame-v1' or not isinstance(value['code'],str) or value['code'] not in CAPTURE_FAILURE_CODES
+            or value['clock_origin'] not in ('encoder_start','capture_request')):
+        raise ControlError('invalid_capture_failure')
+    if not (type(value['elapsed_ms']) is int and 0<=value['elapsed_ms']<=350000):
+        raise ControlError('invalid_capture_failure')
+    for key in ('first_frame_offset_ms','last_frame_offset_ms'):
+        if value[key] is not None and not (type(value[key]) is int and 0<=value[key]<=value['elapsed_ms']):
+            raise ControlError('invalid_capture_failure')
+    if any(type(value[k]) is not int or not 0<=value[k]<=20000
+           for k in ('rendered_frames','submitted_frames','encoded_frames')):
+        raise ControlError('invalid_capture_failure')
+    if not value['encoded_frames']<=value['submitted_frames']<=value['rendered_frames']:
+        raise ControlError('invalid_capture_failure')
+    return dict(value)
+
+
 def write_json(path, value):
     """Readers must see either the previous complete evidence or the new one."""
     write_bytes(path, json.dumps(value, allow_nan=False, indent=2).encode() + b'\n')
@@ -466,6 +508,56 @@ class FullClientBridge:
         return {key:value for key,value in sample.items() if key!='server_received_at_ms'} | {
             'checked_at_ms':round(time.time()*1000)}
 
+    def _capture_failure(self, value, client, received_ms):
+        if value is None:return
+        value=capture_failure(value)
+        # A previous run may still be in one outstanding browser POST. It must
+        # neither overwrite a new run nor block the response carrying its ID.
+        if value['run_id']!=self.run.get('id'):return
+        owner=self.run.get('nativeAcceptance') or self.run.get('adaptiveProtocol') or {}
+        if (self.run.get('client')!=client or owner.get('capture_duration_policy',{}).get('id')
+                !='post-render-encoded-frame-v1'):
+            raise ControlError('capture_failure_owner_mismatch')
+        path=self.output/value['run_id']/'capture-failure.json'
+        if path.is_file():
+            previous=json.loads(read_private_file(path,4096))
+            if previous.get('diagnostic')!=value:raise ControlError('capture_failure_changed')
+        else:
+            receipt={'schema_version':1,'source':'browser_reported_diagnostic_unscored',
+                     'server_received_at_ms':received_ms,'diagnostic':value}
+            raw=(json.dumps(receipt,sort_keys=True,allow_nan=False)+'\n').encode()
+            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+            directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+            try:os.fsync(directory)
+            finally:os.close(directory)
+        self.run['captureFailure']={'code':value['code'],'elapsed_ms':value['elapsed_ms'],
+                                   'rendered_frames':value['rendered_frames']}
+
+    def _input_failure(self, ack, valid_frame, enough_time, now, received_ms, client):
+        before_deadline=now<self.pending['deadline']
+        if ack['ok'] and valid_frame and enough_time and before_deadline:return
+        ident=self.run.get('id')
+        if (not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident)
+                or self.pending.get('runId')!=ident or self.run.get('client')!=client
+                or not (self.output/ident).is_dir()):return
+        path=self.output/ident/'input-failure.json'
+        if os.path.lexists(path):return # Preserve the first command failure, never replace it.
+        diagnostic=ack.get('failure')
+        bounded_ms=lambda v:round(v*1000) if -350<=v<=350 else None
+        value={'schema_version':1,'source':'browser_and_server_input_diagnostics_unscored',
+               'run_id':self.run['id'],'command_id':self.pending['id'],'server_received_at_ms':received_ms,
+               'client':diagnostic,'server':{'client_ack_ok':ack['ok'],'valid_frame':valid_frame,
+                 'enough_hold_time':enough_time,'before_deadline':before_deadline,
+                 'elapsed_since_dispatch_ms':bounded_ms(now-self.pending['sentAt']),
+                 'remaining_ms':bounded_ms(self.pending['deadline']-now)}}
+        raw=(json.dumps(value,sort_keys=True,allow_nan=False)+'\n').encode()
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+        directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:os.fsync(directory)
+        finally:os.close(directory)
+
     def frame(self, body):
         if not isinstance(body, dict):
             raise ValueError('Invalid client frame')
@@ -482,6 +574,9 @@ class FullClientBridge:
                 or not isinstance(ack.get('id'), str) or not re.fullmatch('[a-f0-9]{32}', ack['id'])
                 or type(ack.get('ok')) is not bool):
             raise ControlError('invalid_input_acknowledgement')
+        if ack is not None and 'failure' in ack:
+            if ack['ok']:raise ControlError('invalid_input_failure')
+            input_failure(ack['failure'])
         with self.lock:
             now = time.monotonic()
             server_received_ms=round(time.time()*1000)
@@ -490,6 +585,7 @@ class FullClientBridge:
                 raise ControlError('client_already_connected')
             self.client = client
             run_id = self.run.get('id')
+            self._capture_failure(body.get('captureFailure'),client,server_received_ms)
             # A restored terminal record is historical evidence, not a live
             # capture-clock session. Ordinary login must work before start()
             # creates the next run and its new recorder/clock handshake.
@@ -567,10 +663,12 @@ class FullClientBridge:
                 self.run['captureTerminal']={'id':uuid.uuid4().hex,'serverIssuedAtMs':server_received_ms}
                 write_json(self.output/self.run['id']/'capture-terminal.json',self.run['captureTerminal'])
             if (self.pending and ack is not None and ack['id'] == self.pending['id']
-                    and self.pending.get('sent') and now < self.pending['deadline']):
+                    and self.pending.get('sent')):
                 enough_time = now-self.pending['sentAt'] >= self.pending['durationMs']/1000 - 0.001
-                self.pending['ack'] = {'id':ack['id'], 'ok':ack['ok'] and valid_frame and enough_time}
-                self.lock.notify_all()
+                self._input_failure(ack,valid_frame,enough_time,now,server_received_ms,client)
+                if now < self.pending['deadline']:
+                    self.pending['ack'] = {'id':ack['id'], 'ok':ack['ok'] and valid_frame and enough_time}
+                    self.lock.notify_all()
             if body.get('releaseAck') == self.run.get('id') and self._cancelled(self.run.get('id')):
                 self.release_acks.add(self.run['id'])
                 if self.run['id'] not in self.cancel_events:
