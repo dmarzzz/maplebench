@@ -2,7 +2,7 @@
   'use strict';
   const $=id=>document.getElementById(id), el=(tag,text)=>{const node=document.createElement(tag);if(text!=null)node.textContent=String(text);return node;};
   const phases=[['restore_baseline','Restore'],['start_server','Start server'],['login','Login'],['run_controller','Play'],['disconnect','Logout'],['collect_final','Verify XP'],['cleanup','Finish']];
-  const labels={running:'In progress',requesting:'Awaiting API',completed:'Completed',failed:'Failed',interrupted:'Interrupted',recovering:'Recovering',recovered:'Recovered; invalid run',unavailable:'Evidence unavailable',idle:'Idle'};
+  const labels={not_started:'Not started',running:'In progress',requesting:'Awaiting API',completed:'Completed',failed:'Failed',interrupted:'Interrupted',recovering:'Recovering',recovered:'Recovered; invalid run',unavailable:'Evidence unavailable',idle:'Idle'};
   let snapshot=null,closed=false,timer;
   const format=value=>Number.isFinite(value)?value.toLocaleString('en-US'):'—';
   const xp=value=>Number.isFinite(value)?`${value>0?'+':''}${format(value)}`:'—';
@@ -102,7 +102,8 @@
   }
   function renderLive(){
     const rows=snapshot.attempts;
-    const row=rows.find(item=>['running','recovering','requesting'].includes(item.status))||rows[0];
+    const row=rows.find(item=>['running','recovering','requesting'].includes(item.status))
+      ||rows.find(item=>item.id===snapshot.featured_run_id)||rows[0];
     if(!row)return;
     const liveBadge=badge(row.status);
     if(row.status==='completed')liveBadge.textContent='Completed · saved result';
@@ -113,6 +114,7 @@
     const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
     const expectsRenderer=['running','requesting'].includes(row.status)&&['login','run_controller'].includes(row.phase);
     $('live-description').textContent=row.failure_code?`${failedPhase}: ${row.failure_code.replaceAll('_',' ')}.${row.api_response_saved?' The API response was saved; this attempt has no verified persisted score.':''}`
+      :row.status==='not_started'?'This model is planned. No API request has started for this attempt.'
       :row.status==='completed'?'The latest saved run completed. Every group of frozen inputs appears below.'
       :`${phase}${expectsRenderer&&row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
     const current=phases.findIndex(([key])=>key===row.phase);$('phases').replaceChildren();
@@ -159,10 +161,13 @@
       if(row.kind==='integration')state.append(el('small','Unranked integration'));
       scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');inputDetails(cell(tr,null,'input-summary'),row);publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
     }
-    $('scope').textContent=snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
+    $('scope').textContent=snapshot.cohort
+      ?`${snapshot.cohort.verified} of ${snapshot.cohort.planned} planned models have verified results. ${snapshot.cohort.archive_replacement?'This completed cohort replaces the public test archive.':'Cohort progress; the existing public archive is retained.'} No runs start from this page.`
+      :snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
   }
   function freshness(){
     if(!snapshot)return;
+    if(snapshot.cohort&&snapshot.generated_at_ms===0){$('connection').textContent='Four-model cohort · awaiting the first attempt';return;}
     const age=Date.now()-snapshot.generated_at_ms,active=snapshot.attempts.some(row=>['running','requesting','recovering'].includes(row.status));
     const stale=age>10000||age< -1000||snapshot.live_status_available===false;
     $('connection').className=active&&stale?'stale':'';
