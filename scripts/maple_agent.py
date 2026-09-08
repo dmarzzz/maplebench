@@ -28,6 +28,7 @@ MAX_PROGRAM_OUTPUT = 131072
 # Leave time for the next relay poll and a post-hold acknowledgement. This is
 # an admission reserve, never permission to extend the program deadline.
 PRESS_KEYS_ACK_SECONDS = 0.5
+PRESS_KEYS_ENDPOINT_SECONDS = 3
 SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'properties': {'note': {'type': 'string'}, 'code': {'type': 'string'}},
@@ -367,12 +368,18 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                     if method not in ('observe', 'wait') and action_attempts >= max_actions:
                         outcome = {'reason': 'action_limit', 'error': None}
                         finished = True; break
+                    if cancel_event is not None and cancel_event.is_set():
+                        outcome = {'reason': 'replaced', 'error': None}
+                        finished = True; break
                     left = end - time.monotonic()
                     if left <= 0:
                         raise TimeoutError('Program deadline reached')
-                    if method == 'pressKeys' and left < action['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS:
-                        # Do not shorten or dispatch the model's hold. Preserve
-                        # the fixed budget with a passive, cancellable tail.
+                    if method == 'pressKeys' and left < max(PRESS_KEYS_ENDPOINT_SECONDS,
+                            action['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS):
+                        # Reserve the complete endpoint interval before sending.
+                        # A shorter interval can expire while the relay waits
+                        # for a poll that still fits its hold/ACK admission rule.
+                        # Keep the original program deadline and model hold.
                         cancelled = cancel_event.wait(left) if cancel_event is not None else time.sleep(left)
                         outcome = {'reason': 'replaced' if cancelled else 'time_limit', 'error': None}
                         finished = True; break
@@ -393,7 +400,8 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                         try:
                             result = (request_fn(base_url + '/v1/observe', timeout=min(3, left))
                                       if method == 'observe' else
-                                      request_fn(base_url + '/v1/action', action, timeout=min(3, left)))
+                                      request_fn(base_url + '/v1/action', action,
+                                          timeout=PRESS_KEYS_ENDPOINT_SECONDS if method == 'pressKeys' else min(3, left)))
                         except Exception as error:
                             safe_error = 'endpoint_timeout' if isinstance(error, TimeoutError) else 'endpoint_error'
                             record({'kind': 'sdk_error', 'method': method, 'args': message['args'],

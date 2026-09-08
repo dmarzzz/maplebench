@@ -92,7 +92,8 @@ class ExecutorAcknowledgementTest(unittest.TestCase):
     """Drive the trusted executor protocol without launching a process."""
     def execute_messages(self, messages, endpoint=None, *, program_seconds=10,
                          max_actions=10, cancelled_wait=False, write=None, docker_binding=None,
-                         construction_error=None, launch_error=None, cleanup_error=None):
+                         construction_error=None, launch_error=None, cleanup_error=None,
+                         validation_delay=0, cancel_after_validation=False, deadline_seconds=None):
         clock=[100.0]
         process=Mock()
         process.poll.return_value=None
@@ -108,6 +109,12 @@ class ExecutorAcknowledgementTest(unittest.TestCase):
         event=Mock()
         event.is_set.return_value=False
         event.wait.side_effect=wait
+        validate=agent.validate_rpc
+        def validate_message(*args):
+            value=validate(*args)
+            clock[0]+=validation_delay
+            if cancel_after_validation:event.is_set.return_value=True
+            return value
         packets=b''.join(json.dumps(value).encode()+b'\n' for value in messages+[{'type':'done','ok':True}])
         original = agent.docker_command
         with patch.object(agent,'docker_command',side_effect=construction_error,
@@ -118,10 +125,11 @@ class ExecutorAcknowledgementTest(unittest.TestCase):
              patch.object(agent.selectors,'DefaultSelector',return_value=selector), \
              patch.object(agent.os,'set_blocking'), patch.object(agent.os,'read',return_value=packets), \
              patch.object(agent,'_write_packet',side_effect=write), \
+             patch.object(agent,'validate_rpc',side_effect=validate_message), \
              patch.object(agent.time,'monotonic',side_effect=lambda:clock[0]):
             try:
                 result=agent.execute_program('await sdk.observe();',SCENARIO|{'adapter':'full-client'},
-                    'http://127.0.0.1:8790',deadline=100+program_seconds+2,program_seconds=program_seconds,
+                    'http://127.0.0.1:8790',deadline=100+(program_seconds+2 if deadline_seconds is None else deadline_seconds),program_seconds=program_seconds,
                     max_actions=max_actions,request_fn=request,cancel_event=event,docker_binding=docker_binding)
             finally:
                 self.launch_call, self.cleanup_call = launch.call_args, cleanup.call_args
@@ -227,6 +235,53 @@ class ExecutorAcknowledgementTest(unittest.TestCase):
                 self.assertEqual(result['steps'],[])
                 self.assertEqual(calls,[])
                 self.assertEqual(ended,100 if cancelled else 101.9)
+
+    def test_short_keyboard_endpoint_budget_never_dispatches_or_records_uncertainty(self):
+        for remaining in (0.7,2.999):
+            for cancelled in (False,True):
+                with self.subTest(remaining=remaining,cancelled=cancelled):
+                    result,calls,ended=self.execute_messages([rpc('pressKeys',[['LEFT'],60])],
+                        program_seconds=remaining,cancelled_wait=cancelled)
+                    self.assertEqual(result['reason'],'replaced' if cancelled else 'time_limit')
+                    self.assertEqual((result['actions'],result['actionAttempts'],result['rpcRequests']),(0,0,1))
+                    self.assertEqual(result['steps'],[])
+                    self.assertEqual(calls,[])
+                    self.assertEqual(ended,100 if cancelled else 100+remaining)
+
+    def test_full_keyboard_endpoint_budget_preserves_hold_and_timeout(self):
+        for remaining in (3,3.001):
+            for hold in (60,1500):
+                with self.subTest(remaining=remaining,hold=hold):
+                    result,calls,_=self.execute_messages([rpc('pressKeys',[['LEFT'],hold])],program_seconds=remaining)
+                    self.assertEqual(result['reason'],'program_complete')
+                    self.assertEqual((result['actions'],result['actionAttempts'],result['rpcRequests']),(1,1,1))
+                    self.assertEqual(calls[0][1]['durationMs'],hold)
+                    self.assertEqual(calls[0][2],3)
+
+    def test_keyboard_admission_rechecks_clock_after_rpc_validation(self):
+        result,calls,ended=self.execute_messages([rpc('pressKeys',[['LEFT'],60])],
+            program_seconds=3.2,validation_delay=0.3)
+        self.assertEqual(result['reason'],'time_limit')
+        self.assertEqual((result['actions'],result['actionAttempts'],result['rpcRequests']),(0,0,1))
+        self.assertEqual(result['steps'],[])
+        self.assertEqual(calls,[])
+        self.assertEqual(ended,103.2)
+
+    def test_keyboard_admission_rechecks_cancellation_after_rpc_validation(self):
+        result,calls,_=self.execute_messages([rpc('pressKeys',[['LEFT'],60])],cancel_after_validation=True)
+        self.assertEqual(result['reason'],'replaced')
+        self.assertEqual((result['actions'],result['actionAttempts'],result['rpcRequests']),(0,0,1))
+        self.assertEqual(result['steps'],[])
+        self.assertEqual(calls,[])
+
+    def test_keyboard_passive_tail_respects_outer_deadline(self):
+        result,calls,ended=self.execute_messages([rpc('pressKeys',[['LEFT'],60])],
+            program_seconds=20,deadline_seconds=0.7)
+        self.assertEqual(result['reason'],'time_limit')
+        self.assertEqual(result['actionAttempts'],0)
+        self.assertEqual(result['steps'],[])
+        self.assertEqual(calls,[])
+        self.assertEqual(ended,100.7)
 
 
 class ControllerBudgetTest(unittest.TestCase):
@@ -470,10 +525,13 @@ class DockerIsolationTest(unittest.TestCase):
                     raise TimeoutError('private test endpoint detail')
                 code=('await sdk.pressKeys(["LEFT"],100);' if mode=='endpoint_timeout' else
                       'await sdk.wait(1700); await sdk.pressKeys(["LEFT"],1500);')
+                # The timeout case must admit a full three-second endpoint
+                # interval after Docker startup; the other case must not.
+                program_seconds=6 if mode=='endpoint_timeout' else 3
                 start=time.monotonic()
                 result=agent.execute_program(code,{'adapter':'full-client'},'http://127.0.0.1:8790',
-                    deadline=start+5,program_seconds=3,request_fn=endpoint)
-                self.assertLess(time.monotonic()-start,7)
+                    deadline=start+program_seconds+2,program_seconds=program_seconds,request_fn=endpoint)
+                self.assertLess(time.monotonic()-start,program_seconds+4)
                 self.assertEqual(result['actions'],0)
                 if mode=='endpoint_timeout':
                     self.assertEqual(result['reason'],'infrastructure_error',result)
