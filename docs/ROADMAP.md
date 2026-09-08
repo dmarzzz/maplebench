@@ -70,8 +70,15 @@ That acceptance used no evaluated model. Rendering uses Chrome with SwiftShader
 on four dedicated virtual CPUs; the short acceptance sample produced roughly
 ten fresh rendered observations per second.
 
-A future opt-in post-render timing contract is implemented and tested, but needs
-fresh native capture acceptance. It cannot reclassify the failed Terra recording.
+The replacement explicit-frame recording path is implemented and passes isolated
+browser encode/decode tests, but has not passed loaded-game native acceptance.
+Two successive checks hit an eight-frame encoder backlog after roughly 2.4
+seconds, with 11 submitted frames and only three encoded outputs. Both checks
+closed without a publishable recording and restored the baseline. Changing the
+VP8 latency mode did not resolve that loaded-game failure. The next acceptance
+must demonstrate the complete capture alongside jump, combat and ordinary save;
+unit tests or encoder-only probes cannot close this gate. These checks used no
+model API calls and cannot reclassify the failed Terra recording.
 Bowmaster and Ice/Lightning fixtures are prepared; native acceptance and their
 model cohorts remain pending. Native 15-second XP windows have an independently
 built candidate, but are not deployed or represented as completed research runs.
