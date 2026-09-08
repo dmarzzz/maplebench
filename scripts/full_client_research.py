@@ -17,7 +17,7 @@ PROTOCOLS = {
         'score_key':None,'verifier':None,'status':'Metadata incomplete'},
 }
 CLASSES = {'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage',
-           'shadower':'Shadower','bishop':'Bishop','undeclared':'Class undeclared'}
+           'night_lord':'Night Lord','shadower':'Shadower','bishop':'Bishop','undeclared':'Class undeclared'}
 TASKS = {'basic_combat':'Basic combat','sustained_hunting':'Sustained hunting',
          'navigation':'Navigation','party_objective':'Party objective','undeclared':'Task undeclared'}
 
