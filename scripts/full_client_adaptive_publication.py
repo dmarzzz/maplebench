@@ -76,7 +76,7 @@ def verified_adaptive_score(reader,folder,journal):
 
 def public_cycles(result,checked):
     trace=result['adaptive'];cycles=[]
-    allowed_status={'executed','invalid_program','budget_rejected','response_saved','not_executed','completed'}
+    allowed_status={'executed','invalid_program','budget_rejected','window_closed','response_saved','not_executed','completed'}
     allowed_reason={'completed','program_complete','program_error','program_timeout','output_limit',
                     'time_limit','action_limit','rpc_limit','death'}
     for cycle in trace['cycles']:
@@ -87,7 +87,7 @@ def public_cycles(result,checked):
              'status':cycle.get('status') if cycle.get('status') in allowed_status else 'details_unavailable',
              'api_outcome':cycle.get('api_outcome') if cycle.get('api_outcome') in ('confirmed','not_started') else 'unknown',
              'timing':{k:v for k,v in mapping(cycle.get('timing')).items()
-                       if k in ('observed_ms','api_started_ms','api_ended_ms','program_started_ms','program_ended_ms')
+                       if k in ('observed_ms','window_closed_ms','api_started_ms','api_ended_ms','program_started_ms','program_ended_ms')
                        and integer(v,305000) is not None},
              'usage':{k:v for k,v in mapping(cycle.get('usage')).items()
                       if k in ('input_tokens','output_tokens','total_tokens') and integer(v,240000) is not None},
@@ -102,12 +102,19 @@ def public_cycles(result,checked):
             if (k in ('x','y','hp','maxHp','mp','maxMp','exp','level') and number(v,-2**31,2**53-1))
                 or (k=='alive' and type(v) is bool)}
         cycles.append(row)
-    return {'verification':'all_cycle_receipts_rechecked','cycles':cycles,
+    public={'verification':'all_cycle_receipts_rechecked','cycles':cycles,
         'counters':checked['counters'],'wall_budget_ms':300000,'wall_elapsed_ms':checked['wall_elapsed_ms'],
         'api_ms':checked['api_ms'],'end_reason':trace['reason'],
         'full_wall_budget_used':checked['wall_elapsed_ms']==300000,
         'authoritative_peak_xp_per_minute':None,'ranked':False,
         'class_profile':{k:trace['limits']['profile'][k] for k in ('id','class_name','level','skill_keys')}}
+    if trace['limits'].get('horizon_policy'):
+        public['horizon_policy']=trace['limits']['horizon_policy']
+        wait=trace.get('horizon_wait')
+        public['horizon_wait']=None if wait is None else {
+            'reason':wait['reason'],'started_ms':wait['started_ms'],'ended_ms':wait['ended_ms'],
+            'observation_count':len(wait['samples'])}
+    return public
 
 
 def playback_cue(result,recording,actions):

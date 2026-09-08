@@ -20,6 +20,12 @@ DEFAULT_PROTOCOL = {'schema_version':1,'id':PROTOCOL,'wall_seconds':300,'program
     'profile':{'id':'hero-180','class_name':'Hero','level':180,
                'skill_keys':{'PRIMARY_SKILL':'Brandish','SECONDARY_SKILL':'Combo Attack','BUFF_1':'Booster','BUFF_2':'Maple Warrior'}}}
 
+# Optional policy: absent means the original pilot's exact prompt and stop behavior.
+FULL_HORIZON_POLICY = {'id':'full-horizon-reserve-v1','request_timeout_seconds':50,
+    'settlement_reserve_seconds':5,'passive_observation_interval_ms':1000}
+PASSIVE_STOP_REASONS = frozenset(('request_window_closed','api_request_limit',
+    'action_limit','sdk_request_limit','token_reservation_limit'))
+
 class AdaptiveError(ValueError):
     """Only fixed credential-free codes cross the controller boundary."""
 
@@ -30,7 +36,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 def validate_protocol(value):
-    require(isinstance(value,dict) and set(value)==set(DEFAULT_PROTOCOL),'invalid_adaptive_protocol')
+    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy'},'invalid_adaptive_protocol')
     require(value.get('schema_version')==1 and type(value['schema_version']) is int
             and value.get('id')==PROTOCOL and type(value.get('wall_seconds')) is int
             and value['wall_seconds']==300,'invalid_adaptive_protocol')
@@ -38,6 +44,8 @@ def validate_protocol(value):
             'max_total_tokens':(1024,240000),'max_actions':(1,2400),'max_sdk_requests':(1,10000),
             'max_evidence_bytes':(65536,4*1024*1024)}
     require(all(type(value.get(k)) is int and a<=value[k]<=b for k,(a,b) in bounds.items()),'invalid_adaptive_limits')
+    if 'horizon_policy' in value:
+        require(digest(value['horizon_policy'])==digest(FULL_HORIZON_POLICY),'invalid_adaptive_horizon_policy')
     profile=value.get('profile')
     require(isinstance(profile,dict) and set(profile)=={'id','class_name','level','skill_keys'}
             and isinstance(profile['id'],str) and re.fullmatch('[a-z0-9][a-z0-9-]{0,63}',profile['id'])
@@ -50,7 +58,7 @@ def validate_protocol(value):
 
 def prompt(protocol):
     p=validate_protocol(protocol)
-    return f'''You control the real MapleStory v83 full client with this frozen profile:
+    text = f'''You control the real MapleStory v83 full client with this frozen profile:
 {json.dumps(p['profile'],sort_keys=True)}
 Discover and improve a gameplay strategy through repeated observation and code.
 This is one {p['wall_seconds']}-second wall-clock pilot, including model latency,
@@ -76,11 +84,20 @@ variables do not survive between responses. The next input contains your recent
 programs and their actual outcomes, so you can revise your own strategy.
 Return JSON {{note,code}} with a short intention, not private reasoning.
 '''
+    if 'horizon_policy' in p:
+        reserve=50+p['program_seconds']+5
+        text+=f'''Frozen full-horizon policy: a new request requires at least {reserve} seconds
+remaining (50 seconds for inference, {p['program_seconds']} for execution, 5 for settlement).
+Once that reserve or a confirmed aggregate budget is exhausted, the harness only
+observes the live world until the 300-second deadline. It does not press keys or
+call the model during that wait. Death, cancellation and failures still stop early.
+'''
+    return text
 
 def run_adaptive(*, run_id, model, protocol, initial, observe, request_api,
                  execute, persist_json, persist_bytes, cancel_check,
                  on_phase=lambda **_:None, on_step=lambda _:None,
-                 clock=time.monotonic, wall_clock=time.time):
+                 clock=time.monotonic, wall_clock=time.time, sleep=time.sleep):
     """Run serial observation/API/program cycles under one monotonic deadline.
 
 Injected I/O is the existing trusted bridge. request_api accepts provider URL,
@@ -93,6 +110,8 @@ The returned trace is not a persisted-XP or publication-validation receipt.
     started=clock();started_wall=round(wall_clock()*1000);deadline=started+protocol['wall_seconds']
     on_phase(phase='preparing',cycle=0,deadline=deadline,counters={})
     instructions=prompt(protocol)
+    horizon=protocol.get('horizon_policy')
+    reserve=50+protocol['program_seconds']+5 if horizon else None
     counters={k:0 for k in ('api_requests_started','api_responses_confirmed','reserved_tokens','actual_input_tokens',
         'actual_output_tokens','actual_total_tokens','actions','action_attempts','sdk_requests')}
     trace={'schema_version':1,'protocol':PROTOCOL,'protocol_sha256':digest(protocol),'run_id':run_id,
@@ -102,6 +121,7 @@ The returned trace is not a persisted-XP or publication-validation receipt.
         'counters':counters,'cycles':[],
         'scoring':{'persisted_net_xp':None,'authoritative_peak_xp_per_minute':None,
                    'authoritative_window_status':'not_collected_by_controller'}}
+    if horizon:trace['horizon_wait']=None
     trace['instructions']=persist_bytes('adaptive-prompt.txt',instructions.encode())
     recent=[];steps=[];final=initial;error=None;receipt_bytes=0;response_ids=set()
     def offset():return round((clock()-started)*1000)
@@ -115,6 +135,45 @@ The returned trace is not a persisted-XP or publication-validation receipt.
         require(isinstance(value,dict) and value.get('ready') is True and isinstance(value.get('character'),dict),
                 'adaptive_observation_unavailable')
         return value
+    def finish(reason):
+        nonlocal final
+        if not horizon or reason not in PASSIVE_STOP_REASONS:
+            stop(reason);return
+        wait={'reason':reason,'started_ms':offset(),'ended_ms':None,
+              'counters':dict(counters),'samples':[]}
+        trace['horizon_wait']=wait
+        on_phase(phase='waiting_for_deadline',cycle=len(trace['cycles'])-1,
+                 deadline=deadline,counters=dict(counters))
+        save()
+        try:
+            while clock()<deadline:
+                cancel_check();remaining=deadline-clock()
+                # Never shorten an observation timeout against the normal end.
+                # The final <=4s is a cancellable passive wait, with no input RPC.
+                if remaining>4:
+                    value=observe(3)
+                    require(isinstance(value,dict) and value.get('ready') is True
+                        and isinstance(value.get('character'),dict)
+                        and type(value['character'].get('alive')) is bool
+                        and all(type(value.get(k)) in (int,float) and math.isfinite(value[k])
+                                and 0<=value[k]<1500 for k in ('ageMs','renderAgeMs')),
+                        'adaptive_observation_unavailable')
+                    final=value;character=value['character']
+                    compact={k:v for k,v in character.items()
+                        if k in ('x','y','hp','maxHp','mp','maxMp','exp','level','mapId','alive')
+                        and (type(v) is bool and k=='alive' or type(v) in (int,float) and math.isfinite(v))}
+                    require(len(wait['samples'])<301,'adaptive_passive_sample_limit')
+                    wait['samples'].append({'observed_ms':offset(),'ageMs':value['ageMs'],
+                        'renderAgeMs':value['renderAgeMs'],'character':compact})
+                    save()
+                    if character.get('alive') is False:
+                        stop('death');return
+                remaining=deadline-clock()
+                if remaining>0:sleep(min(horizon['passive_observation_interval_ms']/1000,remaining))
+            stop(reason)
+        finally:
+            wait['ended_ms']=offset();save()
+    def window_open():return not horizon or deadline-clock()>=reserve
     def usage_counts(meta):
         usage=meta.get('usage')
         require(isinstance(usage,dict) and all(type(usage.get(k)) is int and usage[k]>=0
@@ -126,14 +185,16 @@ The returned trace is not a persisted-XP or publication-validation receipt.
         for index in range(protocol['max_api_requests']):
             cancel_check()
             if clock()>=deadline:stop('wall_time_limit');break
-            if counters['action_attempts']>=protocol['max_actions']:stop('action_limit');break
-            if counters['sdk_requests']>=protocol['max_sdk_requests']:stop('sdk_request_limit');break
+            if counters['action_attempts']>=protocol['max_actions']:finish('action_limit');break
+            if counters['sdk_requests']>=protocol['max_sdk_requests']:finish('sdk_request_limit');break
+            if horizon and not window_open():finish('request_window_closed');break
             current=initial if index==0 else bounded_observe()
             final=current
             require(isinstance(current,dict) and current.get('ready') is True and isinstance(current.get('character'),dict),
                     'adaptive_observation_unavailable')
             require(current['character'].get('level')==protocol['profile']['level'],'adaptive_profile_level_mismatch')
             if current['character'].get('alive') is False:stop('death');break
+            if not window_open():finish('request_window_closed');break
             cycle={'index':index,'requested_model':model,'returned_model':None,'status':'preparing',
                 'observation':current,'timing':{'observed_ms':offset()},'api_outcome':'not_started',
                 'request':None,'response':None,'program':None,'execution':None,'usage':None}
@@ -149,6 +210,12 @@ The returned trace is not a persisted-XP or publication-validation receipt.
                 nonlocal submitted
                 require(not submitted,'adaptive_cycle_replay_refused')
                 cancel_check();require(clock()<deadline,'adaptive_wall_deadline')
+                def require_window():
+                    if not window_open():
+                        cycle.update(status='window_closed',api_outcome='not_started')
+                        cycle['timing']['window_closed_ms']=offset();save()
+                        raise AdaptiveError('adaptive_request_window_closed')
+                require_window()
                 body=payload|{'metadata':{'maplebench_run_id':run_id,'maplebench_cycle_index':str(index)}}
                 reservation=len(json.dumps(body,ensure_ascii=False).encode())+1024+protocol['max_output_tokens']
                 # Reserve before dispatch; unused reservation is not recycled.
@@ -158,24 +225,43 @@ The returned trace is not a persisted-XP or publication-validation receipt.
                     raise AdaptiveError('adaptive_token_reservation_limit')
                 cycle['request']=persist_json(prefix+'api-request.json',body)
                 cancel_check();require(clock()<deadline,'adaptive_wall_deadline')
+                if horizon:
+                    # Readiness and artifact persistence may consume the reserve.
+                    # Check again before marking or dispatching any provider call.
+                    on_phase(phase='requesting',cycle=index,deadline=deadline,counters=dict(counters))
+                    require_window()
                 submitted=True;counters['api_requests_started']+=1;counters['reserved_tokens']+=reservation
                 cycle.update(status='requesting',api_outcome='uncertain',token_reservation=reservation)
                 save()
-                on_phase(phase='requesting',cycle=index,deadline=deadline,counters=dict(counters))
-                cycle['timing']['api_started_ms']=offset();save()
+                if not horizon:on_phase(phase='requesting',cycle=index,deadline=deadline,counters=dict(counters))
+                cycle['timing']['api_started_ms']=offset()
+                if horizon:cycle['request_timeout_seconds']=50
+                save()
+                if horizon:
+                    # A slow durable write can also close the reserve. No provider
+                    # callback has run yet, so reverse only this unsent reservation.
+                    if not window_open():
+                        counters['api_requests_started']-=1;counters['reserved_tokens']-=reservation
+                        cycle['timing'].pop('api_started_ms',None)
+                        cycle.pop('request_timeout_seconds',None)
+                        require_window()
+                    cycle['timing']['api_started_ms']=offset()
                 remaining=deadline-clock();require(remaining>0,'adaptive_wall_deadline')
-                response=request_api(url,body,min(timeout,remaining))
+                response=request_api(url,body,50 if horizon else min(timeout,remaining))
                 cycle['timing']['api_ended_ms']=offset()
                 cycle['response']=persist_json(prefix+'api-response.json',response)
                 cycle['api_outcome']='receipt_saved';save()
                 require(isinstance(response,dict) and response.get('metadata')==body['metadata'],
                         'adaptive_api_cycle_identity_mismatch')
+                if horizon:require(cycle['timing']['api_ended_ms']-cycle['timing']['api_started_ms']<=55000,
+                                   'adaptive_request_timeout_overrun')
                 return response
             try:
                 choice,meta=model_decision(model,instructions,value,None,output_tokens=protocol['max_output_tokens'],
-                    timeout=min(50,max(0.001,deadline-clock())),request_fn=provider)
+                    timeout=50 if horizon else min(50,max(0.001,deadline-clock())),request_fn=provider)
             except AdaptiveError as failure:
-                if str(failure)=='adaptive_token_reservation_limit':stop('token_reservation_limit');break
+                if str(failure)=='adaptive_token_reservation_limit':finish('token_reservation_limit');break
+                if str(failure)=='adaptive_request_window_closed':finish('request_window_closed');break
                 raise
             response_id=meta.get('id')
             require(isinstance(response_id,str) and 0<len(response_id)<=200 and response_id not in response_ids,
@@ -226,13 +312,13 @@ The returned trace is not a persisted-XP or publication-validation receipt.
             reason=execution.get('reason')
             if reason in ('infrastructure_error','replaced'):raise AdaptiveError('adaptive_execution_unavailable')
             if reason=='death':stop('death');break
-            if counters['action_attempts']>=protocol['max_actions']:stop('action_limit');break
-            if counters['sdk_requests']>=protocol['max_sdk_requests']:stop('sdk_request_limit');break
+            if counters['action_attempts']>=protocol['max_actions']:finish('action_limit');break
+            if counters['sdk_requests']>=protocol['max_sdk_requests']:finish('sdk_request_limit');break
             if clock()>=deadline:stop('wall_time_limit');break
             recent.append({'note':choice['note'][:240],'code':code,'execution':{k:execution.get(k)
                 for k in ('reason','error','actions','actionAttempts','rpcRequests')},
                 'recent_receipts':cycle_steps[-5:]})
-        else:stop('api_request_limit')
+        else:finish('api_request_limit')
     except Exception as failure:
         error=str(failure) if isinstance(failure,AdaptiveError) else type(failure).__name__
         stop(error,True)
