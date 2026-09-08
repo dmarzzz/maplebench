@@ -35,48 +35,46 @@ run per model cannot establish the research product.
 | Attribution | Exact requested/returned model, program, action receipts and video hashes | The same standard across a fresh complete group |
 | Public experience | Vercel site and working replay with the opening API wait skipped | Automatic public updates, curated cohort page and clear phases |
 | Comparison | Historical trials from Astra, Sol, Terra and Luna | Fresh complete group on the corrected contract; balanced repetitions |
-| Agent behavior | One model response generates a roughly 22-second program; the program can observe/react | Model replanning after execution feedback over minutes |
+| Agent behavior | Repeated model replanning and full five-minute observation horizons | More useful action time within a frozen budget; repeated completion |
 | Task coverage | Accepted full-client Hero hunting fixture | Ranged, magic, navigation and progression fixtures |
 | Operations | Finite coordinator, recovery and lifecycle components have tests and separate live acceptances | Repeated complete groups and composed restoration without ad hoc repair |
 
-The public snapshot currently contains **11 attempt summaries and eight clips**.
-The latest verified success is Astra `4149dc7596194dc49067a9ed3af9e3d7`:
-34 acknowledged inputs, **+9,250 persisted net XP**, alive at logout. Its entire
-attempt took 237.774 seconds, including 12.320 seconds of API time and 20.838
-seconds of program execution. This is one observation of operational overhead,
-not an estimate for all historical work. See the
-[acceptance evidence](FULL_CLIENT_ACCEPTANCE.md#completed-trial-and-normal-service-restoration)
-and [public results snapshot](../examples/full-client-benchmark/results.json).
+## Current five-minute pilot evidence
 
-The next attempted group stopped during its first trial's final collection:
-an old game URL reopened after logout, and collection found the account online.
-That attempt was recovered; it has no accepted persisted score. The subsequent
-three entries were never submitted. A targeted stale-navigation fix is tested
-in source but is not deployed at this snapshot. No fresh group has started.
+The public site now contains a protocol-separated Hero pilot alongside the
+preserved historical archive. Astra `d5ae529a7b574f399a37e899472bb0a3`
+completed the 300-second horizon with 98 acknowledged actions and **+18,250
+persisted XP**. Sol `565e2442ed754420913490f54243f623` completed the same
+horizon with 128 acknowledged actions and **+27,500 persisted XP**. Both were
+alive at logout, and their hashed recordings are publicly playable from the
+first acknowledged input. These are unranked pilot observations, not repeated
+research estimates or native peak-XP scores.
 
-The older four-model results remain historical evidence. Earlier Sol/Luna
-programs declared a function without invoking it; Terra's persisted XP was
-verified while its incomplete action evidence blocked full publication.
-Those outcomes do not establish relative model quality. The current public
-site is a saved snapshot, not a continuously running experiment.
+Both controllers replanned repeatedly, then exhausted their conservative token
+reservation allowance and observed without issuing inputs for the remainder.
+The complete recording preserves those waits. The UI identifies observation-only
+periods; a five-minute horizon does not mean five minutes of continuous action.
 
-## September 8 implementation update
+Terra `33da8a6c16bf468295844e76cf211c6b` failed final recording validation:
+its decoded duration differed from the recorder callback interval by 117ms,
+exceeding the frozen 100ms guard. It was recovered without another model request
+and remains unscored. Luna `62f1ed7539904033812792ae39a26b97` executed ten
+acknowledged actions before browser/display service restarts interrupted its
+controller. Its outer API outcome remains conservatively uncertain. It has no
+accepted score. The group therefore does not constitute four valid results.
 
-The preceding historical results remain unchanged. The research framing and
-protocol-separated matrix are now public. An isolated cloud worker has passed
-scripted native acceptance: 72 pixels of vertical jump displacement, physical
-attack, mapped skill MP consumption, monster contact, and a targeted monster
-removal accompanied by +4,500 client XP. Ordinary logout independently persisted
-that same gain. These checks used no evaluated model and are not pilot results.
-The baseline was then restored with the world stopped under both locks.
+The isolated worker passed scripted native acceptance before this cohort:
+72 pixels of vertical jump displacement, physical attack, mapped skill MP
+consumption, monster contact, and +4,500 XP verified again after ordinary logout.
+That acceptance used no evaluated model. Rendering uses Chrome with SwiftShader
+on four dedicated virtual CPUs; the short acceptance sample produced roughly
+ten fresh rendered observations per second.
 
-The combined adaptive/publication release `14a1fa8499a031ff89f0548e29556192b0db911a`
-passed 637 Linux tests, with 19 explicitly skipped, and is staged on the worker.
-The five-minute model cohort has not yet run at this update. Rendering uses
-Chrome with SwiftShader on four dedicated virtual CPUs; a short acceptance
-sample produced roughly ten fresh rendered observations per second. This is a
-measured setup limitation, not a frame-rate or reliability guarantee. Native
-15-second XP windows remain separate unfinished work.
+A future opt-in post-render timing contract is implemented and tested, but needs
+fresh native capture acceptance. It cannot reclassify the failed Terra recording.
+Bowmaster and Ice/Lightning fixtures are prepared; native acceptance and their
+model cohorts remain pending. Native 15-second XP windows have an independently
+built candidate, but are not deployed or represented as completed research runs.
 
 ## What RuneBench quality means here
 
@@ -153,13 +151,13 @@ Already verified foundations:
 - [x] A successful run has attributable, saved and inspected gameplay evidence.
 - [x] A public Vercel page serves the verified Astra recording.
 
-There are **22 remaining release deliverables** below, with two of 24 accepted.
+There are **20 remaining release deliverables** below, with four of 24 accepted.
 These are acceptance
 counts, not equal effort units or a percentage-complete estimate. Some supporting
 code already exists. Track code-ready, live-accepted and published separately;
 close each box only at the gate specified here.
 
-### M1 — An isolated cloud experiment worker: 2/4
+### M1 — An isolated cloud experiment worker: 4/4
 
 This milestone is implemented in parallel with M2. Infrastructure code, deployment
 plans and deployment receipts belong in the private `agent-devops` repository;
@@ -177,13 +175,23 @@ MapleBench owns the benchmark runtime and evidence contract.
   Accepted September 8: Ansible completed, all 24,296 imported files matched the
   pinned manifest, and an independent native world and sandboxed Chrome started.
   Deployment and sanitizer repairs are tracked in agent-devops PR #10.
-- [ ] **M1.3 Accept cloud rendering and evidence.** Prove fresh post-render frames,
+- [x] **M1.3 Accept cloud rendering and evidence.** Prove fresh post-render frames,
   ordinary physical controls and saved gameplay on the cloud worker. Profile CPU,
   memory and frame timing; verify ordinary persistence before model comparisons.
-- [ ] **M1.4 Hand off a bounded worker ready for trials.** Verify preflight, cleanup,
+  Accepted September 8: native controls and ordinary persistence passed before
+  evaluation. Two subsequent five-minute API trials independently verified saved
+  XP, action receipts, post-render recordings and normal cleanup. The software
+  renderer's measured frame-rate limitation remains declared.
+- [x] **M1.4 Hand off a bounded worker ready for trials.** Verify preflight, cleanup,
   artifact upload and explicit expiration/destruction handling. Record the actual
   deployment in agent-devops and provide a reproducible worker configuration.
   No fleet expansion occurs merely because the single-worker pilot is ready.
+  Accepted September 8: the fresh protected release passed preflight and the full
+  backend timeout check; Astra and Sol completed through the finite coordinator.
+  Their private evidence and baselines were independently backed up. Both public
+  recordings passed byte/range verification, and Sol's replay played in desktop
+  and mobile browser views. The fixed expiration and external receipt-bound
+  deletion controller remain unchanged; actual deletion has not happened yet.
 
 Gate: one independent cloud worker can execute the accepted full-client protocol
 and retain valid evidence without relying on the viewing laptop's renderer.

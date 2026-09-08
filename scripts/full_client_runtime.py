@@ -469,7 +469,7 @@ class CosmicRuntime:
         controls = script.parent.parent / "ui/full-client"
         # The executor reads the JavaScript dispatcher at each container launch;
         # pin it alongside imported modules, not just the Docker image.
-        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
+        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
                     controls / "controller.js", controls / "waiting.html",
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}
@@ -1092,10 +1092,11 @@ class CosmicRuntime:
                 **({"maximum_ms": 335000} if getattr(self, "scenario", {}).get("protocol") == "full-client-adaptive-pilot-v1" else {})) | {"video_sha256": recording["sha256"]}
         except EvidenceError:
             raise RuntimeErrorCode("recording_probe_failed") from None
-        require(type(recording.get("duration_ms")) in (int, float)
-                and math.isfinite(recording["duration_ms"])
-                and abs(probe["duration_ms"] - recording["duration_ms"]) <= 100,
-                "recording_duration_mismatch")
+        from full_client_capture import verify_video_duration
+        try:
+            verify_video_duration(probe,recording,getattr(self,'scenario',{}).get('adaptive_protocol',{}).get('capture_duration_policy'))
+        except (ValueError,TypeError):
+            raise RuntimeErrorCode('recording_duration_mismatch') from None
         self.state["artifacts"]["video_probe"] = self.artifact("video-probe.json", probe)
         try:
             verify_capture_bundle({"result": self.state["result"], "video": recording,
@@ -1402,7 +1403,37 @@ class CosmicRuntime:
         self.state["configuration_cleanup"]["phase"] = "verified"
         self.persist()
 
+    def prepare_cleanup_wait(self):
+        """Confirm ordinary waiting navigation within a separate finite window."""
+        requested = self.host.now()
+        self.state.setdefault("cleanup_wait_requests", []).append(requested)
+        self.persist()
+        deadline = self.host.deadline
+        self.host.deadline = min(deadline, time.monotonic() + 15)
+        try:
+            self.admin("prepare_wait")
+            def waiting():
+                status = self.admin("status")
+                session, bridge = status.get("session", {}), status.get("bridge", {})
+                run = bridge.get("run") or {}
+                initial = run.get("id") is None and run.get("status") == "idle"
+                terminal = not run or initial or run.get("status") in ("completed", "failed", "timed_out", "cancelled")
+                return (status if session.get("state") == "waiting" and session.get("fresh") is True
+                        and session.get("pinned") is True and session.get("captureState") == "idle"
+                        and session.get("artifactsSettled") is True and terminal
+                        and run.get("workerActive") is not True and run.get("leaseReleasePending") is not True
+                        and bridge.get("browserReleasePending") is not True else None)
+            status = self.wait_for(waiting)
+        finally:
+            self.host.deadline = deadline
+        self.state["cleanup_wait"] = {"requested_at_ms": requested, "verified_at_ms": self.host.now(),
+                                      "session": status["session"]}
+        self.persist()
+
     def cleanup(self):
+        # No earlier clean receipt can survive an uncertain fresh cleanup.
+        self.state["clean"] = False
+        self.persist()
         # Recovery can encounter a start whose response was lost. Native env plus
         # the exact recorded drop-in is required before adopting that invocation.
         unit = self.unit("cosmic")
@@ -1429,7 +1460,12 @@ class CosmicRuntime:
         if self.state.get("dropin"):
             self.remove_trial_configuration()
         require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_configuration_still_loaded")
+        self.prepare_cleanup_wait()
+        require(self.stopped(self.unit("cosmic")) and self.account_state() == 0,
+                "cleanup_requires_stopped_offline")
+        require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_configuration_still_loaded")
         self.state["clean"] = True
+        self.persist()
         return {"clean": True}
 
     def perform(self, operation, context, *, timeout_seconds):

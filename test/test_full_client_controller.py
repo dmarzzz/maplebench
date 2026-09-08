@@ -7,6 +7,39 @@ import unittest
 
 class ControllerTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'),'Node is required for browser timing regressions')
+    def test_capture_offsets_use_post_render_monotonic_clock_and_frozen_policy(self):
+        source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
+        animate=source[source.index('    const animate = () => {'):source.index('    item.onRendered = animate;')]
+        metadata=source[source.index('        pendingUpload={runId:'):source.index('        item.chunks=[];')]
+        fixture="""
+const assert=require('node:assert/strict');
+let now=100,wall=1000;const performance={now:()=>now};Date.now=()=>wall;
+const item={autoRunId:'trial',startedAt:100,startedWall:1000,recorderStarted:true,frames:0,
+ firstFrameAt:null,lastFrameAt:null,firstFrameWall:null,lastFrameWall:null,maxGap:0,chunks:[],
+ hidden:false,errors:0,relayLost:false,clockVerified:false,terminalToken:null};
+const draw=()=>{},clientId='renderer';let pendingUpload;
+let durationPolicy={id:'post-render-frame-envelope-v1'};
+"""
+        checks="""
+now=209;wall=1109;animate();now=3399;wall=4299;animate();
+const endAt=3500,endWall=4400;
+"""+metadata+"""
+assert.equal(pendingUpload.metadata.schema_version,2);
+assert.equal(pendingUpload.metadata.first_frame_offset_ms,109);
+assert.equal(pendingUpload.metadata.last_frame_offset_ms,3299);
+assert.equal(pendingUpload.metadata.duration_ms,3400);
+assert.equal(pendingUpload.metadata.rendered_frames,2);
+durationPolicy=undefined;
+"""+metadata+"""
+assert.equal(pendingUpload.metadata.schema_version,1);
+assert.equal(Object.hasOwn(pendingUpload.metadata,'first_frame_offset_ms'),false);
+assert.equal(Object.hasOwn(pendingUpload.metadata,'capture_duration_policy'),false);
+"""
+        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+animate+checks],
+                              capture_output=True,text=True,timeout=5)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'),'Node is required for browser timing regressions')
     def test_trial_capture_deadline_and_clock_receive_echo_use_actual_browser_state(self):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
         timer='{'+source[source.index('      const captureLimit='):source.index("      notice.textContent='Recording the actual canvas") ]+'}'
@@ -26,7 +59,9 @@ assert.equal(limit,120000);item.autoRunId='demo';delete run.readinessPolicy;
 """+timer+"""
 assert.equal(limit,120000);run.adaptiveProtocol={id:'full-client-adaptive-pilot-v1',wall_seconds:300};
 """+timer+"""
-assert.equal(limit,335000);
+assert.equal(limit,335000);delete run.adaptiveProtocol;run.nativeAcceptance={capture_max_ms:45000};
+"""+timer+"""
+assert.equal(limit,45000);
 let closed=false,pollAbort,acknowledgement=null,sessionAck=null,releaseAck=null,relayConnected=true,disconnectedAt=null;
 const clientId='renderer',performance={now:()=>100},observe=()=>({ready:true,capturedAt:Date.now()}),
  Module={MapleBenchRenderedAt:Date.now(),MapleBenchHud:null},renderHeader=()=>{},releaseAll=()=>{};
@@ -71,7 +106,7 @@ run.status='completed';assert.ok(!view().state.includes('Waiting for deadline'))
 const assert=require('node:assert/strict');
 let activeCommand=null,acknowledgement=null,clock=100;
 const performance={now:()=>clock};
-const keyNames={LEFT:'ArrowLeft'}, held=new Map(), cancelledRuns=new Set(['cancelled']);
+const skillKeyNames={PRIMARY_SKILL:'KeyA',BUFF_1:'KeyD'},keyNames={LEFT:'ArrowLeft'}, held=new Map(), cancelledRuns=new Set(['cancelled']);
 const document={hidden:false},relayConnected=true,run={id:'cancelled'},game={focus(){}};
 const capture={recorderStarted:true,frames:1,autoRunId:'cancelled',stopping:false};
 const observe=()=>({ready:true}),fresh=()=>true,renderHeader=()=>{};
@@ -81,6 +116,18 @@ const releaseAll=()=>{};
         result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+dispatch+checks],
             capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'),'Node is required for the browser dispatcher regression')
+    def test_native_recipe_dispatches_neutral_physical_keys(self):
+        self.run_dispatch("""
+(async()=>{
+ run.id='native';run.nativeAcceptance={id:'scripted-native-acceptance-v1'};capture.autoRunId='native';
+ await executeInput({id:'native-buff',runId:'native',keys:['BUFF_1'],durationMs:30},clock+1000);
+ assert.equal(acknowledgement.ok,true);assert.equal(events.filter(x=>x==='keydown').length,1);
+ await executeInput({id:'native-skill',runId:'native',keys:['PRIMARY_SKILL'],durationMs:30},clock+1000);
+ assert.equal(acknowledgement.ok,true);assert.equal(events.filter(x=>x==='keydown').length,2);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
 
     @unittest.skipUnless(shutil.which('node'),'Node is required for the browser dispatcher regression')
     def test_cancel_tombstone_rejects_a_late_command_response(self):

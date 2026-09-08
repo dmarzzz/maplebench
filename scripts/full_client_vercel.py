@@ -206,7 +206,18 @@ def find_deployment(executable,stage,link,marker,deadline,run_cli):
              and row.get('target')=='production' and isinstance(row.get('meta'),dict)
              and all(row['meta'].get(k)==v for k,v in metadata.items())]
     require(len(matches)==1,'deployment_outcome_uncertain' if not matches else 'deployment_identity_ambiguous')
-    ident=matches[0].get('id');require(isinstance(ident,str) and DEPLOYMENT.fullmatch(ident),'invalid_deployment_identity')
+    row=matches[0];ident=row.get('id')
+    if ident is None:
+        # Current CLI list output omits the ID. Resolve only the unique URL
+        # whose three immutable publication metadata values already matched.
+        url=row.get('url')
+        require(isinstance(url,str) and re.fullmatch(r'[a-z0-9-]+\.vercel\.app',url),
+                'invalid_deployment_identity')
+        inspected=run_cli(executable,['inspect',url,'--format=json','--scope',link['orgId']],stage,deadline)
+        require(inspected.get('url')==url and inspected.get('name')==link['projectName']
+                and inspected.get('target')=='production','deployment_url_identity_mismatch')
+        ident=inspected.get('id')
+    require(isinstance(ident,str) and DEPLOYMENT.fullmatch(ident),'invalid_deployment_identity')
     return ident
 
 

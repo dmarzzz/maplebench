@@ -94,7 +94,7 @@ class RuntimeTests(unittest.TestCase):
                              "DropInPaths": "", "Environment": "", "NeedDaemonReload": "no"}
         self.host.unit.return_value = self.offline_unit
         self.host.admin.return_value = {"session": {"state": "waiting", "fresh": True, "pinned": True,
-                                                    "artifactsSettled": True}, "bridge": {"run": None}}
+                                                    "artifactsSettled": True, "captureState": "idle"}, "bridge": {"run": None}}
         self.host.command.return_value = b"0\n"
 
     def policy(self):
@@ -206,7 +206,60 @@ class RuntimeTests(unittest.TestCase):
         self.host.command.return_value = b"2\n"
         with self.assertRaisesRegex(runtime.RuntimeErrorCode, "cleanup_requires_stopped_offline"):
             self.backend.cleanup()
-        self.assertNotIn("clean", self.backend.state)
+        self.assertFalse(self.backend.state["clean"])
+
+    def test_cleanup_requests_wait_only_after_evidence_and_config_then_confirms_browser(self):
+        events = []
+        self.host.deadline = __import__("time").monotonic() + 120
+        original_deadline = self.host.deadline
+        self.backend.settle_owned_controller = lambda: events.append("controller_terminal")
+        self.backend.preserve_failure_evidence = lambda: events.append("evidence_preserved")
+        self.backend.state["dropin"] = "owned fixture"
+        self.backend.remove_trial_configuration = lambda: events.append("config_removed")
+        status = self.host.admin.return_value
+        def admin(path, request, **kwargs):
+            if request["op"] == "prepare_wait":
+                self.assertEqual(events, ["controller_terminal", "evidence_preserved", "config_removed"])
+                stored = json.loads((self.directory / "backend-state.json").read_text())
+                self.assertFalse(stored["clean"])
+                self.assertEqual(stored["cleanup_wait_requests"], [2000])
+                self.assertLessEqual(self.host.deadline, __import__("time").monotonic() + 15)
+                events.append("prepare_wait")
+            return status
+        self.host.admin.side_effect = admin
+        self.assertEqual(self.backend.cleanup(), {"clean": True})
+        self.assertEqual(self.host.deadline, original_deadline)
+        stored = json.loads((self.directory / "backend-state.json").read_text())
+        self.assertTrue(stored["clean"])
+        self.assertEqual(stored["cleanup_wait"]["session"]["captureState"], "idle")
+
+    def test_cleanup_never_confirms_stale_unpinned_or_unsettled_waiting(self):
+        ready = self.host.admin.return_value
+        for change in ({"state": "connected"}, {"fresh": False}, {"pinned": False},
+                       {"artifactsSettled": False}, {"captureState": "saving"}, {"captureState": "recording"}):
+            with self.subTest(change=change):
+                self.backend.state["clean"] = True
+                self.backend.state.pop("cleanup_wait", None)
+                self.host.admin.return_value = ready | {"session": ready["session"] | change}
+                self.host.sleep.side_effect = runtime.RuntimeErrorCode("operation_deadline")
+                with self.assertRaisesRegex(runtime.RuntimeErrorCode, "operation_deadline"):
+                    self.backend.cleanup()
+                stored = json.loads((self.directory / "backend-state.json").read_text())
+                self.assertFalse(stored["clean"])
+                self.assertNotIn("cleanup_wait", stored)
+
+    def test_cleanup_lost_wait_reply_preserves_unconfirmed_intent_without_replay(self):
+        self.backend.state["clean"] = True
+        self.host.admin.side_effect = lambda path, request, **kw: (
+            (_ for _ in ()).throw(runtime.RuntimeErrorCode("admin_response_limit"))
+            if request["op"] == "prepare_wait" else {"bridge": {"run": None}})
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "admin_response_limit"):
+            self.backend.cleanup()
+        stored = json.loads((self.directory / "backend-state.json").read_text())
+        self.assertFalse(stored["clean"])
+        self.assertEqual(len(stored["cleanup_wait_requests"]), 1)
+        self.assertNotIn("cleanup_wait", stored)
+        self.assertEqual([c.args[1]["op"] for c in self.host.admin.call_args_list].count("prepare_wait"), 1)
 
     def cleanup_configuration_fixture(self):
         dropin = self.backend.trial_dropin_path()
@@ -696,6 +749,26 @@ class RuntimeTests(unittest.TestCase):
                 self.backend.copy_run()
             capture.assert_not_called()
 
+    def test_offline_copy_uses_only_explicit_frozen_frame_envelope(self):
+        from full_client_capture import CAPTURE_DURATION_POLICY
+        self.video_fixture()
+        reference=self.backend.state['artifacts']['recording']
+        recording=json.loads((self.backend.directory/reference['path']).read_text())
+        recording.update(duration_ms=302090.265,capture_duration_policy=dict(CAPTURE_DURATION_POLICY),
+            first_frame_offset_ms=109,last_frame_offset_ms=301994.265,wall_clock_drift_ms=.735,
+            rendered_frames=2337,interrupted=False,post_render_capture=True)
+        self.backend.state['artifacts']['recording']=self.backend.artifact('frame-recording.json',recording)
+        self.backend.scenario={'protocol':'full-client-adaptive-pilot-v1',
+            'adaptive_protocol':{'capture_duration_policy':dict(CAPTURE_DURATION_POLICY)}}
+        probe={'duration_ms':301973,'presentation_extent_ms':301973,'presentation_span_ms':301972,
+            'last_packet_duration_ms':1,'frames':2338,'width':800,'height':720}
+        with patch('full_client_publish._probe_video',return_value=probe) as decode, \
+                patch('full_client_publish.verify_capture_bundle') as capture:
+            self.backend.copy_run()
+        self.assertEqual(decode.call_args.kwargs,{'maximum_ms':335000});capture.assert_called_once()
+        saved=json.loads((self.backend.directory/self.backend.state['artifacts']['video_probe']['path']).read_text())
+        self.assertEqual(saved['presentation_span_ms'],301972)
+
     def test_status_does_not_treat_stale_waiting_page_as_ready(self):
         self.host.admin.return_value["session"]["fresh"] = False
         result = self.backend.status()
@@ -965,7 +1038,7 @@ class RuntimeTests(unittest.TestCase):
     def web_fixture(self):
         script = self.root / "repo/scripts/serve-full-client.py"
         client = self.root / "client"
-        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
+        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
                     *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "waiting.html")),
                     *(client / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))]
         for path in required:

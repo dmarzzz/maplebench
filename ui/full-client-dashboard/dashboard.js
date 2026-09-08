@@ -53,6 +53,7 @@
       :replayCue?`Opens near ${replayCue.basis==='first_acknowledged_input'?'the first confirmed input':'program start; first-input timing was not recorded'}. Full recording includes the opening wait.`
       :'Showing the full recording; a verified playback cue is unavailable.');
     if(adaptive)$('replay-timing').textContent+=' The five-minute wall budget includes every model wait; seeking changes playback only.';
+    const hold=adaptiveHold(row);if(hold)$('replay-timing').textContent+=' '+hold.detail;
     $('replay-playback-status').textContent='Loading recording…';
     stopReplay();player.src=url.href;
     if(!replay.open)replay.showModal();
@@ -104,18 +105,35 @@
     else if(row.action_verification==='receipts_incomplete')node.append(el('small','Action evidence incomplete'));
     else if(row.action_verification!=='receipts_rechecked')node.append(el('small','Action receipts not verified'));
   }
+  function adaptiveHold(row){
+    const info=row.adaptive,wait=info?.horizon_wait;
+    const labels={token_reservation_limit:'Token reservation limit reached',api_request_limit:'Model request limit reached',
+      action_limit:'Input action limit reached',sdk_request_limit:'SDK request limit reached',
+      request_window_closed:'Too little time remained for another complete model cycle'};
+    if(row.research?.protocol_id!=='full-client-adaptive-pilot-v1'||info?.verification!=='all_cycle_receipts_rechecked'
+        ||info.horizon_policy?.id!=='full-horizon-reserve-v1'||!wait||!Object.hasOwn(labels,wait.reason)
+        ||!Number.isFinite(info.wall_elapsed_ms)||info.wall_elapsed_ms<0||info.wall_elapsed_ms>300000
+        ||!Number.isFinite(wait.started_ms)||!Number.isFinite(wait.ended_ms)
+        ||wait.started_ms<0||wait.started_ms>info.wall_elapsed_ms||wait.ended_ms<wait.started_ms
+        ||wait.ended_ms>info.wall_elapsed_ms+5000)return null;
+    const duration=wait.ended_ms-wait.started_ms;
+    return {brief:`${seconds(duration)} observation only`,
+      detail:`${labels[wait.reason]} at ${seconds(wait.started_ms)}. Observation only for ${seconds(duration)} (${seconds(wait.started_ms)}–${seconds(wait.ended_ms)}): no new model requests or input actions; the game and recording continued.`};
+  }
   function adaptiveDetails(row){
     if(row.research?.protocol_id!=='full-client-adaptive-pilot-v1')return null;
     const info=row.adaptive,details=el('details');details.className='adaptive-details';
     if(info?.verification!=='all_cycle_receipts_rechecked'){
       details.append(el('summary','Adaptive evidence not yet verified'));return details;
     }
-    details.append(el('summary',`${info.counters.api_responses_confirmed} model responses · ${seconds(info.wall_elapsed_ms)} of 300s`));
+    const hold=adaptiveHold(row);
+    details.append(el('summary',`${info.counters.api_responses_confirmed} model responses · ${seconds(info.wall_elapsed_ms)} wall${hold?' · '+hold.brief:''}`));
+    if(hold)details.append(el('p',hold.detail));
     details.append(el('p',`${info.full_wall_budget_used?'Full wall budget used':'Ended early'} · ${info.end_reason.replaceAll('_',' ')}. Persisted XP covers the complete run. Peak-rate scoring is unavailable.`));
     const profile=info.class_profile;
     if(profile)details.append(el('p',`${profile.class_name}, level ${profile.level}. Declared skills: ${Object.values(profile.skill_keys).join(', ')}.`));
     const table=el('table'),head=el('tr'),body=el('tbody');
-    for(const name of ['Cycle','Exact model returned','Model wait','Program time','Inputs','Tokens'])head.append(el('th',name));
+    for(const name of ['Cycle','Exact model returned','Model wait','Program interval','Inputs','Tokens'])head.append(el('th',name));
     const header=el('thead');header.append(head);table.append(header,body);
     for(const cycle of info.cycles){
       const tr=el('tr'),timing=cycle.timing;cell(tr,cycle.index+1);
@@ -129,7 +147,9 @@
   }
   function renderLive(){
     const rows=snapshot.attempts;
-    const row=rows.find(item=>['running','recovering','requesting'].includes(item.status))
+    const publicFeatured=snapshot.source==='full_client_public_catalog'&&rows.find(item=>item.id===snapshot.featured_run_id
+      &&item.status==='completed'&&item.recording&&['runner_verified_receipts_rechecked','adaptive_runner_verified_receipts_rechecked'].includes(item.score_verification));
+    const row=publicFeatured||rows.find(item=>['running','recovering','requesting'].includes(item.status))
       ||rows.find(item=>item.id===snapshot.featured_run_id)||rows[0];
     if(!row)return;
     const liveBadge=badge(row.status);
@@ -143,7 +163,7 @@
     const expectsRenderer=['running','requesting'].includes(row.status)&&['login','run_controller'].includes(row.phase);
     $('live-description').textContent=row.failure_code?`${failedPhase}: ${row.failure_code.replaceAll('_',' ')}.${row.api_response_saved?' The API response was saved; this attempt has no verified persisted score.':''}`
       :row.status==='not_started'?'This model is planned. No API request has started for this attempt.'
-      :verifiedFeatured?'This verified run is featured for sharing. More recent failed attempts, if any, remain in the history below.'
+      :verifiedFeatured?'This verified run is featured for sharing. Progress for every planned model remains in the matrix and history below.'
       :row.status==='completed'?'The latest saved run completed. Every group of frozen inputs appears below.'
       :`${phase}${expectsRenderer&&row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
     const current=phases.findIndex(([key])=>key===row.phase);$('phases').replaceChildren();
@@ -151,10 +171,32 @@
     $('live-model').textContent=row.returned_model||'Awaiting exact attribution';
     inputDetails($('live-actions'),row);
     const featured=$('featured-recording');featured.replaceChildren();if(row.status==='completed'&&row.recording)recording(featured,row);
-    const adaptive=$('adaptive-evidence');adaptive.replaceChildren();const detail=adaptiveDetails(row);if(detail)adaptive.append(detail);
+    const adaptive=$('adaptive-evidence');adaptive.replaceChildren();
+    const hold=adaptiveHold(row);if(hold){const note=el('p',hold.detail);note.className='group-notice';adaptive.append(note);}
+    const detail=adaptiveDetails(row);if(detail)adaptive.append(detail);
     const saved=Number.isFinite(row.persisted_xp);
     $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
     $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
+  }
+  function renderCatalog(){
+    const node=$('catalog-cohorts'),catalog=snapshot.catalog;
+    if(!node)return;
+    const current=Array.isArray(catalog?.cohorts)?catalog.cohorts:[];
+    const previous=catalog?.schema_version===2&&Array.isArray(catalog.previous_cohorts)?catalog.previous_cohorts:[];
+    node.replaceChildren();node.hidden=!([1,2].includes(catalog?.schema_version)&&current.length<=3&&previous.length<=3);
+    if(node.hidden)return;
+    const names={hero:'Hero',bowmaster:'Bowmaster',ice_lightning_arch_mage:'Ice/Lightning Arch Mage'};
+    for(const [cohorts,isPrevious] of [[current,false],[previous,true]]){
+      if(!cohorts.length)continue;
+      const group=el('div');
+      group.append(el('p',isPrevious?'Previous pilot cohorts · separate frozen settings; excluded from the current matrix':'Current cohorts'));
+      for(const cohort of cohorts){
+        if(!/^\.\/cohorts\/[a-f0-9]{16}\/$/.test(cohort.url)||!Number.isInteger(cohort.verified)||cohort.verified<0||cohort.verified>4)continue;
+        const link=el('a',`${names[cohort.class_id]||'Declared class'} · ${cohort.verified} / 4 verified`);
+        link.href=cohort.url;link.className='pill';group.append(link,document.createTextNode(' '));
+      }
+      node.append(group);
+    }
   }
   function renderResearch(){
     const matrix=snapshot.research_matrix,container=$('research-matrix'),select=$('research-protocol');
@@ -164,6 +206,7 @@
     const selected=select.value;select.replaceChildren();
     for(const protocol of matrix.protocols){const option=el('option',protocol.label);option.value=protocol.id;select.append(option);}
     if(matrix.protocols.some(item=>item.id===selected))select.value=selected;
+    else if(snapshot.catalog&&matrix.protocols.some(item=>item.id==='full-client-adaptive-pilot-v1'))select.value='full-client-adaptive-pilot-v1';
     const protocol=matrix.protocols.find(item=>item.id===select.value),columns=matrix.columns.filter(item=>item.protocol_id===select.value);
     $('research-protocol-detail').textContent=protocol?`${protocol.clock}. ${protocol.metric}. ${protocol.status}.`:'';
     const table=el('table'),caption=el('caption',`${protocol?.label||'Protocol'}: model and class/task evidence`),head=el('thead'),heading=el('tr'),body=el('tbody');
@@ -202,12 +245,15 @@
       if(incomplete.length){const note=el('p',`${incomplete.map(row=>row.requested_model).join(' and ')} has incomplete action evidence. Persisted XP and publication status are shown separately.`);note.className='group-notice';block.append(note);}
       const wrap=el('div'),table=el('table'),caption=el('caption',`${title.textContent}: persisted outcomes`),head=el('thead'),headRow=el('tr'),body=el('tbody');
       wrap.className='table-wrap';caption.className='visually-hidden';body.id=`comparison-rows-${group.id}`;
-      for(const label of ['Exact model','Persisted XP','Input actions','At logout','API / play time','Publication evidence','Recording'])headRow.append(el('th',label));
+      for(const label of ['Exact model','Persisted XP','Input actions','At logout','Timing','Publication evidence','Recording'])headRow.append(el('th',label));
       head.append(headRow);table.append(caption,head,body);wrap.append(table);block.append(wrap);
       for(const row of rows){
         const tr=el('tr'),identity=cell(tr,row.requested_model);identity.append(el('small',row.id.slice(0,12)));
         scoreCell(tr,row);inputDetails(cell(tr,null,'input-summary'),row);cell(tr,alive(row.alive_at_logout));
-        const timing=cell(tr,`${seconds(row.timing.api_ms)} API`);timing.append(el('small',`${seconds(row.timing.controller_ms)} play`));
+        const timing=cell(tr,`${seconds(row.timing.api_ms)} API`);
+        timing.append(el('small',row.research?.protocol_id==='full-client-adaptive-pilot-v1'
+          ?`${seconds(row.adaptive?.wall_elapsed_ms)} wall`:`${seconds(row.timing.controller_ms)} play`));
+        const hold=adaptiveHold(row);if(hold)timing.append(el('small',hold.brief),el('small',hold.detail));
         publicationCell(tr,row);recording(cell(tr),row);body.append(tr);
       }
       $('comparison-groups').append(block);
@@ -225,12 +271,19 @@
       if(row.kind==='integration')state.append(el('small','Unranked integration'));
       scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');inputDetails(cell(tr,null,'input-summary'),row);publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
     }
-    $('scope').textContent=snapshot.cohort
+    $('scope').textContent=snapshot.catalog
+      ?`${snapshot.catalog.verified} of ${snapshot.catalog.planned} planned model/class runs have verified results. ${snapshot.catalog.archive_state==='retired'?'A complete four-model cohort replaced the public test recordings.':snapshot.catalog.archive_state==='retained'?'The public test archive remains until one four-model cohort is complete.':''} Saved progress refreshes every 10 seconds. No runs start from this page.`
+      :snapshot.cohort
       ?`${snapshot.cohort.verified} of ${snapshot.cohort.planned} planned models have verified results. ${snapshot.cohort.archive_replacement?'This completed cohort replaces the public test archive.':'Cohort progress; the existing public archive is retained.'} No runs start from this page.`
       :snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
   }
   function freshness(){
     if(!snapshot)return;
+    if(snapshot.source==='full_client_public_catalog'){
+      $('connection').className='';
+      $('connection').textContent=`Published results · refreshes every 10s · Snapshot ${new Date(snapshot.generated_at_ms).toLocaleString()}`;
+      return;
+    }
     if(snapshot.cohort&&snapshot.generated_at_ms===0){$('connection').textContent='Four-model cohort · awaiting the first attempt';return;}
     const age=Date.now()-snapshot.generated_at_ms,active=snapshot.attempts.some(row=>['running','requesting','recovering'].includes(row.status));
     const stale=age>10000||age< -1000||snapshot.live_status_available===false;
@@ -244,10 +297,10 @@
       const response=await fetch('./results.json',{cache:'no-store',signal:AbortSignal.timeout(3000)});
       if(!response.ok)throw Error();const next=await response.json();
       if(next.schema_version!==1||!Array.isArray(next.attempts)||next.attempts.length>100||!Array.isArray(next.comparisons)||!Number.isFinite(next.generated_at_ms))throw Error();
-      snapshot=next;renderResearch();renderLive();renderComparisons();renderHistory();freshness();
+      snapshot=next;renderCatalog();renderResearch();renderLive();renderComparisons();renderHistory();freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
-    finally{if(!closed&&snapshot?.live_status_available!==false)timer=setTimeout(refresh,2000);}
+    finally{if(!closed&&(snapshot?.live_status_available!==false||[1,2].includes(snapshot?.catalog?.schema_version)))timer=setTimeout(refresh,[1,2].includes(snapshot?.catalog?.schema_version)?10000:2000);}
   }
   window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
   refresh();

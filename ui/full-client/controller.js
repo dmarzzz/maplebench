@@ -175,7 +175,7 @@
     const observation = observe(), available = fresh(observation), character = observation.character || {};
     if (!baseline && available) setBaseline(activeRun() ? 'run' : 'session');
     const model = run.mode === 'api' ? (run.model || 'model unavailable') : null;
-    const mode = activeRun() ? (run.mode === 'api' ? `OpenAI API · ${model}` : 'Scripted SDK · no evaluated model')
+    const mode = activeRun() ? (run.mode === 'api' ? `OpenAI API · ${model}` : run.nativeAcceptance ? `Native acceptance · ${run.nativeAcceptance.profile.class_name} · no model` : 'Scripted SDK · no evaluated model')
       : held.size || physical.size ? 'Manual controls · no active model' : 'Idle · no active model';
     let state = !relayConnected ? 'Relay disconnected · inputs released'
       : !available ? 'Waiting for fresh client state'
@@ -239,8 +239,9 @@
     const output = document.createElement('canvas'), headerHeight = 120;
     output.width = game.width; output.height = game.height + headerHeight;
     const ctx = output.getContext('2d');
+    const durationPolicy=run.nativeAcceptance?.capture_duration_policy || run.adaptiveProtocol?.capture_duration_policy;
     const item = {autoRunId,startedAt:performance.now(),startedWall:Date.now(),recorderStarted:false,
-      frames:0,firstFrameWall:null,lastFrameWall:null,lastFrameAt:null,maxGap:0,hidden:document.hidden,
+      frames:0,firstFrameWall:null,lastFrameWall:null,firstFrameAt:null,lastFrameAt:null,maxGap:0,hidden:document.hidden,
       errors:0,relayLost:false,clock:null,clockVerified:false,terminalToken:null,
       chunks:[],bytes:0,stopping:false,animation:null,stream:null,recorder:null,finishTimer:null,maxTimer:null};
     const draw = () => {
@@ -287,7 +288,7 @@
       if(item.recorderStarted) {
         const now=performance.now(),wall=Date.now();
         item.maxGap=Math.max(item.maxGap,now-(item.lastFrameAt ?? item.startedAt));
-        item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.lastFrameAt=now; item.frames++;
+        item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.firstFrameAt ??= now; item.lastFrameAt=now; item.frames++;
       }
     };
     item.onRendered = animate;
@@ -295,7 +296,7 @@
       const mimeType = ['video/webm;codecs=vp8','video/webm'].find(type => MediaRecorder.isTypeSupported(type));
       if (!mimeType) throw Error('WebM capture is unavailable');
       draw(); item.stream=output.captureStream(30);
-      item.recorder=new MediaRecorder(item.stream,{mimeType,videoBitsPerSecond:run.adaptiveProtocol?2000000:5000000});
+      item.recorder=new MediaRecorder(item.stream,{mimeType,videoBitsPerSecond:run.adaptiveProtocol||run.nativeAcceptance?2000000:5000000});
       item.recorder.onstart=()=>{item.recorderStarted=true;item.startedAt=performance.now();item.startedWall=Date.now();};
       item.recorder.ondataavailable=event=>{
         if(event.data.size) { item.chunks.push(event.data); item.bytes+=event.data.size; }
@@ -313,12 +314,15 @@
           rendered_frames:item.frames,max_frame_gap_ms:item.maxGap,hidden:item.hidden,errors:item.errors,relay_lost:item.relayLost,
           interrupted:item.hidden||item.errors>0||item.relayLost||item.frames===0||item.maxGap>1000,
           clock:item.clockVerified?item.clock:null,terminal_token:item.terminalToken}};
+        if(durationPolicy)Object.assign(pendingUpload.metadata,{schema_version:2,capture_duration_policy:durationPolicy,
+          first_frame_offset_ms:item.firstFrameAt===null?null:item.firstFrameAt-item.startedAt,
+          last_frame_offset_ms:item.lastFrameAt===null?null:item.lastFrameAt-item.startedAt});
         item.chunks=[];
         await uploadRecording();
       };
       item.recorder.onerror=()=>{ item.errors++; notice.textContent='Recording failed; capture stopped.'; stopRecording(); };
       capture=item; item.recorder.start(1000);
-      const captureLimit=run.adaptiveProtocol?.id==='full-client-adaptive-pilot-v1'&&run.adaptiveProtocol.wall_seconds===300
+      const captureLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:run.adaptiveProtocol?.id==='full-client-adaptive-pilot-v1'&&run.adaptiveProtocol.wall_seconds===300
         ?335000:item.autoRunId&&run.readinessPolicy?125000:120000;
       item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},captureLimit);
       notice.textContent='Recording the actual canvas and controller/telemetry header.'; renderHeader();
@@ -377,7 +381,7 @@
   const executeInput = async (command, deadline) => {
     if(activeCommand) return;
     const item={interrupted:false}; activeCommand=item;
-    const keys=Array.isArray(command.keys)?command.keys.map(name=>run.adaptiveProtocol?(skillKeyNames[name]||keyNames[name]):keyNames[name]):[];
+    const keys=Array.isArray(command.keys)?command.keys.map(name=>(run.adaptiveProtocol||run.nativeAcceptance)?(skillKeyNames[name]||keyNames[name]):keyNames[name]):[];
     let ok=false;
     try {
       if(document.hidden || !fresh(observe()) || !relayConnected

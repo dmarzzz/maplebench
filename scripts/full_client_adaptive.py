@@ -25,6 +25,7 @@ FULL_HORIZON_POLICY = {'id':'full-horizon-reserve-v1','request_timeout_seconds':
     'settlement_reserve_seconds':5,'passive_observation_interval_ms':1000}
 NATIVE_PROGRESSION_POLICY = {'id':'native-xp-level-progression-v1',
     'xp_window_protocol':'full-client-xp-windows-v1','maximum_level':200}
+CAPTURE_COHORT_RECIPE = 'full-horizon-capture-cohort-v1'
 PASSIVE_STOP_REASONS = frozenset(('request_window_closed','api_request_limit',
     'action_limit','sdk_request_limit','token_reservation_limit'))
 
@@ -38,7 +39,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 def validate_protocol(value):
-    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','progression_policy'},'invalid_adaptive_protocol')
+    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','progression_policy','capture_duration_policy'},'invalid_adaptive_protocol')
     require(value.get('schema_version')==1 and type(value['schema_version']) is int
             and value.get('id')==PROTOCOL and type(value.get('wall_seconds')) is int
             and value['wall_seconds']==300,'invalid_adaptive_protocol')
@@ -48,6 +49,10 @@ def validate_protocol(value):
     require(all(type(value.get(k)) is int and a<=value[k]<=b for k,(a,b) in bounds.items()),'invalid_adaptive_limits')
     if 'horizon_policy' in value:
         require(digest(value['horizon_policy'])==digest(FULL_HORIZON_POLICY),'invalid_adaptive_horizon_policy')
+    if 'capture_duration_policy' in value:
+        from full_client_capture import validate_duration_policy
+        try:validate_duration_policy(value['capture_duration_policy'])
+        except (ValueError,TypeError):raise AdaptiveError('invalid_capture_duration_policy') from None
     profile=value.get('profile')
     require(isinstance(profile,dict) and set(profile)=={'id','class_name','level','skill_keys'}
             and isinstance(profile['id'],str) and re.fullmatch('[a-z0-9][a-z0-9-]{0,63}',profile['id'])
@@ -60,6 +65,19 @@ def validate_protocol(value):
         require(digest(value['progression_policy'])==digest(NATIVE_PROGRESSION_POLICY)
                 and 'horizon_policy' in value and profile['level']<=200,'invalid_adaptive_progression_policy')
     return json.loads(json.dumps(value))
+
+
+def capture_cohort_protocol(profile):
+    """Prepare the next frozen cohort; this does not mutate defaults or run it.
+
+    The larger allowance is a conservative reservation ceiling, not a target
+    token spend. Every model in a fixture receives the same bounded contract.
+    """
+    from full_client_capture import CAPTURE_DURATION_POLICY
+    value=json.loads(json.dumps(DEFAULT_PROTOCOL))
+    value.update(profile=profile,max_total_tokens=240000,
+        horizon_policy=FULL_HORIZON_POLICY,capture_duration_policy=CAPTURE_DURATION_POLICY)
+    return validate_protocol(value)
 
 def prompt(protocol):
     p=validate_protocol(protocol)

@@ -387,7 +387,9 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
                     "video: duration metadata disagrees with decoded packet coverage")
             headers.append(header)
     return {"width": width, "height": height, "frames": frames,
-            "duration_ms": headers[0] if headers else extent}
+            "duration_ms": headers[0] if headers else extent,
+            "presentation_span_ms":presentations[-1][0]-presentations[0][0],
+            "presentation_extent_ms":extent,"last_packet_duration_ms":presentations[-1][1]}
 
 
 def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS):
@@ -783,9 +785,22 @@ def verify_capture_bundle(manifest, artifact_root):
             and _text(terminal["id"]) and _number(terminal["serverIssuedAtMs"]),
             "capture: invalid terminal server receipt")
     require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
+    native = result.get("protocol") == "scripted-native-acceptance-v1"
+    owner = {"id": run_id, "client": result["controller"]["client"], "startedAtMs": started,
+             "protocol": result.get("protocol"), "adaptiveProtocol":result.get('adaptive',{}).get('limits',{})}
+    if native:
+        from full_client_native import validate_contract
+        config = validate_contract(result.get("nativeAcceptance"))
+        require(result["controller"].get("mode") == "script" and result["controller"].get("model") is None
+                and result["controller"].get("returnedModel") is None and result.get("api") is None
+                and result.get("trialContext") is None and type(result.get("model_api_requests")) is int
+                and result["model_api_requests"] == 0 and result["controller"].get("protocol") == "scripted-native-acceptance-v1"
+                and all(result.get("timeline", {}).get(key) is None for key in ("api_started_ms", "api_ended_ms"))
+                and same_json(config,result["controller"].get("nativeAcceptance")),
+                "capture: native acceptance cannot carry a model identity")
+        owner.update(mode="script",model=None,nativeAcceptance=config)
     try:
-        measured = capture_receipt(capture, {"id": run_id, "client": result["controller"]["client"],
-                                             "startedAtMs": started, "protocol": result.get("protocol")}, ready, clock, terminal)
+        measured = capture_receipt(capture, owner, ready, clock, terminal)
     except (ValueError, TypeError, KeyError, OverflowError) as error:
         raise EvidenceError("capture: raw measurements failed validation") from error
     require(all(same_json(video.get(key), value) for key, value in measured.items()),
@@ -796,12 +811,12 @@ def verify_capture_bundle(manifest, artifact_root):
             and measured["timing_uncertainty_ms"] <= CAPTURE_UNCERTAINTY_MS,
             "capture: require continuous post-render frames with bounded measured clock uncertainty")
     lower, upper = measured["clock_offset_ms"]["lower"], measured["clock_offset_ms"]["upper"]
-    api_start = started + result["timeline"]["api_started_ms"]
+    input_start = started + result["timeline"]["program_started_ms" if native else "api_started_ms"]
     program_end = started + result["timeline"]["program_ended_ms"]
     ended = result["timing"]["endedAtMs"]
-    require(started <= ready["serverReceivedAtMs"] <= api_start
-            and capture["first_frame_wall_ms"] + upper <= api_start + SLACK_MS,
-            "capture: recording must begin before the API planning interval")
+    require(started <= ready["serverReceivedAtMs"] <= input_start
+            and capture["first_frame_wall_ms"] + upper <= input_start + SLACK_MS,
+            "capture: recording must begin before the planning or native input interval")
     require(ended <= terminal["serverIssuedAtMs"]
             and capture["last_frame_wall_ms"] + lower >= program_end - SLACK_MS
             and capture["end_wall_ms"] + lower >= terminal["serverIssuedAtMs"] - SLACK_MS

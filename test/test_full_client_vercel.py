@@ -70,6 +70,37 @@ class VercelPublicationTests(unittest.TestCase):
         return driver.publish(self.package,self.content,self.payload,self.inventory,self.inventory_sha,
             self.link,self.link_sha,self.base,executable='/usr/bin/true',run_cli=self.cli,fetch=self.fetch)
 
+    def test_url_only_cli_list_resolves_exact_identity_without_resubmission(self):
+        original=self.cli
+        def current_cli(executable,args,cwd,deadline):
+            value=original(executable,args,cwd,deadline)
+            if args[0]=='list':
+                for row in value['deployments']:del row['id']
+            if args[0]=='inspect':value['url']='synthetic-deployment.vercel.app'
+            return value
+        self.cli=current_cli
+        result=self.publish()
+        self.assertEqual(result['status'],'published')
+        self.assertEqual([c[0] for c in self.calls],['deploy','list','inspect','inspect'])
+        self.assertEqual(self.calls[2][1],'synthetic-deployment.vercel.app')
+        self.assertEqual(self.calls[3][1],self.ident)
+        self.publish()
+        self.assertEqual(sum(c[0]=='deploy' for c in self.calls),1)
+
+    def test_url_only_reconciliation_refuses_changed_inspected_url(self):
+        original=self.cli
+        def changed_cli(executable,args,cwd,deadline):
+            value=original(executable,args,cwd,deadline)
+            if args[0]=='list':
+                for row in value['deployments']:del row['id']
+            if args[0]=='inspect':value['url']='different-deployment.vercel.app'
+            return value
+        self.cli=changed_cli
+        self.assertEqual(self.publish()['status'],'uncertain')
+        self.assertEqual(self.publish()['status'],'uncertain')
+        self.assertEqual(sum(c[0]=='deploy' for c in self.calls),1)
+        self.assertFalse(self.fetches)
+
     def test_one_submission_public_bytes_ranges_and_exact_ids_then_idempotent(self):
         before=json.loads((self.payload/'results.json').read_text())['attempts']
         value=self.publish();self.assertEqual(value['status'],'published')
