@@ -28,8 +28,11 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.1</version>
         <configuration>
-          <includes><include>**/MapleBenchPersistence.java</include></includes>
-          <testIncludes><testInclude>**/MapleBenchPersistenceTest.java</testInclude></testIncludes>
+          <includes><include>**/MapleBenchPersistence.java</include><include>**/MapleBenchXpLedger.java</include></includes>
+          <compilerArguments>
+            <sourcepath>${project.basedir}/../../patches/cosmic/overlay/src/main/java${path.separator}${project.basedir}/native-source</sourcepath>
+          </compilerArguments>
+          <testIncludes><testInclude>**/MapleBenchPersistenceTest.java</testInclude><testInclude>**/MapleBenchXpLedgerTest.java</testInclude></testIncludes>
         </configuration>
       </plugin>
       <plugin>
@@ -38,7 +41,7 @@
           <forkCount>1</forkCount><reuseForks>true</reuseForks>
           <argLine>-Xmx512m -XX:ActiveProcessorCount=2</argLine>
           <forkedProcessTimeoutInSeconds>90</forkedProcessTimeoutInSeconds>
-          <includes><include>**/MapleBenchPersistenceTest.java</include></includes>
+          <includes><include>**/MapleBenchPersistenceTest.java</include><include>**/MapleBenchXpLedgerTest.java</include></includes>
         </configuration>
       </plugin>
     </plugins>
