@@ -13,6 +13,17 @@
       <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 15 7 20 5 18 11 23 13 15 18 13 17 13 23 11 23 11 17 9 18 1 13 6 11 4 5 9 7Z" fill="currentColor"/></svg><div><strong>Maple<b>Bench</b></strong><span>Full-client results</span></div></div>
       <p id="connection" role="status">Waiting for results</p>
     </header>
+    <section class="research-intro" aria-labelledby="research-title">
+      <div class="section-heading"><div><h2 id="research-title">How well can an agent discover a training strategy?</h2>
+        <p>Compare models within the same class, task, frozen setup and protocol. Five-minute adaptive pilots include inference and gameplay in their wall-clock budget.</p></div><span class="pill">Research preview · unranked</span></div>
+      <p class="note">Legacy clips report saved net XP from short, single-response programs. The intended 30-minute benchmark measures the best normalized XP/min in complete 15-second authoritative windows. Initial/final XP cannot establish that peak score.</p>
+      <div class="section-heading matrix-heading"><h3>Model × declared class / task</h3><label>Evidence protocol<select id="research-protocol" aria-label="Evidence protocol"></select></label></div>
+      <nav id="catalog-cohorts" aria-label="Class cohort progress" hidden></nav>
+      <p id="research-protocol-detail" class="note"></p>
+      <div id="research-matrix" class="table-wrap"></div>
+      <p id="research-empty" class="empty">A protocol-declared cohort is required for the research matrix. Existing run evidence remains below.</p>
+      <p class="note">Each cell retains planned and attempted counts, valid scores, failures, unknown evidence and unfinished runs. One sample is a pilot observation; no uncertainty estimate or overall model ranking is implied. Candidate ranged and magic fixtures have no results until their native skills and evidence are accepted.</p>
+    </section>
     <section class="live" aria-labelledby="live-title">
       <div class="live-heading"><span id="live-badge" class="pill">No active attempt</span><span id="live-id"></span></div>
       <h1 id="live-title">The next run starts here.</h1>
@@ -24,6 +35,8 @@
         <div><dt id="live-xp-label">Live XP change · diagnostic</dt><dd id="live-xp">—</dd></div>
         <div><dt>Last observed state</dt><dd id="live-survival">—</dd></div>
       </dl>
+      <div id="featured-recording"></div>
+      <div id="adaptive-evidence"></div>
     </section>
     <section aria-labelledby="comparison-title">
       <div class="section-heading"><div><h2 id="comparison-title">Results by frozen inputs</h2><p>Every group is shown. Matching inputs do not prove identical live monster scenes.</p></div><span class="pill">Unranked</span></div>
@@ -44,6 +57,8 @@
       <button id="replay-close" type="button" autofocus>Close replay</button>
     </div>
     <video id="replay-video" controls playsinline preload="metadata" aria-label="Recorded full-client gameplay"></video>
+    <div class="replay-controls"><button id="replay-agent" type="button" hidden>Agent play</button> <button id="replay-full" type="button">Full recording</button></div>
+    <p id="replay-timing"></p>
     <p id="replay-playback-status" role="status"></p>
   </dialog>
 </body>

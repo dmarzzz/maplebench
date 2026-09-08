@@ -331,7 +331,7 @@ def _video_probe_limits():
         resource.setrlimit(kind, (limit, limit))
 
 
-def _measure_video_probe(probe):
+def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
     """Measure actual presentation timestamps; never infer duration from FPS.
 
     MediaRecorder WebM often lacks a finalized Segment duration. The last video
@@ -342,6 +342,8 @@ def _measure_video_probe(probe):
     def require(condition, reason):
         if not condition:
             raise EvidenceError(reason)
+    require(type(maximum_ms) is int and maximum_ms in (VIDEO_MAX_MS, 335000),
+            "video: unsupported protocol duration limit")
     require(isinstance(probe, dict) and isinstance(probe.get("streams"), list)
             and len(probe["streams"]) == 1, "video: require one selected decoded video stream")
     stream = probe["streams"][0]
@@ -356,6 +358,7 @@ def _measure_video_probe(probe):
     require(isinstance(packets, list) and len(packets) == frames,
             "video: require complete bounded packet and decoded-frame accounting")
     presentations = []
+    packet_hashes=[]
     for packet in packets:
         require(isinstance(packet, dict) and isinstance(packet.get("flags"), str)
                 and "C" not in packet["flags"] and "D" not in packet["flags"],
@@ -366,31 +369,46 @@ def _measure_video_probe(probe):
         timestamp = float(packet["pts_time"]) * 1000
         raw_duration = packet.get("duration_time")
         duration = 0 if raw_duration in (None, "N/A") else float(raw_duration) * 1000
-        require(_number(timestamp, -VIDEO_MAX_MS) and timestamp <= VIDEO_MAX_MS
+        require(_number(timestamp, -maximum_ms) and timestamp <= maximum_ms
                 and _number(duration) and duration <= 1000,
                 "video: invalid or out-of-bounds packet timestamps")
         presentations.append((timestamp, duration))
+        packet_hashes.append(packet.get("data_hash"))
+    original_presentations=list(presentations)
     presentations.sort()
     require(all(0 < later[0] - earlier[0] <= 1000
                 for earlier, later in zip(presentations, presentations[1:])),
             "video: duplicate timestamps or excessive gaps in the saved stream")
     extent = max(timestamp + duration for timestamp, duration in presentations) - presentations[0][0]
-    require(_number(extent, 1) and extent <= VIDEO_MAX_MS,
+    require(_number(extent, 1) and extent <= maximum_ms,
             "video: require a bounded nonempty presentation interval")
     headers = []
     for value in (probe.get("format", {}).get("duration"), stream.get("duration")):
         if value not in (None, "N/A"):
             header = float(value) * 1000
-            require(_number(header, 1) and header <= VIDEO_MAX_MS and abs(header - extent) <= SLACK_MS,
+            require(_number(header, 1) and header <= maximum_ms and abs(header - extent) <= SLACK_MS,
                     "video: duration metadata disagrees with decoded packet coverage")
             headers.append(header)
-    return {"width": width, "height": height, "frames": frames,
-            "duration_ms": headers[0] if headers else extent}
+    tags=probe.get("format",{}).get("tags",{})
+    ledger=tags.get("MAPLEBENCH_ENCODER_LEDGER_V1") if isinstance(tags,dict) else None
+    encoded={}
+    if ledger is not None:
+        require(original_presentations==presentations,"video: encoded packet order mismatch")
+        require(all(isinstance(h,str) and re.fullmatch("SHA256:[a-f0-9]{64}",h) for h in packet_hashes),"video: missing encoded packet hashes")
+        encoded={"encoder_ledger_json":ledger,"packet_sha256":[h[7:] for h in packet_hashes],
+                 "packet_durations_us":[round(duration*1000) for _,duration in presentations]}
+    return encoded|{"width": width, "height": height, "frames": frames,
+            "duration_ms": headers[0] if headers else extent,
+            "presentation_span_ms":presentations[-1][0]-presentations[0][0],
+            "presentation_extent_ms":extent,"last_packet_duration_ms":presentations[-1][1],
+            "packet_timestamps_us":[round(timestamp*1000) for timestamp,_ in presentations]}
 
 
-def _probe_video(path, expected_sha256):
+def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS):
     """Inspect the actual video stream under a bounded, read-only subprocess."""
     try:
+        if type(maximum_ms) is not int or maximum_ms not in (VIDEO_MAX_MS, 335000):
+            raise EvidenceError("video: unsupported protocol duration limit")
         if os.name != "posix":
             raise EvidenceError("video: safe descriptor-based probing is unavailable on this host")
         reference = {"path": path.name, "sha256": expected_sha256}
@@ -401,8 +419,8 @@ def _probe_video(path, expected_sha256):
                 try:
                     process = subprocess.run(
                         ["ffprobe", "-v", "error", "-threads", "1", "-err_detect", "explode",
-                         "-select_streams", "v:0", "-count_frames", "-show_packets",
-                         "-show_entries", "packet=pts_time,duration_time,flags:stream=width,height,nb_read_frames,duration:format=duration",
+                         "-select_streams", "v:0", "-count_frames", "-show_packets", "-show_data_hash", "sha256",
+                         "-show_entries", "packet=pts_time,duration_time,flags,data_hash:stream=width,height,nb_read_frames,duration:format=duration:format_tags=MAPLEBENCH_ENCODER_LEDGER_V1",
                          "-of", "json", descriptor_path], stdin=subprocess.DEVNULL,
                         stdout=output, stderr=errors, timeout=30, check=False, pass_fds=(fd,),
                         preexec_fn=_video_probe_limits,
@@ -413,7 +431,9 @@ def _probe_video(path, expected_sha256):
                     raise EvidenceError("video: decoder failed, reported corruption, or exceeded output limits")
                 output.seek(0)
                 probe = parse_json(output.read(JSON_LIMIT + 1))
-            measured = _measure_video_probe(probe)
+            measured = _measure_video_probe(probe, maximum_ms=maximum_ms)
+            if "encoder_ledger_json" in measured:
+                measured.update(webm_sha256=expected_sha256,webm_bytes=os.fstat(fd).st_size)
         return measured
     except EvidenceError:
         raise
@@ -659,7 +679,8 @@ def _verify_readiness_policy(manifest, artifact_root, evidence, scenario):
             and 0 <= receipt["qualified_run_ms"] - receipt["wait_started_run_ms"] <= policy["timeout_ms"]
             and receipt["qualified_at_ms"] - receipt["wait_started_at_ms"] <= policy["timeout_ms"] + SLACK_MS,
             "qualification must follow capture readiness within the frozen timeout")
-    require(manifest["budgets"].get("run_ms") == (scenario["program_seconds"] + 63) * 1000,
+    expected_run_ms = 335000 if scenario.get("protocol") == "full-client-adaptive-pilot-v1" else (scenario["program_seconds"] + 63) * 1000
+    require(manifest["budgets"].get("run_ms") == expected_run_ms,
             "future run budget must include only the frozen ten-second readiness allowance")
     for wall, elapsed in (("wait_started_at_ms", "wait_started_run_ms"), ("qualified_at_ms", "qualified_run_ms")):
         require(abs(receipt[wall] - started - receipt[elapsed]) <= SLACK_MS,
@@ -778,9 +799,23 @@ def verify_capture_bundle(manifest, artifact_root):
             and _text(terminal["id"]) and _number(terminal["serverIssuedAtMs"]),
             "capture: invalid terminal server receipt")
     require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
+    from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL, NATIVE_V4_PROTOCOL
+    native = result.get("protocol") in (NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL)
+    owner = {"id": run_id, "client": result["controller"]["client"], "startedAtMs": started,
+             "protocol": result.get("protocol"), "adaptiveProtocol":result.get('adaptive',{}).get('limits',{})}
+    if native:
+        from full_client_native import validate_contract
+        config = validate_contract(result.get("nativeAcceptance"))
+        require(result["controller"].get("mode") == "script" and result["controller"].get("model") is None
+                and result["controller"].get("returnedModel") is None and result.get("api") is None
+                and result.get("trialContext") is None and type(result.get("model_api_requests")) is int
+                and result["model_api_requests"] == 0 and result["controller"].get("protocol") == config["id"] == result["protocol"]
+                and all(result.get("timeline", {}).get(key) is None for key in ("api_started_ms", "api_ended_ms"))
+                and same_json(config,result["controller"].get("nativeAcceptance")),
+                "capture: native acceptance cannot carry a model identity")
+        owner.update(mode="script",model=None,nativeAcceptance=config)
     try:
-        measured = capture_receipt(capture, {"id": run_id, "client": result["controller"]["client"],
-                                             "startedAtMs": started}, ready, clock, terminal)
+        measured = capture_receipt(capture, owner, ready, clock, terminal)
     except (ValueError, TypeError, KeyError, OverflowError) as error:
         raise EvidenceError("capture: raw measurements failed validation") from error
     require(all(same_json(video.get(key), value) for key, value in measured.items()),
@@ -791,12 +826,12 @@ def verify_capture_bundle(manifest, artifact_root):
             and measured["timing_uncertainty_ms"] <= CAPTURE_UNCERTAINTY_MS,
             "capture: require continuous post-render frames with bounded measured clock uncertainty")
     lower, upper = measured["clock_offset_ms"]["lower"], measured["clock_offset_ms"]["upper"]
-    api_start = started + result["timeline"]["api_started_ms"]
+    input_start = started + result["timeline"]["program_started_ms" if native else "api_started_ms"]
     program_end = started + result["timeline"]["program_ended_ms"]
     ended = result["timing"]["endedAtMs"]
-    require(started <= ready["serverReceivedAtMs"] <= api_start
-            and capture["first_frame_wall_ms"] + upper <= api_start + SLACK_MS,
-            "capture: recording must begin before the API planning interval")
+    require(started <= ready["serverReceivedAtMs"] <= input_start
+            and capture["first_frame_wall_ms"] + upper <= input_start + SLACK_MS,
+            "capture: recording must begin before the planning or native input interval")
     require(ended <= terminal["serverIssuedAtMs"]
             and capture["last_frame_wall_ms"] + lower >= program_end - SLACK_MS
             and capture["end_wall_ms"] + lower >= terminal["serverIssuedAtMs"] - SLACK_MS

@@ -17,8 +17,10 @@ from pathlib import Path
 
 from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, validate_rpc
 from full_client_capture import capture_receipt
+from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL, NATIVE_V4_PROTOCOL, validate_contract as validate_native, program as native_program
 from full_client_docker import DockerBindingError, validate_binding
 from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
+from full_client_adaptive import AdaptiveError, PROTOCOL as ADAPTIVE_PROTOCOL, run_adaptive, validate_protocol
 
 
 class ControlError(ValueError):
@@ -26,6 +28,56 @@ class ControlError(ValueError):
     def __init__(self, code):
         self.code = code
         super().__init__(code)
+
+
+def failure_release(path, run_id, quarantine_id=None, *, create=False):
+    """Create once or validate the exact durable acknowledgment after a lost reply."""
+    if quarantine_id is None and (path.parent/'quarantine.json').exists():
+        try:
+            quarantine=json.loads(read_private_file(path.parent/'quarantine.json',4096))
+            if (set(quarantine)!={'runId','id','reason'} or quarantine['runId']!=run_id
+                    or not isinstance(quarantine['id'],str) or not re.fullmatch('[a-f0-9]{32}',quarantine['id'])
+                    or quarantine['reason'] not in ('invalid_controller_evidence','invalid_quarantine_evidence')):raise ValueError()
+            quarantine_id=quarantine['id']
+        except (OSError,ValueError,TypeError):raise ControlError('invalid_failure_release') from None
+    reason='operator_acknowledged_corrupt_evidence' if quarantine_id else 'operator_acknowledged_failure'
+    identity={'runId':run_id,'reason':reason}
+    if quarantine_id:identity['quarantineId']=quarantine_id
+    if create and not os.path.lexists(path):
+        raw=(json.dumps(identity|{'releasedAtMs':round(time.time()*1000)},sort_keys=True)+'\n').encode()
+        fd,name=tempfile.mkstemp(prefix='.release-',dir=path.parent)
+        try:
+            with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+            try:os.link(name,path)
+            except FileExistsError:pass
+            directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(directory)
+            finally:os.close(directory)
+        finally:os.unlink(name)
+    try:
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as stream:
+            before=os.fstat(stream.fileno())
+            if not _private_stat(before) or before.st_size>4096:raise ValueError()
+            raw=stream.read(4097);after=os.fstat(stream.fileno())
+        stamp=lambda st:(st.st_dev,st.st_ino,st.st_mode,st.st_uid,st.st_size,st.st_mtime_ns,st.st_ctime_ns)
+        if stamp(before)!=stamp(after) or stamp(after)!=stamp(path.lstat()):raise ValueError()
+        def pairs(items):
+            result={}
+            for k,v in items:
+                if k in result:raise ValueError()
+                result[k]=v
+            return result
+        value=json.loads(raw,object_pairs_hook=pairs)
+        if (set(value)!=set(identity)|{'releasedAtMs'} or any(value[k]!=v for k,v in identity.items())
+                or type(value['releasedAtMs']) is not int or value['releasedAtMs']<0):raise ValueError()
+        return value
+    except (OSError,ValueError,TypeError,RecursionError):raise ControlError('invalid_failure_release') from None
+
+
+def has_failure_release(path, run_id):
+    try:failure_release(path,run_id);return True
+    except ControlError:return False
 
 
 def _private_stat(value):
@@ -51,6 +103,48 @@ def read_private_file(path, maximum=65536):
         if len(contents) > maximum:
             raise ControlError('credential_file_oversized')
         return contents
+
+
+INPUT_FAILURE_CODES=frozenset(('hidden_before_input','stale_before_input','relay_before_input',
+ 'cancelled_before_input','capture_unavailable','capture_stopping','run_mismatch','invalid_input_keys',
+ 'invalid_input_duration','invalid_input_deadline','deadline_before_input','deadline_before_keydown',
+ 'deadline_after_input','interrupted_unknown','interrupted_operator','interrupted_window_blur',
+ 'interrupted_hidden','interrupted_cancelled','interrupted_stale_observation','interrupted_navigation',
+ 'interrupted_relay','interrupted_page_hide','input_failure_unknown'))
+
+def input_failure(value):
+    if (not isinstance(value,dict) or set(value)!={'code','keydown_issued','elapsed_ms','remaining_ms'}
+            or not isinstance(value['code'],str) or value['code'] not in INPUT_FAILURE_CODES
+            or type(value['keydown_issued']) is not bool):raise ControlError('invalid_input_failure')
+    for key,minimum,maximum in (('elapsed_ms',0,350000),('remaining_ms',-350000,3000)):
+        if value[key] is not None and not (type(value[key]) is int and minimum<=value[key]<=maximum):
+            raise ControlError('invalid_input_failure')
+    return dict(value)
+
+
+CAPTURE_FAILURE_CODES = frozenset(['capture_clock_or_duration', 'capture_wall_clock_drift', 'capture_frame_limit', 'capture_dimensions_changed','capture_snapshot_failed','capture_first_frame_timeout','capture_final_frame_timeout','capture_owner_changed','capture_interrupted', 'capture_frame_gap', 'duplicate_quantized_timestamp', 'invalid_frame_duration', 'encoder_backpressure', 'encoder_output_timing_mismatch', 'encoder_output_type', 'encoder_missing_requested_keyframe', 'capture_byte_limit', 'encoder_hash_backpressure', 'encoder_configuration_changed', 'vp8_hidden_or_mistyped_frame', 'vp8_keyframe_dimensions', 'encoded_hash_failed', 'encoder_stop_timeout', 'capture_already_stopping', 'incomplete_capture', 'capture_endpoint_gap', 'capture_quantized_endpoint_gap', 'encoder_flush_timeout', 'encoder_frame_count_mismatch', 'ledger_too_large', 'encoder_error', 'capture_duration_limit', 'encoder_configuration_timeout', 'vp8_configuration_unsupported', 'webcodecs_unavailable', 'invalid_canvas', 'invalid_capture_limit', 'capture_not_active', 'capture_already_initialized', 'render_hook_failed', 'encoder_initialization_failed', 'encoder_stop_failed', 'encoder_failure_unknown'])
+
+def capture_failure(value):
+    """Untrusted browser diagnostics are bounded enums/counters, never score proof."""
+    fields={'schema_version','run_id','policy_id','code','clock_origin','elapsed_ms',
+            'first_frame_offset_ms','last_frame_offset_ms','rendered_frames','submitted_frames','encoded_frames'}
+    if (not isinstance(value,dict) or set(value)!=fields or type(value['schema_version']) is not int
+            or value['schema_version']!=1 or not isinstance(value['run_id'],str)
+            or not re.fullmatch('[a-f0-9]{32}',value['run_id'])
+            or value['policy_id']!='post-render-encoded-frame-v1' or not isinstance(value['code'],str) or value['code'] not in CAPTURE_FAILURE_CODES
+            or value['clock_origin'] not in ('encoder_start','capture_request')):
+        raise ControlError('invalid_capture_failure')
+    if not (type(value['elapsed_ms']) is int and 0<=value['elapsed_ms']<=350000):
+        raise ControlError('invalid_capture_failure')
+    for key in ('first_frame_offset_ms','last_frame_offset_ms'):
+        if value[key] is not None and not (type(value[key]) is int and 0<=value[key]<=value['elapsed_ms']):
+            raise ControlError('invalid_capture_failure')
+    if any(type(value[k]) is not int or not 0<=value[k]<=20000
+           for k in ('rendered_frames','submitted_frames','encoded_frames')):
+        raise ControlError('invalid_capture_failure')
+    if not value['encoded_frames']<=value['submitted_frames']<=value['rendered_frames']:
+        raise ControlError('invalid_capture_failure')
+    return dict(value)
 
 
 def write_json(path, value):
@@ -151,6 +245,7 @@ class FullClientBridge:
         self.lock = threading.Condition()
         self.client = None
         self.last_seen = 0
+        self.last_input_poll = None
         self.fresh_until = 0
         self.observation = {'ready': False}
         self.pending = None
@@ -210,11 +305,10 @@ class FullClientBridge:
                     os.replace(quarantine_path,folder/f'quarantine-corrupt-{quarantine["id"]}.bin')
                     write_json(quarantine_path,quarantine)
                 try:
-                    if (folder/'release.json').stat().st_size>128*1024: raise ValueError('invalid_release')
-                    release=json.loads((folder/'release.json').read_text())
-                except (OSError,ValueError,RecursionError,UnicodeError):
-                    release={}
-                if not isinstance(release,dict) or release.get('quarantineId')!=quarantine['id']:
+                    failure_release(folder/'release.json',folder.name,quarantine['id'])
+                    released=True
+                except ControlError:released=False
+                if not released:
                     self.quarantines[folder.name]=quarantine['id']
                     previous.update(status='failed',quarantined=True,reason=quarantine['reason'],
                                     evidenceStatus='failed',apiOutcome='uncertain')
@@ -415,6 +509,98 @@ class FullClientBridge:
         return {key:value for key,value in sample.items() if key!='server_received_at_ms'} | {
             'checked_at_ms':round(time.time()*1000)}
 
+    def _capture_failure(self, value, client, received_ms):
+        if value is None:return
+        value=capture_failure(value)
+        # A previous run may still be in one outstanding browser POST. It must
+        # neither overwrite a new run nor block the response carrying its ID.
+        if value['run_id']!=self.run.get('id'):return
+        owner=self.run.get('nativeAcceptance') or self.run.get('adaptiveProtocol') or {}
+        if (self.run.get('client')!=client or owner.get('capture_duration_policy',{}).get('id')
+                !='post-render-encoded-frame-v1'):
+            raise ControlError('capture_failure_owner_mismatch')
+        path=self.output/value['run_id']/'capture-failure.json'
+        if path.is_file():
+            previous=json.loads(read_private_file(path,4096))
+            if previous.get('diagnostic')!=value:raise ControlError('capture_failure_changed')
+        else:
+            receipt={'schema_version':1,'source':'browser_reported_diagnostic_unscored',
+                     'server_received_at_ms':received_ms,'diagnostic':value}
+            raw=(json.dumps(receipt,sort_keys=True,allow_nan=False)+'\n').encode()
+            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+            directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+            try:os.fsync(directory)
+            finally:os.close(directory)
+        self.run['captureFailure']={'code':value['code'],'elapsed_ms':value['elapsed_ms'],
+                                   'rendered_frames':value['rendered_frames']}
+
+    def _input_failure(self, ack, valid_frame, enough_time, now, received_ms, client):
+        before_deadline=now<self.pending['deadline']
+        if ack['ok'] and valid_frame and enough_time and before_deadline:return
+        ident=self.run.get('id')
+        if (not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident)
+                or self.pending.get('runId')!=ident or self.run.get('client')!=client
+                or not (self.output/ident).is_dir()):return
+        path=self.output/ident/'input-failure.json'
+        if os.path.lexists(path):return # Preserve the first command failure, never replace it.
+        diagnostic=ack.get('failure')
+        bounded_ms=lambda v:round(v*1000) if -350<=v<=350 else None
+        value={'schema_version':1,'source':'browser_and_server_input_diagnostics_unscored',
+               'run_id':self.run['id'],'command_id':self.pending['id'],'server_received_at_ms':received_ms,
+               'client':diagnostic,'server':{'client_ack_ok':ack['ok'],'valid_frame':valid_frame,
+                 'enough_hold_time':enough_time,'before_deadline':before_deadline,
+                 'elapsed_since_dispatch_ms':bounded_ms(now-self.pending['sentAt']),
+                 'remaining_ms':bounded_ms(self.pending['deadline']-now)}}
+        raw=(json.dumps(value,sort_keys=True,allow_nan=False)+'\n').encode()
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+        directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:os.fsync(directory)
+        finally:os.close(directory)
+
+    def _input_timeout(self, pending, now):
+        """Snapshot server facts before releasing the pending command; never an ACK."""
+        ident=pending.get('runId')
+        if (not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident)
+                or self.run.get('id')!=ident or self.run.get('client')!=pending.get('client')
+                or self.client!=pending.get('client') or not (self.output/ident).is_dir()):return 'owner_mismatch'
+        path=self.output/ident/'input-timeout.json'
+        if os.path.lexists(path):return 'existing'
+        bounded_ms=lambda value:round(value*1000) if math.isfinite(value) and -350<=value<=350 else None
+        relative=lambda value:bounded_ms(value-pending['requestedAt']) if value is not None else None
+        age_ms=lambda value:round(value,3) if type(value) in (int,float) and math.isfinite(value) and 0<=value<=350000 else None
+        def poll_value(poll):
+            return None if poll is None else {
+                'received_at_ms':poll['receivedAtMs'],'request_elapsed_ms':relative(poll['receivedAt']),
+                'elapsed_before_timeout_ms':bounded_ms(now-poll['receivedAt']),
+                'valid_frame':poll['validFrame'],'age_ms':age_ms(poll['ageMs']),
+                'render_age_ms':age_ms(poll['renderAgeMs'])}
+        ack=pending.get('lastMatchingAck')
+        value={'schema_version':1,'source':'bridge_input_timeout_diagnostic_unscored',
+            'outcome':'uncertain','dispatch_semantics':'selected_for_browser_response',
+            'run_id':ident,'command_id':pending['id'],'requested_at_ms':pending['requestedAtMs'],
+            'observed_at_ms':round(time.time()*1000),'keys':list(pending['keys']),
+            'duration_ms':pending['durationMs'],'dispatched':pending.get('sent') is True,
+            'request_budget_ms':relative(pending['deadline']),'elapsed_request_ms':relative(now),
+            'dispatch_elapsed_ms':relative(pending.get('sentAt')),
+            'remaining_ms':bounded_ms(pending['deadline']-now),
+            'request_poll':poll_value(pending.get('requestPoll')),
+            'dispatch_poll':poll_value(pending.get('dispatchPoll')),
+            'last_poll':poll_value(pending.get('lastPoll')),
+            'matching_ack':None if ack is None else {
+                'received_at_ms':ack['receivedAtMs'],'request_elapsed_ms':relative(ack['receivedAt']),
+                'ok':ack['ok'],'valid_frame':ack['validFrame'],
+                'enough_hold_time':ack['enoughTime'],'before_deadline':ack['beforeDeadline']}}
+        raw=(json.dumps(value,sort_keys=True,allow_nan=False)+'\n').encode()
+        if len(raw)>4096:raise ControlError('input_timeout_diagnostic_oversized')
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+        directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:os.fsync(directory)
+        finally:os.close(directory)
+        return 'saved'
+
     def frame(self, body):
         if not isinstance(body, dict):
             raise ValueError('Invalid client frame')
@@ -431,6 +617,9 @@ class FullClientBridge:
                 or not isinstance(ack.get('id'), str) or not re.fullmatch('[a-f0-9]{32}', ack['id'])
                 or type(ack.get('ok')) is not bool):
             raise ControlError('invalid_input_acknowledgement')
+        if ack is not None and 'failure' in ack:
+            if ack['ok']:raise ControlError('invalid_input_failure')
+            input_failure(ack['failure'])
         with self.lock:
             now = time.monotonic()
             server_received_ms=round(time.time()*1000)
@@ -439,6 +628,7 @@ class FullClientBridge:
                 raise ControlError('client_already_connected')
             self.client = client
             run_id = self.run.get('id')
+            self._capture_failure(body.get('captureFailure'),client,server_received_ms)
             # A restored terminal record is historical evidence, not a live
             # capture-clock session. Ordinary login must work before start()
             # creates the next run and its new recorder/clock handshake.
@@ -450,7 +640,7 @@ class FullClientBridge:
                 and self.run.get('recordingStatus') == 'saved'
                 and (self.output/run_id/'recording.json').is_file()
                 or self.run['status'] == 'failed' and self.run.get('failureAcknowledged') is True
-                and (self.output/run_id/'release.json').is_file()
+                and has_failure_release(self.output/run_id/'release.json',run_id)
             )
             valid_frame = obs['ready'] and max(age, render_age) < 1500
             hud = body.get('renderedHud')
@@ -511,15 +701,28 @@ class FullClientBridge:
                 self.frame_transit=None
             else:
                 self._record_readiness_frame(capture,server_received_ms,now)
+            # Only bounded scalar transport facts enter timeout evidence. The
+            # observation, character, HUD, and arbitrary ACK fields never do.
+            self.last_input_poll={'client':client,'runId':run_id,'receivedAt':now,
+                'receivedAtMs':server_received_ms,'validFrame':valid_frame,
+                'ageMs':age,'renderAgeMs':render_age}
+            if (self.pending and self.pending.get('runId')==run_id
+                    and self.run.get('client')==client):
+                self.pending['lastPoll']=dict(self.last_input_poll)
             if (not settled_history and self.run.get('id') and (self.output/self.run['id']).is_dir()
                     and self.run['status'] in ('completed','failed') and not self.run.get('captureTerminal')):
                 self.run['captureTerminal']={'id':uuid.uuid4().hex,'serverIssuedAtMs':server_received_ms}
                 write_json(self.output/self.run['id']/'capture-terminal.json',self.run['captureTerminal'])
             if (self.pending and ack is not None and ack['id'] == self.pending['id']
-                    and self.pending.get('sent') and now < self.pending['deadline']):
+                    and self.pending.get('sent')):
                 enough_time = now-self.pending['sentAt'] >= self.pending['durationMs']/1000 - 0.001
-                self.pending['ack'] = {'id':ack['id'], 'ok':ack['ok'] and valid_frame and enough_time}
-                self.lock.notify_all()
+                self.pending['lastMatchingAck']={'receivedAt':now,'receivedAtMs':server_received_ms,
+                    'ok':ack['ok'],'validFrame':valid_frame,'enoughTime':enough_time,
+                    'beforeDeadline':now<self.pending['deadline']}
+                self._input_failure(ack,valid_frame,enough_time,now,server_received_ms,client)
+                if now < self.pending['deadline']:
+                    self.pending['ack'] = {'id':ack['id'], 'ok':ack['ok'] and valid_frame and enough_time}
+                    self.lock.notify_all()
             if body.get('releaseAck') == self.run.get('id') and self._cancelled(self.run.get('id')):
                 self.release_acks.add(self.run['id'])
                 if self.run['id'] not in self.cancel_events:
@@ -533,6 +736,7 @@ class FullClientBridge:
                     and self.pending['deadline']-dispatch_now >= self.pending['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS):
                 self.pending['sent'] = True
                 self.pending['sentAt'] = dispatch_now
+                self.pending['dispatchPoll']=dict(self.pending['lastPoll']) if self.pending.get('lastPoll') else None
                 command = {k: self.pending[k] for k in ('id', 'keys', 'durationMs')}
                 command['runId'] = self.run.get('id')
                 # The browser subtracts the full request round trip, requiring
@@ -552,20 +756,31 @@ class FullClientBridge:
                 return self._snapshot()
             if not url.endswith('/v1/action') or not isinstance(payload, dict) or payload.get('type') != 'press_keys':
                 raise ValueError('Only full-client keyboard actions are supported')
-            _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]}, SCENARIO)
+            _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},
+                SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) else {}))
             if self.pending:
                 raise ValueError('Another input is in flight')
+            requested=time.monotonic()
             pending = {'id': uuid.uuid4().hex, 'keys': action['keys'], 'durationMs': action['durationMs'],
-                       'runId':run_id,
-                       'deadline': time.monotonic() + min(timeout, 3)}
+                       'runId':run_id,'client':self.run.get('client'),
+                       'requestedAt':requested,'requestedAtMs':round(time.time()*1000),
+                       'deadline': requested + min(timeout, 3)}
+            if (self.last_input_poll and self.last_input_poll['runId']==run_id
+                    and self.last_input_poll['client']==pending['client']):
+                pending['lastPoll']=dict(self.last_input_poll)
+                pending['requestPoll']=dict(self.last_input_poll)
             if input_deadline is not None:
                 pending['deadline']=min(pending['deadline'],input_deadline)
             self.pending = pending
             try:
                 while 'ack' not in pending:
                     self._check_cancelled(run_id)
-                    left = pending['deadline'] - time.monotonic()
+                    now=time.monotonic()
+                    left = pending['deadline'] - now
                     if left <= 0:
+                        try:diagnostic=self._input_timeout(pending,now)
+                        except (OSError,ValueError):diagnostic='write_failed'
+                        if self.run.get('id')==run_id:self.run['inputTimeoutDiagnosticStatus']=diagnostic
                         raise TimeoutError('Client did not acknowledge keyboard input')
                     self.lock.wait(left)
                 ack = pending['ack']
@@ -621,7 +836,7 @@ class FullClientBridge:
                 if (folder/'capture.json').exists() and json.loads((folder/'capture.json').read_text())!=capture:
                     raise ControlError('capture_metadata_already_saved')
                 write_json(folder/'capture.json',capture)
-            elif owner.get('trialContext'):
+            elif owner.get('trialContext') or owner.get('nativeAcceptance'):
                 raise ControlError('trial_capture_metadata_required')
             if receipt.exists():
                 previous = json.loads(receipt.read_text())
@@ -666,15 +881,21 @@ class FullClientBridge:
         if not isinstance(run_id,str) or not re.fullmatch('[a-f0-9]{32}',run_id):
             raise ControlError('invalid_run_identity')
         with self.lock:
+            if (self.pending or self.run.get('workerActive') or self.leases.get(run_id)
+                    or self.cancel_events.get(run_id)):
+                raise ControlError('run_cannot_be_released')
             if run_id in self.quarantines:
                 folder=self.output/run_id
-                write_json(folder/'release.json',{'runId':run_id,'quarantineId':self.quarantines[run_id],
-                    'reason':'operator_acknowledged_corrupt_evidence','releasedAtMs':round(time.time()*1000)})
+                failure_release(folder/'release.json',run_id,self.quarantines[run_id],create=True)
                 previous=json.loads((folder/'controller.json').read_text())
                 previous.update(failureAcknowledged=True,quarantined=False)
                 write_json(folder/'controller.json',previous)
                 if self.run.get('id')==run_id: self.run.update(previous)
                 del self.quarantines[run_id]
+                return
+            if self.run.get('id') != run_id and (self.output/run_id/'quarantine.json').exists():
+                # An already acknowledged historical quarantine is immutable.
+                failure_release(self.output/run_id/'release.json',run_id)
                 return
             if (self.run.get('id') != run_id or self.run['status'] not in ('failed','completed')
                     or self.pending or self.run.get('workerActive') or self.leases.get(run_id)):
@@ -682,8 +903,7 @@ class FullClientBridge:
             folder = self.output/run_id
             if self.run['status'] == 'completed' and (folder/'recording.json').is_file():
                 raise ControlError('successful_run_cannot_be_discarded')
-            write_json(folder/'release.json', {'runId':run_id,'reason':'operator_acknowledged_failure',
-                                             'releasedAtMs':round(time.time()*1000)})
+            failure_release(folder/'release.json',run_id,create=True)
             if self.run['status'] == 'completed':
                 self.run.update(status='failed',reason='recording_abandoned',recordingStatus='discarded')
             self.run['failureAcknowledged'] = True
@@ -691,12 +911,27 @@ class FullClientBridge:
 
     def start(self, mode, model=None, duration_seconds=22, *, client=None, run_id=None, request_id=None,
               total_token_limit=None, trial_context=None, docker_image_id=None, docker_binding=None,
-              readiness_policy=None, lease_fds=(), private=False):
+              readiness_policy=None, adaptive_protocol=None, native_acceptance=None, lease_fds=(), private=False):
         if mode not in ('script', 'api') or (mode == 'api' and model not in MODELS):
             raise ValueError('Invalid controller selection')
-        if type(duration_seconds) is not int or duration_seconds not in (22, 60):
+        if native_acceptance is not None:
+            try:native_acceptance=validate_native(native_acceptance)
+            except (ValueError,TypeError) as error:raise ControlError('invalid_native_acceptance') from None
+            if (not private or mode!='script' or model is not None or duration_seconds!=30
+                    or adaptive_protocol is not None or trial_context is not None or readiness_policy is not None
+                    or total_token_limit is not None or run_id is None or run_id!=request_id
+                    or docker_binding is None or docker_image_id is None
+                    or not isinstance(lease_fds,(tuple,list)) or len(lease_fds)!=2
+                    or not all(type(fd) is int for fd in lease_fds)):
+                raise ControlError('native_acceptance_private_contract_required')
+        if adaptive_protocol is not None:
+            try:adaptive_protocol=validate_protocol(adaptive_protocol)
+            except AdaptiveError as error:raise ControlError(str(error)) from None
+            if mode!='api' or duration_seconds!=300 or total_token_limit!=adaptive_protocol['max_total_tokens']:
+                raise ControlError('adaptive_controller_budget_mismatch')
+        if type(duration_seconds) is not int or duration_seconds not in ((30,) if native_acceptance is not None else (300,) if adaptive_protocol is not None else (22, 60)):
             raise ValueError('Run duration must be 22 or 60 seconds')
-        if mode == 'script' and duration_seconds != 22:
+        if mode == 'script' and native_acceptance is None and duration_seconds != 22:
             raise ValueError('Scripted smoke runs last at most 22 seconds')
         if total_token_limit is not None and (type(total_token_limit) is not int or not 1 <= total_token_limit <= 2**31-1):
             raise ControlError('invalid_total_token_limit')
@@ -737,6 +972,10 @@ class FullClientBridge:
             identity['dockerBinding'] = docker_binding
         if readiness_policy is not None:
             identity['readinessPolicy'] = readiness_policy
+        if adaptive_protocol is not None:
+            identity['adaptiveProtocol'] = adaptive_protocol
+        if native_acceptance is not None:
+            identity.update(protocol=native_acceptance['id'],nativeAcceptance=native_acceptance)
         with self.lock:
             claim = self.output/'requests'/f'{request_id}.json'
             if claim.exists():
@@ -784,6 +1023,12 @@ class FullClientBridge:
                         'controllerSeconds':duration_seconds+2,'apiTokenUpperBound':None,
                         'workerActive':True,
                         'client':self.client, 'recordingStatus':'pending', 'evidenceStatus':'pending'}
+            if native_acceptance is not None:
+                value.update(actionLimit=12,sdkRequestLimit=100,controllerSeconds=30,apiOutcome='not_started',publicationEligible=False)
+            if adaptive_protocol is not None:
+                value.update(actionLimit=adaptive_protocol['max_actions'],sdkRequestLimit=adaptive_protocol['max_sdk_requests'],
+                    controllerSeconds=adaptive_protocol['wall_seconds'],cycleProgramSeconds=adaptive_protocol['program_seconds'],
+                    protocol=ADAPTIVE_PROTOCOL,cycleNumber=0)
             folder = self.output/value['id']
             folder.mkdir(parents=True)
             write_json(folder/'request.json', value)
@@ -809,9 +1054,14 @@ class FullClientBridge:
         return {k:v for k,v in value.items() if k != 'client' and (private or k != 'dockerBinding')}
 
     def _run(self, run):
+        if run.get('adaptiveProtocol') is not None:
+            return self._run_adaptive(run)
         out = self.output / run['id']
         result = None
-        started = time.monotonic()
+        # Offsets use the persisted request's wall origin, not worker entry.
+        # Journal writes/thread scheduling occur between those events; omitting
+        # that interval can falsely place program start before capture-ready.
+        started = time.monotonic() - (time.time() - run['startedAtMs'] / 1000)
         started_ms = run['startedAtMs']
         api_ms = 0
         meta = None
@@ -829,7 +1079,15 @@ class FullClientBridge:
         readiness_sha256 = None
 
         def run_request(url, payload=None, timeout=3):
-            return self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
+            sent_ms = round((time.monotonic()-started)*1000)
+            reply = self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
+            if (url.endswith('/v1/action') and isinstance(reply,dict) and reply.get('accepted') is True
+                    and 'first_input_started_ms' not in timeline):
+                # Anchor playback to an input that actually received a reply,
+                # using the same monotonic origin as the program timeline.
+                timeline['first_input_started_ms'] = sent_ms
+                timeline['first_input_acked_ms'] = round((time.monotonic()-started)*1000)
+            return reply
 
         try:
             if run.get('trialContext'):
@@ -842,7 +1100,7 @@ class FullClientBridge:
                 timeline['readiness_ended_ms']=readiness_receipt['qualified_run_ms']
             else:
                 initial = run_request('/v1/observe')
-            code, meta = SMOKE_CODE, None
+            code, meta = native_program(run['nativeAcceptance']) if run.get('nativeAcceptance') else SMOKE_CODE, None
             if run['mode'] == 'api':
                 api_started = None
                 key = read_private_file(self.key_file).strip()
@@ -929,7 +1187,7 @@ class FullClientBridge:
                 code = choice['code']
                 write_json(out/'program.json', choice)
             else:
-                write_json(out/'program.json', {'note':'Deterministic adapter smoke test; no model', 'code':code})
+                write_json(out/'program.json', {'note':'Scripted native acceptance; no model' if run.get('nativeAcceptance') else 'Deterministic adapter smoke test; no model', 'code':code})
             write_bytes(out/'program.js', code.encode())
             phase = 'program_start'
             run_request('/v1/observe')
@@ -955,7 +1213,7 @@ class FullClientBridge:
             phase = 'program_execution'
             program_started=time.monotonic()
             input_deadline=program_started+program_seconds
-            result = execute_program(code, SCENARIO, 'http://127.0.0.1:8840',
+            result = execute_program(code, SCENARIO | ({'protocol':run['nativeAcceptance']['id']} if run.get('nativeAcceptance') else {}), 'http://127.0.0.1:8840',
                                      deadline=time.monotonic()+program_seconds+2, program_seconds=program_seconds,
                                      max_actions=action_limit, max_requests=sdk_request_limit,
                                      request_fn=run_request, step_callback=record_progress,cancel_event=cancel_event,
@@ -986,6 +1244,8 @@ class FullClientBridge:
             result_document = {'controller':run | {'status':status, 'reason':reason,'workerActive':False,'actions':result['actions'], 'returnedModel':meta.get('model') if meta else None}, 'program':result, 'initial':initial,
                                          'final':final, 'source':'full-client-trial' if run.get('trialContext') else 'client telemetry; unscored integration run',
                                          'trialContext':run.get('trialContext'),
+                                         **({'protocol':run['nativeAcceptance']['id'],'nativeAcceptance':run['nativeAcceptance'],'model_api_requests':0,
+                                              'publication_eligible':False,'score':None} if run.get('nativeAcceptance') else {}),
                                          'timing':{'startedAtMs':started_ms, 'endedAtMs':round(time.time()*1000),
                                                    'elapsedMs':round((time.monotonic()-started)*1000),
                                                    'apiLatencyMs':api_ms},
@@ -997,9 +1257,9 @@ class FullClientBridge:
                                          'observedXpDelta':final['character']['exp']-initial['character']['exp']
                                              if final['character']['level']==initial['character']['level'] else None}
             publication = {
-                'schema_version':1, 'run_kind':'integration',
+                'schema_version':1, 'run_kind':'native_acceptance' if run.get('nativeAcceptance') else 'integration',
                 'result':result_document,
-                'budgets':{'api_requests':1 if run['mode']=='api' else 0, 'output_tokens':3000,
+                'budgets':{'api_requests':1 if run['mode']=='api' else 0, 'output_tokens':0 if run.get('nativeAcceptance') else 3000,
                            'total_tokens':run.get('totalTokenLimit'), 'program_ms':program_seconds*1000,
                            'run_ms':(program_seconds+(63 if readiness_receipt is not None else 53))*1000, 'actions':action_limit,
                            'sdk_requests':sdk_request_limit},
@@ -1065,3 +1325,147 @@ class FullClientBridge:
                     self.cancel_events.pop(run['id'],None)
                     if not retain_lease:
                         for descriptor in self.leases.pop(run['id'],[]): os.close(descriptor)
+
+    def _run_adaptive(self, run):
+        """Actual adaptive API execution; intentionally separate evidence schema."""
+        out=self.output/run['id'];started=time.monotonic()-(time.time()-run['startedAtMs']/1000);final_controller=None
+        readiness=None;trace=None;api_outcome='not_started';input_deadline=None;first_input={};adaptive_started=None
+        def check_cancelled():
+            with self.lock:
+                try:self._check_cancelled(run['id'])
+                except ControlError as error:raise AdaptiveError(error.code) from None
+        def persist_bytes(name,raw):
+            path=out/name
+            if Path(name).is_absolute() or '..' in Path(name).parts:raise ControlError('invalid_adaptive_artifact_path')
+            path.parent.mkdir(parents=True,exist_ok=True)
+            write_bytes(path,raw)
+            return {'path':name,'sha256':hashlib.sha256(raw).hexdigest()}
+        def persist_json(name,value):
+            return persist_bytes(name,json.dumps(value,allow_nan=False,separators=(',',':')).encode()+b'\n')
+        def request(url,payload=None,timeout=3):
+            sent=time.monotonic()
+            value=self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
+            if url.endswith('/v1/action') and value.get('accepted') is True and not first_input:
+                first_input.update(started=sent,acked=time.monotonic())
+            return value
+        def phase(**value):
+            nonlocal input_deadline,adaptive_started,readiness
+            input_deadline=value['deadline'];adaptive_started=input_deadline-300
+            if value['phase']=='preparing':return
+            if value['phase']=='requesting':
+                if run.get('dockerBinding') is not None:validate_binding(run['dockerBinding'])
+                if readiness is not None and value['cycle']==0:
+                    with self.lock:
+                        readiness=readiness|{'dispatch':self._readiness_dispatch(run,readiness)}
+                        write_json(out/'readiness.json',readiness)
+                        check_cancelled();self._readiness_dispatch(run,readiness)
+            with self.lock:
+                check_cancelled()
+                self.run.update(status='running' if value['phase']=='waiting_for_deadline' else value['phase'],
+                    adaptivePhase=value['phase'],cycleNumber=value['cycle'],
+                    adaptiveStartedAtMs=round((time.time()-(time.monotonic()-adaptive_started))*1000),
+                    apiRequestsStarted=value['counters']['api_requests_started'],
+                    apiTokenUpperBound=value['counters']['reserved_tokens'])
+                self.run.setdefault('programStartedAtMs',round(time.time()*1000))
+                write_json(out/'controller.json',self.run)
+        def progress(step):
+            with self.lock:
+                if self.run.get('id')==run['id'] and step.get('method')=='pressKeys' and step.get('result',{}).get('accepted') is True:
+                    self.run['actions']+=1
+        def provider(url,body,timeout):
+            nonlocal readiness,api_outcome
+            check_cancelled()
+            remaining=min(timeout,input_deadline-time.monotonic())
+            if remaining<=0:raise AdaptiveError('adaptive_wall_deadline')
+            key=read_private_file(self.key_file).strip();api_outcome='uncertain'
+            try:return bounded_request(url,body,key,remaining)
+            finally:del key
+        def execute(code,**kwargs):
+            return execute_program(code,SCENARIO|{'protocol':ADAPTIVE_PROTOCOL},'http://127.0.0.1:8840',request_fn=request,
+                cancel_event=self.cancel_events.get(run['id']),
+                **({'docker_binding':run['dockerBinding']} if run.get('dockerBinding') else {}),
+                **({'docker_image':run['dockerImageId']} if run.get('dockerImageId') else {}),**kwargs)
+        try:
+            self._wait_for_capture(run['id'])
+            if run.get('trialContext'):
+                initial,readiness=self._wait_for_readiness(run,started)
+            else:initial=request('/v1/observe')
+            value=run_adaptive(run_id=run['id'],model=run['model'],protocol=run['adaptiveProtocol'],
+                initial=initial,observe=lambda timeout:request('/v1/observe',timeout=timeout),request_api=provider,
+                execute=execute,persist_json=persist_json,persist_bytes=persist_bytes,cancel_check=check_cancelled,
+                on_phase=phase,on_step=progress,clock=time.monotonic,wall_clock=time.time)
+            trace=value['trace'];api_outcome=('confirmed' if trace['counters']['api_requests_started']==trace['counters']['api_responses_confirmed']
+                else 'uncertain' if trace['counters']['api_requests_started'] else 'not_started')
+            if first_input:
+                trace['timing'].update(first_input_started_ms=round((first_input['started']-adaptive_started)*1000),
+                    first_input_acked_ms=round((first_input['acked']-adaptive_started)*1000))
+            trace_ref=persist_json('adaptive.json',trace)
+            # This terminal observation is diagnostic and cannot authorize input
+            # after the wall deadline or stand in for persisted XP collection.
+            final=request('/v1/observe')
+            status,reason=trace['status'],trace['reason'];counters=trace['counters']
+            origin=trace['timing']['wall_started_at_ms']-run['startedAtMs']
+            api_cycles=[c for c in trace['cycles'] if c.get('api_outcome')=='confirmed']
+            ended_wall=round(time.time()*1000);terminal_ms=ended_wall-run['startedAtMs']
+            timeline={'adaptive_started_ms':origin,
+                'adaptive_ended_ms':terminal_ms,
+                'api_started_ms':origin+api_cycles[0]['timing']['api_started_ms'] if api_cycles else None,
+                'api_ended_ms':origin+api_cycles[-1]['timing']['api_ended_ms'] if api_cycles else None,
+                'program_started_ms':origin,'program_ended_ms':terminal_ms,
+                'readiness_started_ms':readiness['wait_started_run_ms'] if readiness else None,
+                'readiness_ended_ms':readiness['qualified_run_ms'] if readiness else None,
+                'first_input_started_ms':origin+trace['timing']['first_input_started_ms'] if first_input else None,
+                'first_input_acked_ms':origin+trace['timing']['first_input_acked_ms'] if first_input else None,
+                'status':status}
+            result={'schema_version':1,'protocol':ADAPTIVE_PROTOCOL,'source':'full-client-adaptive-pilot',
+                'controller':run|{'status':status,'reason':reason,'workerActive':False,
+                    'actions':counters['actions'],'returnedModel':run['model'] if counters['api_responses_confirmed'] else None},
+                'initial':initial,'final':final,'readiness':readiness,
+                'readinessSha256':hashlib.sha256((out/'readiness.json').read_bytes()).hexdigest() if readiness else None,
+                'adaptive':trace,'adaptiveTrace':trace_ref,'timeline':timeline,
+                'trialContext':run.get('trialContext'),'program':{'actions':counters['actions'],
+                    'actionAttempts':counters['action_attempts'],'rpcRequests':counters['sdk_requests'],'steps':value['steps'],
+                    'reason':reason,'error':trace['error']},
+                'timing':{'startedAtMs':run['startedAtMs'],'endedAtMs':ended_wall,
+                    'elapsedMs':round((time.monotonic()-started)*1000),
+                    'apiLatencyMs':sum(c['timing'].get('api_ended_ms',c['timing'].get('api_started_ms',0))-c['timing'].get('api_started_ms',0)
+                                       for c in trace['cycles'])},
+                'observedXpDelta':final['character']['exp']-initial['character']['exp']
+                    if final['character']['level']==initial['character']['level'] else None,
+                'persistedNetXp':None,'authoritativePeakXpPerMinute':None,
+                'publicationEligible':False,'publicationBlocker':'adaptive_trial_evidence_adapter_required'}
+            publication={'schema_version':3,'protocol':ADAPTIVE_PROTOCOL,'run_kind':'adaptive_pilot',
+                'result':result,'video':json.loads((out/'recording.json').read_text()) if (out/'recording.json').is_file() else None,
+                'score':None,'publication_eligible':False,'reason':'adaptive_trial_evidence_adapter_required'}
+            with self.lock:
+                check_cancelled();persist_json('result.json',result);persist_json('publication.json',publication)
+                self.run.update(status=status,reason=reason,actions=counters['actions'],apiOutcome=api_outcome,
+                    returnedModel=result['controller']['returnedModel'],evidenceStatus='saved' if status=='completed' else 'failed')
+                final_controller=dict(self.run)
+                write_json(out/'controller.json',final_controller)
+        except Exception as error:
+            reason=error.code if isinstance(error,ControlError) else str(error) if isinstance(error,(AdaptiveError,DockerBindingError)) else type(error).__name__
+            with self.lock:
+                self.run.update(status='failed',reason=reason,failurePhase='adaptive_controller',
+                    apiOutcome=api_outcome,evidenceStatus='failed');final_controller=dict(self.run)
+            try:write_json(out/'failure.json',{'controller':final_controller,'error':reason,'adaptive':trace,'apiOutcome':api_outcome})
+            except OSError:pass
+        finally:
+            # Match the legacy worker's no-replay cleanup contract. Failed leased
+            # attempts retain ownership until explicit cancellation/release.
+            with self.lock:
+                if self.leases.get(run['id']) and self.run.get('status')=='failed' and not self._cancelled(run['id']):
+                    try:
+                        cancellation=self.output/'cancellations'/f'{run["id"]}.json';cancellation.parent.mkdir(parents=True,exist_ok=True)
+                        write_json(cancellation,{'runId':run['id'],'requestedAtMs':round(time.time()*1000),
+                            'reason':'worker_failed','apiOutcomeAtCancellation':api_outcome})
+                    except OSError:self.run.update(reason='release_journal_failed',evidenceStatus='failed')
+                retain=bool(self.leases.get(run['id']) and self.run.get('status')=='failed' and run['id'] not in self.release_acks)
+                self.run.update(workerActive=False,leaseReleasePending=retain)
+                if final_controller is not None:final_controller.update(workerActive=False,leaseReleasePending=retain)
+                try:write_json(out/'controller.json',final_controller or self.run)
+                except OSError:self.run.update(status='failed',reason='evidence_write_failed',evidenceStatus='failed')
+                finally:
+                    self.cancel_events.pop(run['id'],None)
+                    if not retain:
+                        for descriptor in self.leases.pop(run['id'],[]):os.close(descriptor)

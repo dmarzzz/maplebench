@@ -66,6 +66,17 @@ class FullClientServerTests(unittest.TestCase):
             'Origin':'http://localhost:9999','Content-Type':'application/json'})
         self.assertEqual(status,403)
 
+    def test_controller_loads_encoder_module_from_same_origin(self):
+        status,body=self.request('GET','/web/index.html')
+        self.assertEqual(status,200)
+        self.assertIn(b'<script type="module" src="/full-client-demo.js">',body)
+        status,body=self.request('GET','/webcodecs-recorder.js')
+        self.assertEqual(status,200)
+        self.assertEqual(body,self.module.ENCODER.read_bytes())
+        status,body=self.request('GET','/full-client-demo.js')
+        self.assertEqual(status,200)
+        self.assertIn(b"from './webcodecs-recorder.js'",body)
+
     def test_status_is_read_only_and_omits_client_identifier(self):
         self.module.BRIDGE.frame(self.frame())
         self.module.BRIDGE.run={'status':'idle','client':'private-owner-id'}
@@ -74,6 +85,23 @@ class FullClientServerTests(unittest.TestCase):
         self.assertNotIn(b'private-owner-id',body)
         self.assertNotIn('observation',json.loads(body))
         self.assertTrue(json.loads(body)['fresh'])
+
+    def test_stale_game_url_cannot_reopen_account_after_logout(self):
+        session=self.module.SessionCoordinator(self.module.BRIDGE)
+        self.module.SESSION=session
+        session.owner='renderer'; session.desired='waiting'; session.transition='b'*32
+        self.account.write_text('{"password":"test-only-must-stay-private"}')
+        for suffix in ('','?transition='+'a'*32,'?transition='+'b'*32):
+            status,body=self.request('GET','/web/index.html'+suffix)
+            self.assertEqual(status,303)
+            self.assertNotIn(b'full-client-demo.js',body)
+        status,body=self.request('GET','/demo-session')
+        self.assertEqual(status,409)
+        self.assertNotIn(b'test-only-must-stay-private',body)
+        session.desired='game'; session.transition='c'*32
+        self.assertEqual(self.request('GET','/web/index.html?transition='+'a'*32)[0],303)
+        self.assertEqual(self.request('GET','/web/index.html?transition='+'c'*32)[0],200)
+        self.assertEqual(self.request('GET','/demo-session')[0],200)
 
     def test_cross_site_top_level_waiting_navigation_is_the_only_exception(self):
         self.module.SESSION=self.module.SessionCoordinator(self.module.BRIDGE)

@@ -94,7 +94,7 @@ class RuntimeTests(unittest.TestCase):
                              "DropInPaths": "", "Environment": "", "NeedDaemonReload": "no"}
         self.host.unit.return_value = self.offline_unit
         self.host.admin.return_value = {"session": {"state": "waiting", "fresh": True, "pinned": True,
-                                                    "artifactsSettled": True}, "bridge": {"run": None}}
+                                                    "artifactsSettled": True, "captureState": "idle"}, "bridge": {"run": None}}
         self.host.command.return_value = b"0\n"
 
     def policy(self):
@@ -206,7 +206,60 @@ class RuntimeTests(unittest.TestCase):
         self.host.command.return_value = b"2\n"
         with self.assertRaisesRegex(runtime.RuntimeErrorCode, "cleanup_requires_stopped_offline"):
             self.backend.cleanup()
-        self.assertNotIn("clean", self.backend.state)
+        self.assertFalse(self.backend.state["clean"])
+
+    def test_cleanup_requests_wait_only_after_evidence_and_config_then_confirms_browser(self):
+        events = []
+        self.host.deadline = __import__("time").monotonic() + 120
+        original_deadline = self.host.deadline
+        self.backend.settle_owned_controller = lambda: events.append("controller_terminal")
+        self.backend.preserve_failure_evidence = lambda: events.append("evidence_preserved")
+        self.backend.state["dropin"] = "owned fixture"
+        self.backend.remove_trial_configuration = lambda: events.append("config_removed")
+        status = self.host.admin.return_value
+        def admin(path, request, **kwargs):
+            if request["op"] == "prepare_wait":
+                self.assertEqual(events, ["controller_terminal", "evidence_preserved", "config_removed"])
+                stored = json.loads((self.directory / "backend-state.json").read_text())
+                self.assertFalse(stored["clean"])
+                self.assertEqual(stored["cleanup_wait_requests"], [2000])
+                self.assertLessEqual(self.host.deadline, __import__("time").monotonic() + 15)
+                events.append("prepare_wait")
+            return status
+        self.host.admin.side_effect = admin
+        self.assertEqual(self.backend.cleanup(), {"clean": True})
+        self.assertEqual(self.host.deadline, original_deadline)
+        stored = json.loads((self.directory / "backend-state.json").read_text())
+        self.assertTrue(stored["clean"])
+        self.assertEqual(stored["cleanup_wait"]["session"]["captureState"], "idle")
+
+    def test_cleanup_never_confirms_stale_unpinned_or_unsettled_waiting(self):
+        ready = self.host.admin.return_value
+        for change in ({"state": "connected"}, {"fresh": False}, {"pinned": False},
+                       {"artifactsSettled": False}, {"captureState": "saving"}, {"captureState": "recording"}):
+            with self.subTest(change=change):
+                self.backend.state["clean"] = True
+                self.backend.state.pop("cleanup_wait", None)
+                self.host.admin.return_value = ready | {"session": ready["session"] | change}
+                self.host.sleep.side_effect = runtime.RuntimeErrorCode("operation_deadline")
+                with self.assertRaisesRegex(runtime.RuntimeErrorCode, "operation_deadline"):
+                    self.backend.cleanup()
+                stored = json.loads((self.directory / "backend-state.json").read_text())
+                self.assertFalse(stored["clean"])
+                self.assertNotIn("cleanup_wait", stored)
+
+    def test_cleanup_lost_wait_reply_preserves_unconfirmed_intent_without_replay(self):
+        self.backend.state["clean"] = True
+        self.host.admin.side_effect = lambda path, request, **kw: (
+            (_ for _ in ()).throw(runtime.RuntimeErrorCode("admin_response_limit"))
+            if request["op"] == "prepare_wait" else {"bridge": {"run": None}})
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, "admin_response_limit"):
+            self.backend.cleanup()
+        stored = json.loads((self.directory / "backend-state.json").read_text())
+        self.assertFalse(stored["clean"])
+        self.assertEqual(len(stored["cleanup_wait_requests"]), 1)
+        self.assertNotIn("cleanup_wait", stored)
+        self.assertEqual([c.args[1]["op"] for c in self.host.admin.call_args_list].count("prepare_wait"), 1)
 
     def cleanup_configuration_fixture(self):
         dropin = self.backend.trial_dropin_path()
@@ -501,6 +554,27 @@ class RuntimeTests(unittest.TestCase):
         self.backend.verify_api_result = MagicMock()
         return online, events
 
+    def test_adaptive_controller_retains_ordinary_logout_before_metadata(self):
+        from full_client_adaptive import DEFAULT_PROTOCOL, PROTOCOL, prompt
+        online, events = self.controller_fixture()
+        protocol = copy.deepcopy(DEFAULT_PROTOCOL)
+        self.backend.scenario.update(protocol=PROTOCOL, adaptive_protocol=protocol, program_seconds=300,
+            instructions_sha256=hashlib.sha256(prompt(protocol).encode()).hexdigest())
+        self.backend.context["request"].update(schema_version=2, protocol=PROTOCOL)
+        original = self.backend.admin
+        self.backend.admin = MagicMock(side_effect=original)
+        self.backend.verify_adaptive_controller = MagicMock(return_value={"protocol":PROTOCOL,"api_requests":12})
+        receipt = self.backend.run_controller()
+        self.assertFalse(online[0])
+        self.assertLess(events.index("disconnect"), events.index("metadata"))
+        self.assertEqual(events.count("start"),1)
+        start = next(call for call in self.backend.admin.call_args_list if call.args[0]=="start")
+        self.assertEqual(start.kwargs['duration_seconds'],300)
+        self.assertEqual(start.kwargs['adaptive_protocol'],protocol)
+        self.backend.verify_adaptive_controller.assert_called_once()
+        self.backend.verify_api_result.assert_not_called()
+        self.assertEqual(receipt['api_requests'],12)
+
     def test_completed_run_logs_out_before_any_artifact_work(self):
         online, events = self.controller_fixture()
         receipt = self.backend.run_controller()
@@ -618,6 +692,21 @@ class RuntimeTests(unittest.TestCase):
         self.backend.status()
         self.backend.frozen.assert_not_called()
 
+    def test_long_operation_caps_inventory_at_its_own_hard_deadline(self):
+        # Adaptive operations can last 360 seconds, but the inventory contract
+        # deliberately rejects a scan budget above 300 seconds.
+        self.backend.account_state = MagicMock(return_value=0)
+        self.backend.load_pins = MagicMock()
+        self.backend.manifest = {"working_directory": str(self.root), "wz_path": str(self.root)}
+        self.backend.docker_binding = MagicMock(return_value=self.binding)
+        for remaining, expected in ((359.8, 300), (1800, 300), (120.8, 120), (1.2, 1)):
+            self.host.remaining.return_value = remaining
+            with self.subTest(remaining=remaining), patch.object(runtime, "verify_manifest",
+                    side_effect=runtime.RuntimeErrorCode("inventory_test_boundary")) as verify:
+                with self.assertRaisesRegex(runtime.RuntimeErrorCode, "inventory_test_boundary"):
+                    runtime.CosmicRuntime.frozen(self.backend)
+                self.assertEqual(verify.call_args.kwargs["limits"], {"timeout_seconds": expected})
+
     def test_full_inventory_and_large_artifact_reads_require_offline_account(self):
         self.backend.account_state = MagicMock(return_value=2)
         for operation in (lambda: runtime.CosmicRuntime.frozen(self.backend),
@@ -659,6 +748,26 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(runtime.RuntimeErrorCode, "recording_duration_mismatch"):
                 self.backend.copy_run()
             capture.assert_not_called()
+
+    def test_offline_copy_uses_only_explicit_frozen_frame_envelope(self):
+        from full_client_capture import CAPTURE_DURATION_POLICY
+        self.video_fixture()
+        reference=self.backend.state['artifacts']['recording']
+        recording=json.loads((self.backend.directory/reference['path']).read_text())
+        recording.update(duration_ms=302090.265,capture_duration_policy=dict(CAPTURE_DURATION_POLICY),
+            first_frame_offset_ms=109,last_frame_offset_ms=301994.265,wall_clock_drift_ms=.735,
+            rendered_frames=2337,interrupted=False,post_render_capture=True)
+        self.backend.state['artifacts']['recording']=self.backend.artifact('frame-recording.json',recording)
+        self.backend.scenario={'protocol':'full-client-adaptive-pilot-v1',
+            'adaptive_protocol':{'capture_duration_policy':dict(CAPTURE_DURATION_POLICY)}}
+        probe={'duration_ms':301973,'presentation_extent_ms':301973,'presentation_span_ms':301972,
+            'last_packet_duration_ms':1,'frames':2338,'width':800,'height':720}
+        with patch('full_client_publish._probe_video',return_value=probe) as decode, \
+                patch('full_client_publish.verify_capture_bundle') as capture:
+            self.backend.copy_run()
+        self.assertEqual(decode.call_args.kwargs,{'maximum_ms':335000});capture.assert_called_once()
+        saved=json.loads((self.backend.directory/self.backend.state['artifacts']['video_probe']['path']).read_text())
+        self.assertEqual(saved['presentation_span_ms'],301972)
 
     def test_status_does_not_treat_stale_waiting_page_as_ready(self):
         self.host.admin.return_value["session"]["fresh"] = False
@@ -879,7 +988,7 @@ class RuntimeTests(unittest.TestCase):
         statuses = [
             {"bridge": {"run": {"id": self.run_id, "status": "running", "workerActive": True}, "browserReleasePending": False}},
             {"bridge": {"run": {"id": self.run_id, "status": "failed", "workerActive": False}, "browserReleasePending": True}},
-            {"bridge": {"run": {"id": self.run_id, "status": "failed", "workerActive": False}, "browserReleasePending": False}}]
+            {"bridge": {"run": {"id": self.run_id, "status": "failed", "workerActive": False, "failureAcknowledged": True}, "browserReleasePending": False}}]
         events = []
         def admin(op, **kwargs):
             events.append(op)
@@ -929,8 +1038,8 @@ class RuntimeTests(unittest.TestCase):
     def web_fixture(self):
         script = self.root / "repo/scripts/serve-full-client.py"
         client = self.root / "client"
-        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
-                    *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "waiting.html")),
+        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
+                    *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "webcodecs-recorder.js", "waiting.html")),
                     *(client / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))]
         for path in required:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -977,6 +1086,13 @@ class RuntimeTests(unittest.TestCase):
             self.backend.manifest["extra_files"].pop(0)
             with self.assertRaisesRegex(runtime.RuntimeErrorCode, "serving_sources_not_frozen"):
                 self.backend.web_identity({"MainPID": "123", "User": "synthetic"})
+
+    def test_encoder_module_cannot_be_omitted_from_frozen_serving_sources(self):
+        self.web_fixture()
+        self.backend.manifest['extra_files']=[ref for ref in self.backend.manifest['extra_files']
+                                              if not ref['path'].endswith('/webcodecs-recorder.js')]
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode,'serving_sources_not_frozen'):
+            self.backend.web_identity({'MainPID':'123','User':'synthetic'})
 
     def test_container_dispatcher_cannot_be_omitted_from_frozen_runtime(self):
         self.web_fixture()
@@ -1078,6 +1194,14 @@ class RuntimeTests(unittest.TestCase):
 
 
 class SafeRuntimeErrorTests(unittest.TestCase):
+    def test_online_snapshot_race_keeps_safe_specific_error_code(self):
+        host=runtime.Host(); host.remaining=MagicMock(return_value=5)
+        config={'command':['/usr/bin/mysql'],'database':'synthetic','character_id':1,'account_id':2}
+        with patch.object(runtime,'collect',side_effect=ValueError('account_still_online')):
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode,'^account_still_online$'):
+                host.snapshot(config,'a'*32)
+        self.assertIn('account_still_online',runtime.RUNTIME_ERROR_CODES)
+
     def test_admin_only_preserves_exact_reviewed_error_envelopes(self):
         host=runtime.Host(); host.remaining=MagicMock(return_value=5)
         cases=[({'ok':False,'error':code},code) for code in

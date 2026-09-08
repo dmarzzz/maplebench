@@ -80,8 +80,11 @@ def score_trial(evidence):
     The trusted collector must verify its files and runtime before calling this.
     """
     require(isinstance(evidence, dict), "evidence: expected an object")
-    require(type(evidence.get("schema_version")) is int and evidence["schema_version"] == 1,
-            "schema_version: only persistence evidence version 1 is supported")
+    adaptive = evidence.get("schema_version") == 2
+    require(type(evidence.get("schema_version")) is int and evidence["schema_version"] in (1, 2),
+            "schema_version: unsupported persistence evidence")
+    require((evidence.get("protocol") == "full-client-adaptive-pilot-v1") if adaptive else evidence.get("protocol") is None,
+            "protocol: adaptive timing requires persistence evidence version 2")
     require(evidence.get("source") == SOURCE, "source: persisted server evidence is required")
     run_id = identifier(evidence, "run_id")
     scenario = digest_field(evidence, "scenario_fingerprint")
@@ -129,11 +132,30 @@ def score_trial(evidence):
              "controller_started_at_ms", "controller_ended_at_ms", "disconnect_requested_at_ms",
              "logged_out_at_ms")
     times = [integer(session, name) for name in names]
-    ordered = [reset_at, initial["captured_at_ms"], *times, final["captured_at_ms"]]
+    ordered_times = [times[i] for i in (0, 1, 4, 2, 3, 5, 6, 7)] if adaptive else times
+    ordered = [reset_at, initial["captured_at_ms"], *ordered_times, final["captured_at_ms"]]
     require(ordered == sorted(ordered), "timeline: reset, session, logout, and snapshots must be ordered")
     require(times[0] < times[1] < times[-1], "session: require a fresh server and a nonempty login-to-logout interval")
     require(times[2] < times[3] and times[4] < times[5],
             "session: API and controller intervals must be nonempty")
+
+    api_ms = times[3] - times[2]
+    if adaptive:
+        require(session.get("protocol") == evidence["protocol"], "session.protocol: mismatched adaptive timing")
+        digest_field(session, "adaptive_trace_sha256")
+        intervals = session.get("api_intervals")
+        require(isinstance(intervals, list) and 1 <= len(intervals) <= 16,
+                "session.api_intervals: require every adaptive provider interval")
+        previous = times[4]; api_ms = 0
+        for index, interval in enumerate(intervals):
+            require(isinstance(interval, dict) and set(interval) == {"index", "started_at_ms", "ended_at_ms"}
+                    and integer(interval, "index") == index, "session.api_intervals: invalid cycle index")
+            start, end = integer(interval, "started_at_ms"), integer(interval, "ended_at_ms")
+            require(previous <= start <= end <= times[5] and start < times[4] + 300000,
+                    "session.api_intervals: overlapping or out-of-budget provider intervals")
+            previous = end; api_ms += end - start
+        require(intervals[0]["started_at_ms"] == times[2] and intervals[-1]["ended_at_ms"] == times[3]
+                and times[5] - times[4] <= 308100, "session: adaptive interval envelope mismatch")
 
     save = object_field(session, "save")
     require(save.get("status") == "confirmed", "save.status: offline status alone cannot prove a successful save")
@@ -157,14 +179,15 @@ def score_trial(evidence):
     # Death penalties remain negative; kills and gross XP cannot be inferred.
     net_xp = final["character"]["exp"] - initial["character"]["exp"]
     return {
-        "schema_version": 1, "source": SOURCE, "run_id": run_id,
+        "schema_version": 2 if adaptive else 1, "source": SOURCE, "run_id": run_id,
+        **({"protocol": evidence["protocol"], "authoritative_peak_xp_per_minute": None} if adaptive else {}),
         "scenario_fingerprint": scenario, "baseline_sha256": baseline_hash,
         "evidence_sha256": hashlib.sha256(canonical).hexdigest(),
         "metrics": {"net_xp": net_xp},
         "level": initial["character"]["level"],
         "final_hp": final["character"]["hp"], "alive_at_logout": final["character"]["hp"] > 0,
         "timing": {"session_ms": times[-1] - times[1],
-                   "api_ms": times[3] - times[2], "controller_ms": times[5] - times[4],
+                   "api_ms": api_ms, "controller_ms": times[5] - times[4],
                    "settlement_ms": times[-1] - times[5]},
         "publication_eligible": False,
     }
@@ -366,6 +389,21 @@ def verify_trial_bundle(evidence, artifact_root, artifacts):
             require(all(type(matches[0].get(key)) is int and matches[0].get(key) == identity[key]
                         for key in ("character_id", "account_id")),
                     f"phase journal: wrong character/account for {event}")
+    if evidence["schema_version"] == 2:
+        from full_client_adaptive_evidence import verify_result
+        scenario = read_json_artifact(artifact_root, artifacts, "scenario")
+        result = read_json_artifact(artifact_root, artifacts, "result")
+        require(scenario.get("protocol") == evidence["protocol"], "adaptive: frozen protocol mismatch")
+        verified = verify_result(result, artifact_root, protocol=scenario["adaptive_protocol"],
+                                 model=result["controller"]["model"])
+        require(result["controller"]["id"] == evidence["run_id"]
+                and same_json(result.get("trialContext"), {"scenario_fingerprint": evidence["scenario_fingerprint"],
+                    "baseline_sha256": evidence["baseline"]["sha256"]})
+                and result["adaptiveTrace"]["sha256"] == session["adaptive_trace_sha256"]
+                and same_json(verified["api_intervals"], session["api_intervals"])
+                and result["timing"]["startedAtMs"] + result["timeline"]["program_started_ms"] == session["controller_started_at_ms"]
+                and result["timing"]["startedAtMs"] + result["timeline"]["program_ended_ms"] == session["controller_ended_at_ms"],
+                "adaptive: persisted session and controller trace differ")
     return score | {"artifacts_verified": True}
 
 

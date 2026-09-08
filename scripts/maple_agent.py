@@ -28,6 +28,7 @@ MAX_PROGRAM_OUTPUT = 131072
 # Leave time for the next relay poll and a post-hold acknowledgement. This is
 # an admission reserve, never permission to extend the program deadline.
 PRESS_KEYS_ACK_SECONDS = 0.5
+PRESS_KEYS_ENDPOINT_SECONDS = 3
 SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'properties': {'note': {'type': 'string'}, 'code': {'type': 'string'}},
@@ -156,6 +157,8 @@ def validate_rpc(message, scenario):
         keys, duration = args
         allowed = {'LEFT', 'RIGHT', 'UP', 'DOWN', 'JUMP', 'ATTACK', 'BRANDISH',
                    'COMBO', 'BOOSTER', 'MAPLE_WARRIOR', 'HP_POTION', 'MP_POTION'}
+        if scenario.get('protocol') in ('full-client-adaptive-pilot-v1','scripted-native-acceptance-v1','scripted-native-acceptance-v2','scripted-native-acceptance-v3','scripted-native-acceptance-v4'):
+            allowed=(allowed-{'BRANDISH','COMBO','BOOSTER','MAPLE_WARRIOR'}) | {'PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2'}
         if (type(keys) is not list or not 1 <= len(keys) <= 3
                 or any(type(key) is not str or key not in allowed for key in keys)
                 or len(set(keys)) != len(keys)
@@ -259,7 +262,7 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
     end = min(deadline, time.monotonic() + program_seconds)
     remaining = end - time.monotonic()
     if remaining <= 0:
-        return {'reason': 'time_limit', 'actions': 0, 'actionAttempts': 0, 'error': None, 'steps': []}
+        return {'reason': 'time_limit', 'actions': 0, 'actionAttempts': 0, 'rpcRequests': 0, 'error': None, 'steps': []}
     name = 'maplebench-agent-' + uuid.uuid4().hex
     # Full-client trials supply a frozen local executable/endpoint. Generic
     # adapters retain their operator-configured Docker command for compatibility.
@@ -356,7 +359,7 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                             raise ValueError('SDK request ID was reused')
                         seen_ids.add(rpc_id)
                     except ValueError as error:
-                        record({'kind': 'rejected_rpc', 'error': str(error)})
+                        record({'kind': 'rejected_rpc', 'error': str(error), 'rpc': message})
                         # Invalid IDs cannot be safely correlated with the JS SDK.
                         if type(rpc_id) is not int or not 1 <= rpc_id <= 10000:
                             raise AgentError('Invalid SDK request ID') from None
@@ -365,12 +368,18 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                     if method not in ('observe', 'wait') and action_attempts >= max_actions:
                         outcome = {'reason': 'action_limit', 'error': None}
                         finished = True; break
+                    if cancel_event is not None and cancel_event.is_set():
+                        outcome = {'reason': 'replaced', 'error': None}
+                        finished = True; break
                     left = end - time.monotonic()
                     if left <= 0:
                         raise TimeoutError('Program deadline reached')
-                    if method == 'pressKeys' and left < action['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS:
-                        # Do not shorten or dispatch the model's hold. Preserve
-                        # the fixed budget with a passive, cancellable tail.
+                    if method == 'pressKeys' and left < max(PRESS_KEYS_ENDPOINT_SECONDS,
+                            action['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS):
+                        # Reserve the complete endpoint interval before sending.
+                        # A shorter interval can expire while the relay waits
+                        # for a poll that still fits its hold/ACK admission rule.
+                        # Keep the original program deadline and model hold.
                         cancelled = cancel_event.wait(left) if cancel_event is not None else time.sleep(left)
                         outcome = {'reason': 'replaced' if cancelled else 'time_limit', 'error': None}
                         finished = True; break
@@ -391,7 +400,8 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                         try:
                             result = (request_fn(base_url + '/v1/observe', timeout=min(3, left))
                                       if method == 'observe' else
-                                      request_fn(base_url + '/v1/action', action, timeout=min(3, left)))
+                                      request_fn(base_url + '/v1/action', action,
+                                          timeout=PRESS_KEYS_ENDPOINT_SECONDS if method == 'pressKeys' else min(3, left)))
                         except Exception as error:
                             safe_error = 'endpoint_timeout' if isinstance(error, TimeoutError) else 'endpoint_error'
                             record({'kind': 'sdk_error', 'method': method, 'args': message['args'],
@@ -402,7 +412,7 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                             finished = True; break
                         if method != 'observe' and isinstance(result, dict) and result.get('accepted') is True:
                             actions += 1
-                    step = {'kind': 'sdk', 'method': method, 'args': message['args'], 'result': result}
+                    step = {'kind': 'sdk', 'rpcId': rpc_id, 'method': method, 'args': message['args'], 'result': result}
                     record(step)
                     obs = result if method == 'observe' else result.get('observation', {}) if isinstance(result, dict) else {}
                     if obs.get('character', {}).get('alive') is False:
@@ -436,7 +446,8 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                 pass  # Its independent GNU timeout still applies.
             except DockerBindingError as error:
                 outcome = {'reason': 'infrastructure_error', 'error': str(error)}
-    return outcome | {'actions': actions, 'actionAttempts': action_attempts, 'steps': steps, 'logs': logs}
+    return outcome | {'actions': actions, 'actionAttempts': action_attempts,
+                      'rpcRequests': min(rpc_count,max_requests), 'steps': steps, 'logs': logs}
 
 
 def model_decision(model, instructions, input_value, api_key, *, output_tokens, timeout, request_fn=bounded_request):

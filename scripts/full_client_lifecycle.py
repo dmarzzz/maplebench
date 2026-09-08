@@ -1005,8 +1005,10 @@ def command_exec(argv):
 
 
 def main(argv=None):
+    import full_client_operation_admission as admission
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
+    admission.add_arguments(parser)
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("check", "start"):
         command = commands.add_parser(name)
@@ -1029,13 +1031,42 @@ def main(argv=None):
         os.sched_setaffinity(0, set(allowed[:limits["cpus"]]))
         signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(LifecycleError("lifecycle_deadline")))
         signal.alarm(limits["total_seconds"])
-        lifecycle = NormalLifecycle(config, {"path": str(args.config), "sha256": digest(raw)})
+        config_ref = {"path": str(args.config), "sha256": digest(raw)}
+        lifecycle = NormalLifecycle(config, config_ref)
+        authority_ref, claim_ref = admission.argument_refs(args, reconcile=args.command == "reconcile")
         if args.command == "reconcile":
             require(bool(args.observation) == bool(args.observation_sha256), "observation_hash_required")
             observation = {"path": str(args.observation), "sha256": args.observation_sha256} if args.observation else None
-            result = lifecycle.reconcile({"path": str(args.journal), "sha256": args.sha256}, observation)
+            journal_ref = {"path": str(args.journal), "sha256": args.sha256}
+            state = read_ref(journal_ref, uid=0)
+            require(state.get("config") == config_ref, "reconciliation_config_changed")
+            handoff_ref = state["handoff"]
         else:
-            result = lifecycle.start({"path": str(args.request), "sha256": args.sha256}, check_only=args.command == "check")
+            handoff_ref = {"path": str(args.request), "sha256": args.sha256}
+        handoff = read_ref(handoff_ref, uid=0)
+        authority = admission.gate.read_ref(authority_ref, 0, admission.gate.Budget())
+        require(authority["operation_id"] == handoff["operation_id"], "operation_lifecycle_mismatch")
+        subject = {"type": "lifecycle", "config": config_ref, "handoff": handoff_ref,
+                   "lifecycle_id": handoff["operation_id"]}
+        with admission.admitted(authority_ref, subject, "standalone_lifecycle", config["attempt_root"],
+                claim_ref=claim_ref, read_only=args.command == "check", required_sources=(__file__,)) as operation:
+            if operation.completed:
+                result = {"status": "operation_already_completed", "operation_id": handoff["operation_id"],
+                          "terminal": operation.terminal, "new_api_requests": 0, "automatic_retry": False}
+            elif args.command == "check":
+                result = lifecycle.start(handoff_ref, check_only=True)
+            else:
+                if args.command == "start":
+                    result = lifecycle.start(handoff_ref)
+                    journal_ref = result["journal"]
+                elif state.get("status") != "completed":
+                    result = lifecycle.reconcile(journal_ref, observation)
+                    journal_ref = result["journal"]
+                else:
+                    lifecycle.begin_deadline()
+                evidence = admission.lifecycle_terminal(lifecycle, journal_ref, handoff_ref)
+                result = lifecycle.summary()
+                result["operation_terminal"] = operation.finish(evidence)
         print(json.dumps(result, sort_keys=True, allow_nan=False))
         return 0
     except LifecycleError as error:
@@ -1044,6 +1075,9 @@ def main(argv=None):
     except full_client_trial.TrialError as error:
         code = "lock_conflict" if str(error) == "lock_conflict" else "lifecycle_state_invalid"
         print(json.dumps({"ready": False, "error": code, "automatic_retry": False}))
+        return 1
+    except admission.gate.GateError as error:
+        print(json.dumps({"ready": False, "error": str(error), "automatic_retry": False}))
         return 1
     except (OSError, ValueError, TypeError, KeyError, StopIteration, subprocess.SubprocessError):
         print(json.dumps({"ready": False, "error": "lifecycle_operation_failed", "automatic_retry": False}))

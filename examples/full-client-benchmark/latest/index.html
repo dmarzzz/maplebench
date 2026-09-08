@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MapleBench · Astra gameplay</title>
+  <meta name="description" content="Watch GPT-6 Astra play MapleStory: 34 verified inputs, +9,250 saved XP, alive at logout. A recorded, unranked MapleBench run.">
+  <link rel="stylesheet" href="./style.css">
+  <script src="./dashboard.js" defer></script>
+</head>
+<body>
+  <main>
+    <p class="note">Selected verified recording · September 2026. This page features one successful run, not the complete attempt history or a model ranking.</p>
+    <p class="note"><a href="/">View all recorded attempts</a></p>
+    <header>
+      <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 15 7 20 5 18 11 23 13 15 18 13 17 13 23 11 23 11 17 9 18 1 13 6 11 4 5 9 7Z" fill="currentColor"/></svg><div><strong>Maple<b>Bench</b></strong><span>Full-client results</span></div></div>
+      <p id="connection" role="status">Waiting for results</p>
+    </header>
+    <section class="live" aria-labelledby="live-title">
+      <div class="live-heading"><span id="live-badge" class="pill">No active attempt</span><span id="live-id"></span></div>
+      <h1 id="live-title">The next run starts here.</h1>
+      <div id="featured-recording"></div>
+      <p class="note">Playback skips the initial model wait. The complete original recording remains available in the player.</p>
+      <p id="live-description">This page shows actual full-client attempts as their evidence arrives.</p>
+      <ol id="phases" aria-label="Trial phases"></ol>
+      <dl class="live-stats">
+        <div><dt>API model returned</dt><dd id="live-model">—</dd></div>
+        <div><dt>Input actions</dt><dd id="live-actions">—</dd></div>
+        <div><dt id="live-xp-label">Live XP change · diagnostic</dt><dd id="live-xp">—</dd></div>
+        <div><dt>Last observed state</dt><dd id="live-survival">—</dd></div>
+      </dl>
+    </section>
+    <section aria-labelledby="comparison-title">
+      <div class="section-heading"><div><h2 id="comparison-title">Results by frozen inputs</h2><p>One verified run is shown. A four-model comparison is still in progress.</p></div><span class="pill">Unranked</span></div>
+      <p id="comparison-empty" class="empty">Verified persisted results appear here after normal logout.</p>
+      <div id="comparison-groups"></div>
+      <p class="note">Persisted XP includes penalties and is measured after normal logout. Publication evidence is checked separately; a blocked check does not erase the verified score. All displayed runs remain unranked.</p>
+    </section>
+    <section aria-labelledby="history-title">
+      <div class="section-heading"><div><h2 id="history-title">Included recording</h2><p>This sharing page contains the selected verified Astra run.</p></div><span id="count">0 attempts</span></div>
+      <div class="table-wrap"><table><caption class="visually-hidden">Full-client attempt history</caption><thead><tr><th>Attempt / exact model</th><th>Status</th><th>Persisted XP</th><th>Diagnostic XP</th><th>Input actions</th><th>Publication evidence</th><th>Recording</th></tr></thead><tbody id="history"></tbody></table></div>
+      <p id="history-empty" class="empty">No attempts have been exported yet.</p>
+    </section>
+    <footer><span id="scope">Read-only results. No runs are started from this page.</span><span>Full-client gameplay / Cosmic persistence</span></footer>
+  </main>
+  <dialog id="replay" aria-labelledby="replay-title" aria-describedby="replay-verification">
+    <div class="replay-heading">
+      <div><h2 id="replay-title">Recorded attempt</h2><p id="replay-verification"></p></div>
+      <button id="replay-close" type="button" autofocus>Close replay</button>
+    </div>
+    <video id="replay-video" controls playsinline preload="metadata" aria-label="Recorded full-client gameplay"></video>
+    <div class="replay-controls"><button id="replay-agent" type="button" hidden>Agent play</button> <button id="replay-full" type="button">Full recording</button></div>
+    <p id="replay-timing"></p>
+    <p id="replay-playback-status" role="status"></p>
+  </dialog>
+</body>
+</html>

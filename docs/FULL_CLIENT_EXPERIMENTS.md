@@ -265,6 +265,45 @@ All outputs remain `ranked:false`; publication is separately `not_evaluated`.
 Keep raw plans, reports, receipts and runtime paths private. A future public
 projection requires deliberate review rather than exposing this state directory.
 
+## Permanently closing a group
+
+`seal` withdraws every future unsubmitted entry while preserving the plan,
+original deadlines, reservations and all recorded outcomes. Supply the exact
+current coordinator journal hash:
+
+```sh
+python3 scripts/full_client_experiment.py seal \
+  --plan /private/experiment/plan.json \
+  --directory /private/experiment/state \
+  --journal-sha256 CURRENT_COORDINATOR_SHA256
+```
+
+Under the existing experiment lock, it rechecks every submitted attempt's
+terminal cleanup and unchanged settled hashes. A retired-unlaunched ID must
+still be absent; unsubmitted IDs must also be absent. Missing, uncertain,
+unclean or changed evidence refuses closure without writing the journal.
+Explicit same-attempt recovery can supply the required terminal evidence;
+`seal` never performs that recovery or starts a model or service.
+
+A successful close writes a schema-2 coordinator journal with a closure receipt
+and a final `experiment_sealed` event, then reads it back. Schema-1 journals
+remain supported. Older coordinators reject schema 2, and the new coordinator
+rejects a sealed journal before any resume event, input verification or launch.
+The report exposes `sealed:true` while keeping unsubmitted entries visible.
+Closing after a deadline does not extend it. A lost write reply requires reading
+the journal; it does not imply that closure failed or authorize a replay.
+
+Closing replaces the coordinator journal, so existing consumers pinned to its
+earlier bytes must finish first or receive a separately reviewed migration.
+Historical acceptance journals are not automatically closed. This command is
+the group boundary needed by future automatic restoration; it is not restoration
+authority by itself. Current `run/resume/seal` CLI commands also require the
+shared [operations authority](FULL_CLIENT_OPERATIONS.md#gate-and-authority).
+Authority flags follow the experiment subcommand; resume/seal additionally bind
+the exact operation claim. A standalone completed group seals before closing its
+claim. The composed wrapper retains the gate through normal-service restoration.
+Protected rollout and live acceptance of this larger contract remain separate.
+
 ## Acceptance
 
 Focused tests cover exact and imperfect rotations per fixture, immutable plans,

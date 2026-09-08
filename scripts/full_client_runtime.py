@@ -29,7 +29,7 @@ import uuid
 import zipfile
 
 from full_client_collect import collect, DATABASE
-from full_client_freeze import FreezeError, FREEZE_ERROR_CODES, verify_manifest
+from full_client_freeze import FreezeError, FREEZE_ERROR_CODES, HARD_LIMITS as FREEZE_HARD_LIMITS, verify_manifest
 from full_client_docker import DockerBindingError, configured_command, validate_binding
 from full_client_readiness import ReadinessError, observation_sha256, validate_policy
 from full_client_score import (SOURCE, JSON_LIMIT, EvidenceError, parse_json, read_artifact_bytes,
@@ -228,10 +228,15 @@ class Host:
         return rows[0][0]
 
     def snapshot(self, config, run_id):
-        return collect(mysql_command=config["command"], database=config["database"],
-                       defaults_file=config.get("defaults_file"), run_id=run_id,
-                       character_id=config["character_id"], account_id=config["account_id"],
-                       timeout=min(10, self.remaining()))
+        try:
+            return collect(mysql_command=config["command"], database=config["database"],
+                           defaults_file=config.get("defaults_file"), run_id=run_id,
+                           character_id=config["character_id"], account_id=config["account_id"],
+                           timeout=min(10, self.remaining()))
+        except ValueError as error:
+            if str(error) == "account_still_online":
+                raise RuntimeErrorCode("account_still_online") from None
+            raise
 
 
 class CosmicRuntime:
@@ -313,18 +318,43 @@ class CosmicRuntime:
         """Read only small immutable configuration; never inventory live assets."""
         self.scenario = parse_json(ref_bytes(self.config["scenario"]))
         duration = self.scenario.get("program_seconds")
-        require(type(duration) is int and duration in (22, 60)
+        adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
+        require(type(duration) is int and duration in ((300,) if adaptive else (22, 60))
                 and isinstance(self.scenario.get("id"), str) and 0 < len(self.scenario["id"]) <= 128
                 and SHA.fullmatch(self.scenario.get("instructions_sha256", "")) is not None
                 and same_json(self.scenario.get("reasoning"), {"effort": "low"}), "invalid_frozen_scenario")
-        expected_budgets = {"api_requests": 1, "output_tokens": 3000,
-                            "total_tokens": self.scenario["trial_budgets"]["max_total_tokens"],
-                            "program_ms": duration * 1000, "run_ms": (duration + 63) * 1000,
-                            "actions": 80 if duration == 22 else 240, "sdk_requests": 100 if duration == 22 else 600}
+        if adaptive:
+            from full_client_adaptive import validate_protocol, prompt
+            try:
+                protocol = validate_protocol(self.scenario.get("adaptive_protocol"))
+            except ValueError:
+                raise RuntimeErrorCode("invalid_frozen_scenario") from None
+            require(self.scenario["instructions_sha256"] == hashlib.sha256(prompt(protocol).encode()).hexdigest(),
+                    "frozen_prompt_mismatch")
+            trial = self.scenario["trial_budgets"]
+            require(trial["max_api_requests"] == protocol["max_api_requests"]
+                    and trial["max_actions"] == protocol["max_actions"]
+                    and trial["max_output_tokens"] == protocol["max_api_requests"] * protocol["max_output_tokens"]
+                    and trial["max_total_tokens"] == protocol["max_total_tokens"]
+                    and trial["controller_seconds"] == 300 and trial["operation_seconds"] >= 335,
+                    "bridge_budget_mismatch")
+            expected_budgets = {"api_requests": protocol["max_api_requests"], "output_tokens": trial["max_output_tokens"],
+                "total_tokens": protocol["max_total_tokens"], "program_ms": 300000, "run_ms": 335000,
+                "actions": protocol["max_actions"], "sdk_requests": protocol["max_sdk_requests"]}
+        else:
+            require(self.scenario.get("protocol") is None and self.scenario.get("adaptive_protocol") is None,
+                    "invalid_frozen_scenario")
+            expected_budgets = {"api_requests": 1, "output_tokens": 3000,
+                                "total_tokens": self.scenario["trial_budgets"]["max_total_tokens"],
+                                "program_ms": duration * 1000, "run_ms": (duration + 63) * 1000,
+                                "actions": 80 if duration == 22 else 240, "sdk_requests": 100 if duration == 22 else 600}
         require(same_json(self.scenario.get("budgets"), expected_budgets), "frozen_bridge_budgets_mismatch")
         require(same_json(self.scenario.get("settlement_policy"), SETTLEMENT_POLICY),
                 "invalid_settlement_policy")
         self.baseline = parse_json(ref_bytes(self.config["baseline_snapshot"]))
+        if adaptive:
+            require(protocol["profile"]["level"] == self.baseline.get("character", {}).get("level"),
+                    "baseline_identity_mismatch")
         self.readiness_policy()
         self.manifest = parse_json(ref_bytes(self.config["runtime_manifest"]))
         self.docker_binding()
@@ -344,7 +374,8 @@ class CosmicRuntime:
         absolute(manifest["wz_path"])
         verify_manifest(manifest, docker_command=configured_command(self.docker_binding()),
                         docker_socket=self.config.get("docker_socket", "/var/run/docker.sock"),
-                        limits={"timeout_seconds": max(1, int(self.host.remaining()))})
+                        limits={"timeout_seconds": min(FREEZE_HARD_LIMITS["timeout_seconds"],
+                                                       max(1, int(self.host.remaining())))})
         jar = manifest["server_jar"]
         path = absolute(jar["path"])
         with open_verified_artifact(path.parent, {"path": path.name, "sha256": jar["sha256"]},
@@ -400,8 +431,8 @@ class CosmicRuntime:
         controls = script.parent.parent / "ui/full-client"
         # The executor reads the JavaScript dispatcher at each container launch;
         # pin it alongside imported modules, not just the Docker image.
-        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
-                    controls / "controller.js", controls / "waiting.html",
+        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
+                    controls / "controller.js", controls / "webcodecs-recorder.js", controls / "waiting.html",
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}
         require(all(str(path) in extras for path in required), "serving_sources_not_frozen")
@@ -480,7 +511,13 @@ class CosmicRuntime:
         require(self.host.queue_count(self.config["queue_database"]) == 0, "queued_or_active_trials_exist")
 
     def persist(self):
-        atomic_json(self.directory / "backend-state.json", self.state)
+        state = self.state
+        if state.get("result", {}).get("protocol") == "full-client-adaptive-pilot-v1":
+            # Keep the bounded control journal small; the immutable, separately
+            # hashed aggregate file is loaded only when this attempt resumes.
+            state = {k: v for k, v in state.items() if k != "result"}
+            state["adaptive_result_ref"] = self.state["artifacts"]["result"]
+        atomic_json(self.directory / "backend-state.json", state)
 
     def intent(self, operation):
         require(operation not in self.state["intents"], "operation_already_attempted")
@@ -769,13 +806,21 @@ class CosmicRuntime:
         spec = self.context["request"]
         budgets = spec["budgets"]
         duration = self.scenario.get("program_seconds")
-        require(duration in (22, 60) and type(duration) is int, "unsupported_program_duration")
-        require(budgets["controller_seconds"] >= duration + 2
-                and budgets["max_actions"] == (80 if duration == 22 else 240)
-                and budgets["max_output_tokens"] == 3000, "bridge_budget_mismatch")
-        from full_client_bridge import PROMPT
-        prompt = PROMPT.format(program_seconds=duration, action_limit=budgets["max_actions"],
-                              sdk_request_limit=100 if duration == 22 else 600)
+        adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
+        protocol = self.scenario.get("adaptive_protocol") if adaptive else None
+        if adaptive:
+            from full_client_adaptive import prompt as adaptive_prompt
+            prompt = adaptive_prompt(protocol)
+            require(spec.get("schema_version") == 2 and spec.get("protocol") == self.scenario["protocol"],
+                    "bridge_budget_mismatch")
+        else:
+            require(duration in (22, 60) and type(duration) is int, "unsupported_program_duration")
+            require(budgets["controller_seconds"] >= duration + 2
+                    and budgets["max_actions"] == (80 if duration == 22 else 240)
+                    and budgets["max_output_tokens"] == 3000, "bridge_budget_mismatch")
+            from full_client_bridge import PROMPT
+            prompt = PROMPT.format(program_seconds=duration, action_limit=budgets["max_actions"],
+                                  sdk_request_limit=100 if duration == 22 else 600)
         require(self.scenario.get("instructions_sha256") == hashlib.sha256(prompt.encode()).hexdigest()
                 and self.scenario.get("reasoning") == {"effort": "low"}, "frozen_prompt_mismatch")
         readiness_policy=self.readiness_policy()
@@ -786,6 +831,7 @@ class CosmicRuntime:
                        docker_image_id=self.manifest["docker_image_id"],
                        docker_binding=self.docker_binding(),
                        readiness_policy=readiness_policy,
+                       **({"adaptive_protocol": protocol} if adaptive else {}),
                        trial_context={"scenario_fingerprint": spec["scenario_fingerprint"],
                                       "baseline_sha256": spec["baseline_sha256"]})
             terminal_seen = None
@@ -829,6 +875,8 @@ class CosmicRuntime:
             raise
         self.copy_controller_metadata()
         result = self.state["result"]
+        if adaptive:
+            return self.verify_adaptive_controller()
         api = result["api"]
         require(result.get("source") == "full-client-trial" and result["controller"]["id"] == self.run_id
                 and result["controller"]["model"] == spec["model"] and api["model"] == spec["model"]
@@ -854,6 +902,39 @@ class CosmicRuntime:
                 "total_tokens": api["usage"]["total_tokens"], "actions": result["program"]["actions"],
                 "controller_ms": timeline["program_ended_ms"] - timeline["program_started_ms"],
                 "recording_complete": True}
+
+    def verify_adaptive_controller(self):
+        from full_client_adaptive_evidence import verify_result
+        from full_client_publish import _verify_readiness_policy
+        result, spec = self.state["result"], self.context["request"]
+        controller = result["controller"]
+        require(controller.get("id") == self.run_id and controller.get("mode") == "api"
+                and controller.get("dockerImageId") == self.manifest["docker_image_id"]
+                and same_json(controller.get("dockerBinding"), self.docker_binding())
+                and same_json(result.get("trialContext"), {"scenario_fingerprint": spec["scenario_fingerprint"],
+                    "baseline_sha256": spec["baseline_sha256"]}), "controller_trial_context_mismatch")
+        try:
+            verified = verify_result(result, self.directory, protocol=self.scenario["adaptive_protocol"], model=spec["model"])
+            _verify_readiness_policy({"result": result, "artifacts": self.state["artifacts"],
+                "budgets": self.scenario["budgets"]}, self.directory, {"baseline": self.baseline}, self.scenario)
+        except (EvidenceError, ValueError, KeyError, TypeError):
+            raise RuntimeErrorCode("adaptive_evidence_mismatch") from None
+        started, timeline = result["timing"]["startedAtMs"], result["timeline"]
+        session = self.state["session"]
+        for field, offset in (("api_started_at_ms", "api_started_ms"), ("api_ended_at_ms", "api_ended_ms"),
+                              ("controller_started_at_ms", "program_started_ms"), ("controller_ended_at_ms", "program_ended_ms")):
+            session[field] = started + timeline[offset]
+        session.update(protocol=self.scenario["protocol"], api_intervals=verified["api_intervals"],
+                       adaptive_trace_sha256=result["adaptiveTrace"]["sha256"])
+        require(started >= session["login_at_ms"] and result["timing"]["endedAtMs"] <= self.host.now(),
+                "controller_host_clock_mismatch")
+        self.validate_settlement()
+        usage = verified["counters"]
+        return {"status": "completed", "protocol": self.scenario["protocol"],
+                "requested_model": spec["model"], "returned_model": spec["model"],
+                "api_requests": usage["api_requests_started"], "output_tokens": usage["actual_output_tokens"],
+                "total_tokens": usage["actual_total_tokens"], "actions": usage["actions"],
+                "controller_ms": verified["wall_elapsed_ms"], "recording_complete": True}
 
     def verify_api_result(self, prompt):
         from full_client_publish import PROGRAM_FORMAT
@@ -899,11 +980,26 @@ class CosmicRuntime:
                  "capture": "capture.json", "capture_ready": "capture-ready.json",
                  "capture_clock": "capture-clock.json", "capture_terminal": "capture-terminal.json",
                  "readiness":"readiness.json"}
+        adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
+        if adaptive:
+            for key in ("api_request", "api_response", "program"):
+                names.pop(key)
         for key, filename in names.items():
             path = source / filename
             raw = self.read_stable(path, JSON_LIMIT)
             self.state["artifacts"][key] = self.artifact("controller-" + filename, raw=raw)
         self.state["result"] = parse_json(read_artifact_bytes(self.directory, self.state["artifacts"]["result"], "result"))
+        if adaptive:
+            from full_client_adaptive_evidence import references
+            for ref in references(self.state["result"]):
+                raw = read_artifact_bytes(source, ref, "adaptive_cycle", maximum=JSON_LIMIT)
+                destination = self.directory / ref["path"]
+                parent = self.directory
+                for part in Path(ref["path"]).parts[:-1]:
+                    parent = private_directory(parent / part, create=True)
+                copied = save_bytes(destination, raw)
+                require(copied["sha256"] == ref["sha256"], "adaptive_evidence_mismatch")
+            self.state["artifacts"]["adaptive"] = self.state["result"]["adaptiveTrace"]
         recording = parse_json(read_artifact_bytes(self.directory, self.state["artifacts"]["recording"], "recording"))
         require(recording.get("status") == "completed" and SHA.fullmatch(recording.get("sha256", ""))
                 and recording.get("overlay") == {"controller_id": self.run_id, "mode": "api",
@@ -932,13 +1028,15 @@ class CosmicRuntime:
         self.state["artifacts"]["video"] = {"path": "video.webm", "sha256": recording["sha256"]}
         from full_client_publish import _probe_video, verify_capture_bundle
         try:
-            probe = _probe_video(self.directory / "video.webm", recording["sha256"]) | {"video_sha256": recording["sha256"]}
+            probe = _probe_video(self.directory / "video.webm", recording["sha256"],
+                **({"maximum_ms": 335000} if getattr(self, "scenario", {}).get("protocol") == "full-client-adaptive-pilot-v1" else {})) | {"video_sha256": recording["sha256"]}
         except EvidenceError:
             raise RuntimeErrorCode("recording_probe_failed") from None
-        require(type(recording.get("duration_ms")) in (int, float)
-                and math.isfinite(recording["duration_ms"])
-                and abs(probe["duration_ms"] - recording["duration_ms"]) <= 100,
-                "recording_duration_mismatch")
+        from full_client_capture import verify_video_duration
+        try:
+            verify_video_duration(probe,recording,getattr(self,'scenario',{}).get('adaptive_protocol',{}).get('capture_duration_policy'))
+        except (ValueError,TypeError):
+            raise RuntimeErrorCode('recording_duration_mismatch') from None
         self.state["artifacts"]["video_probe"] = self.artifact("video-probe.json", probe)
         try:
             verify_capture_bundle({"result": self.state["result"], "video": recording,
@@ -1072,13 +1170,16 @@ class CosmicRuntime:
                             "native_logs_sha256": arts["native_log"]["sha256"], "save_error_count": 0,
                             "log_checked_from_ms": self.state["session"]["server_started_at_ms"],
                             "log_checked_through_ms": final["captured_at_ms"]}}
-        evidence = {"schema_version": 1, "source": SOURCE, "run_id": self.run_id,
+        adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
+        evidence = {"schema_version": 2 if adaptive else 1, "source": SOURCE, "run_id": self.run_id,
                     "scenario_fingerprint": self.config["scenario"]["sha256"],
                     "baseline": {"sha256": self.config["baseline"]["sha256"],
                                  "character": self.baseline["character"], "keymap": self.baseline["keymap"]},
                     "reset": self.state["reset"], "session": session,
                     "initial": self.state["initial"] | {"evidence_sha256": arts["initial_db"]["sha256"]},
                     "final": final | {"evidence_sha256": arts["final_db"]["sha256"]}}
+        if adaptive:
+            evidence["protocol"] = self.scenario["protocol"]
         arts["session"] = self.artifact("session.json", session)
         arts["persistence"] = self.artifact("persistence.json", evidence)
         self.ownership()
@@ -1099,6 +1200,10 @@ class CosmicRuntime:
                                   "reset_fingerprint": self.config["baseline"]["sha256"]},
                      "score": score, "video": recording | {"path": arts["video"]["path"], "reviewed": False},
                      "artifacts": dict(arts)}
+        if self.scenario.get("protocol") == "full-client-adaptive-pilot-v1":
+            candidate.update(schema_version=3, protocol=self.scenario["protocol"], run_kind="adaptive_pilot",
+                candidate_status="awaiting_adaptive_publication_review", publication_eligible=False,
+                authoritative_peak_xp_per_minute=None, authoritative_window_status="not_collected")
         self.artifact("publication-candidate.json", candidate)
 
     def settle_owned_controller(self):
@@ -1128,8 +1233,9 @@ class CosmicRuntime:
             if not self.state.get("failure_cleanup_status"):
                 self.state["failure_cleanup_status"] = status
                 self.persist()
-            if run.get("failureAcknowledged") is not True:
-                self.admin("release_failed_run", run_id=self.run_id)
+            # cancel() sets an in-memory acknowledgment, but ordinary login
+            # after restart also requires a durable release receipt.
+            self.admin("release_failed_run", run_id=self.run_id)
 
     def preserve_failure_evidence(self):
         require(self.account_state() == 0, "controller_collection_requires_logout")
@@ -1194,7 +1300,37 @@ class CosmicRuntime:
         self.state["configuration_cleanup"]["phase"] = "verified"
         self.persist()
 
+    def prepare_cleanup_wait(self):
+        """Confirm ordinary waiting navigation within a separate finite window."""
+        requested = self.host.now()
+        self.state.setdefault("cleanup_wait_requests", []).append(requested)
+        self.persist()
+        deadline = self.host.deadline
+        self.host.deadline = min(deadline, time.monotonic() + 15)
+        try:
+            self.admin("prepare_wait")
+            def waiting():
+                status = self.admin("status")
+                session, bridge = status.get("session", {}), status.get("bridge", {})
+                run = bridge.get("run") or {}
+                initial = run.get("id") is None and run.get("status") == "idle"
+                terminal = not run or initial or run.get("status") in ("completed", "failed", "timed_out", "cancelled")
+                return (status if session.get("state") == "waiting" and session.get("fresh") is True
+                        and session.get("pinned") is True and session.get("captureState") == "idle"
+                        and session.get("artifactsSettled") is True and terminal
+                        and run.get("workerActive") is not True and run.get("leaseReleasePending") is not True
+                        and bridge.get("browserReleasePending") is not True else None)
+            status = self.wait_for(waiting)
+        finally:
+            self.host.deadline = deadline
+        self.state["cleanup_wait"] = {"requested_at_ms": requested, "verified_at_ms": self.host.now(),
+                                      "session": status["session"]}
+        self.persist()
+
     def cleanup(self):
+        # No earlier clean receipt can survive an uncertain fresh cleanup.
+        self.state["clean"] = False
+        self.persist()
         # Recovery can encounter a start whose response was lost. Native env plus
         # the exact recorded drop-in is required before adopting that invocation.
         unit = self.unit("cosmic")
@@ -1221,7 +1357,12 @@ class CosmicRuntime:
         if self.state.get("dropin"):
             self.remove_trial_configuration()
         require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_configuration_still_loaded")
+        self.prepare_cleanup_wait()
+        require(self.stopped(self.unit("cosmic")) and self.account_state() == 0,
+                "cleanup_requires_stopped_offline")
+        require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_configuration_still_loaded")
         self.state["clean"] = True
+        self.persist()
         return {"clean": True}
 
     def perform(self, operation, context, *, timeout_seconds):
@@ -1239,6 +1380,8 @@ class CosmicRuntime:
             state_file = self.directory / "backend-state.json"
             if state_file.exists():
                 self.state = read_private_json(state_file)
+                if self.state.get("adaptive_result_ref"):
+                    self.state["result"] = parse_json(read_artifact_bytes(self.directory, self.state["adaptive_result_ref"], "result"))
                 require(self.state.get("attempt_id") == self.run_id, "backend_owner_mismatch")
         if operation == "status":
             return self.status()
@@ -1252,7 +1395,8 @@ class CosmicRuntime:
             self.online_identity()
         else:
             self.frozen()
-        require(same_json(self.scenario.get("trial_budgets"), spec["budgets"]), "scenario_trial_budgets_mismatch")
+        require(same_json(self.scenario.get("trial_budgets"), spec["budgets"])
+                and (spec.get("protocol") == self.scenario.get("protocol")), "scenario_trial_budgets_mismatch")
         if self.state is None:
             if operation == "cleanup":
                 status = self.status()

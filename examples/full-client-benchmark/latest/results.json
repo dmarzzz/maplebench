@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "generated_at_ms": 1788812891395,
+  "source": "full_client_private_receipt_projection",
+  "verification": "completed_runner_receipts_rechecked",
+  "ranked": false,
+  "recording_prefix": "/recordings/",
+  "truncated": false,
+  "attempts": [
+    {
+      "id": "4149dc7596194dc49067a9ed3af9e3d7",
+      "kind": "trial",
+      "status": "completed",
+      "phase": "status",
+      "mode": "api",
+      "requested_model": "gpt-6-astra",
+      "returned_model": "gpt-6-astra",
+      "attribution": "exact",
+      "failure_code": null,
+      "failure_phase": null,
+      "api_outcome": "confirmed",
+      "api_response_saved": true,
+      "api_usage": {
+        "input_tokens": 951,
+        "output_tokens": 592,
+        "total_tokens": 1543
+      },
+      "charged_usage": {
+        "api_requests": 1,
+        "total_tokens": 1543
+      },
+      "created_at_ms": 1788791843817,
+      "updated_at_ms": 1788792081591,
+      "actions": 34,
+      "action_limit": 80,
+      "reported_actions": 34,
+      "acknowledged_actions": 34,
+      "action_attempts": 34,
+      "action_verification": "receipts_rechecked",
+      "no_op": false,
+      "diagnostic_xp": 9250,
+      "alive_at_last_observation": true,
+      "alive_at_logout": true,
+      "persisted_xp": 9250,
+      "score_verification": "runner_verified_receipts_rechecked",
+      "comparison_group": "d897964b4e087e839af12af9b8e115ed95775585db6342c42c73141a30cc9b99",
+      "ranked": false,
+      "publication_eligible": false,
+      "publication_evidence": {
+        "status": "passed",
+        "reason_code": null
+      },
+      "timing": {
+        "session_ms": 36978,
+        "api_ms": 12320,
+        "controller_ms": 20838,
+        "settlement_ms": 1788,
+        "elapsed_ms": 34503,
+        "attempt_elapsed_ms": 237774
+      },
+      "recording": {
+        "url": "/recordings/4149dc7596194dc49067a9ed3af9e3d7.webm",
+        "sha256": "fff149824a688cb67733f2d53bc6d60ca91c9cd1264f1bf5721a4f79084e38c7",
+        "reviewed": false,
+        "playback": {
+          "start_ms": 13389,
+          "basis": "program_start",
+          "timing_uncertainty_ms": 9.0
+        }
+      },
+      "phase_states": {
+        "restore_baseline": "returned",
+        "start_server": "returned",
+        "login": "returned",
+        "run_controller": "returned",
+        "disconnect": "returned",
+        "collect_final": "returned",
+        "cleanup": "returned"
+      },
+      "controller_status": "completed",
+      "sdk_calls": 64
+    }
+  ],
+  "comparisons": [
+    {
+      "id": "d897964b4e087e839af12af9b8e115ed95775585db6342c42c73141a30cc9b99",
+      "models": [
+        "gpt-6-astra"
+      ],
+      "ready": false,
+      "ranked": false,
+      "attempt_ids": [
+        "4149dc7596194dc49067a9ed3af9e3d7"
+      ],
+      "scope": "displayed_attempts",
+      "reason": "another_model_required"
+    }
+  ],
+  "live_status_available": false,
+  "scope": "Selected verified recording; not the complete attempt history."
+}
