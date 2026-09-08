@@ -23,6 +23,7 @@ DEFAULT_PROTOCOL = {'schema_version':1,'id':PROTOCOL,'wall_seconds':300,'program
 # Optional policy: absent means the original pilot's exact prompt and stop behavior.
 FULL_HORIZON_POLICY = {'id':'full-horizon-reserve-v1','request_timeout_seconds':50,
     'settlement_reserve_seconds':5,'passive_observation_interval_ms':1000}
+CAPTURE_COHORT_RECIPE = 'full-horizon-capture-cohort-v1'
 PASSIVE_STOP_REASONS = frozenset(('request_window_closed','api_request_limit',
     'action_limit','sdk_request_limit','token_reservation_limit'))
 
@@ -59,6 +60,19 @@ def validate_protocol(value):
             and all(isinstance(v,str) and re.fullmatch('[A-Za-z0-9 ()+/:,-]{1,80}',v) for v in profile['skill_keys'].values()),
             'invalid_adaptive_profile')
     return json.loads(json.dumps(value))
+
+
+def capture_cohort_protocol(profile):
+    """Prepare the next frozen cohort; this does not mutate defaults or run it.
+
+    The larger allowance is a conservative reservation ceiling, not a target
+    token spend. Every model in a fixture receives the same bounded contract.
+    """
+    from full_client_capture import CAPTURE_DURATION_POLICY
+    value=json.loads(json.dumps(DEFAULT_PROTOCOL))
+    value.update(profile=profile,max_total_tokens=240000,
+        horizon_policy=FULL_HORIZON_POLICY,capture_duration_policy=CAPTURE_DURATION_POLICY)
+    return validate_protocol(value)
 
 def prompt(protocol):
     p=validate_protocol(protocol)
