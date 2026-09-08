@@ -65,7 +65,7 @@ readiness_policy_required invalid_readiness_policy readiness_timeout readiness_s
 """.split())
 RUNTIME_ERROR_CODES = frozenset("""
 account_state_unavailable account_still_online actual_api_request_mismatch actual_api_response_mismatch
-admin_operation_failed admin_request_limit admin_response_limit
+admin_operation_failed admin_request_limit admin_response_limit adaptive_evidence_mismatch
 artifact_changed_during_collection artifact_size_limit artifact_symlink
 attempt_directory_mismatch backend_owner_mismatch backend_state_missing
 baseline_identity_mismatch bridge_budget_mismatch capture_metadata_hash_mismatch capture_verification_failed
@@ -234,16 +234,18 @@ def read_private_json(path):
 
 def validate_spec(spec):
     require(isinstance(spec, dict), "invalid_spec")
-    require(set(spec) == {"schema_version", "model", "scenario_fingerprint",
-                          "baseline_sha256", "budgets"}, "invalid_spec_fields")
-    require(type(spec["schema_version"]) is int and spec["schema_version"] == 1,
-            "unsupported_schema")
+    adaptive = spec.get("schema_version") == 2
+    fields = {"schema_version", "model", "scenario_fingerprint", "baseline_sha256", "budgets"}
+    require(set(spec) == fields | ({"protocol"} if adaptive else set()), "invalid_spec_fields")
+    require(type(spec["schema_version"]) is int and spec["schema_version"] in (1, 2), "unsupported_schema")
+    if adaptive:
+        require(spec.get("protocol") == "full-client-adaptive-pilot-v1", "unsupported_protocol")
     require(isinstance(spec["model"], str) and ID.fullmatch(spec["model"]), "invalid_model")
     for name in ("scenario_fingerprint", "baseline_sha256"):
         require(isinstance(spec[name], str) and SHA.fullmatch(spec[name]), "invalid_" + name)
-    bounds = {"total_seconds": (1, 1800), "operation_seconds": (1, 300),
+    bounds = {"total_seconds": (1, 1800), "operation_seconds": (335, 600) if adaptive else (1, 300),
               "controller_seconds": (1, 300), "max_actions": (1, 10000),
-              "max_api_requests": (1, 1), "max_output_tokens": (1, 32000),
+              "max_api_requests": (1, 16) if adaptive else (1, 1), "max_output_tokens": (1, 48000) if adaptive else (1, 32000),
               "max_total_tokens": (1, 1000000)}
     budgets = spec["budgets"]
     require(isinstance(budgets, dict) and set(budgets) == set(bounds), "invalid_budgets")
@@ -252,6 +254,8 @@ def validate_spec(spec):
                 "invalid_budget_" + name)
     require(budgets["controller_seconds"] <= budgets["total_seconds"]
             and budgets["max_output_tokens"] <= budgets["max_total_tokens"], "inconsistent_budgets")
+    if adaptive:
+        require(budgets["controller_seconds"] == 300 and budgets["total_seconds"] >= 600, "inconsistent_adaptive_budgets")
     return copy.deepcopy(spec)
 
 
@@ -534,7 +538,9 @@ class TrialRunner:
                               ("controller_ms", budgets["controller_seconds"] * 1000)):
             require(type(receipt.get(name)) is int and 0 <= receipt[name] <= maximum,
                     "usage_invalid_" + name)
-        require(receipt["api_requests"] == 1 and receipt["total_tokens"] >= receipt["output_tokens"],
+        require((receipt["api_requests"] >= 1 if spec["schema_version"] == 2 else receipt["api_requests"] == 1)
+                and (spec["schema_version"] == 1 or receipt.get("protocol") == spec["protocol"])
+                and receipt["total_tokens"] >= receipt["output_tokens"],
                 "usage_inconsistent")
         self.state["api_outcome"] = "confirmed"
         self.state["charged_usage"] = {k: receipt[k] for k in ("api_requests", "total_tokens")}

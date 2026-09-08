@@ -49,6 +49,13 @@ class CaptureTests(unittest.TestCase):
         self.assertTrue(receipt['interrupted']); self.assertIsNone(receipt['start_ms'])
         self.assertEqual(receipt['timing_method'],'unavailable')
 
+    def test_long_capture_requires_explicit_adaptive_owner_and_retains_hard_cap(self):
+        value=self.value|{'duration_ms':310000,'end_wall_ms':320020,'last_frame_wall_ms':320010}
+        with self.assertRaises(ValueError):self.receipt(value)
+        self.owner['protocol']='full-client-adaptive-pilot-v1'
+        self.assertEqual(self.receipt(value)['duration_ms'],310000)
+        with self.assertRaises(ValueError):self.receipt(value|{'duration_ms':335001})
+
     def test_metadata_is_bounded_typed_and_identity_bound(self):
         for changes in ({'run_id':'d'*32},{'client_id':'other'},{'schema_version':True},
                 {'duration_ms':float('nan')},{'rendered_frames':True},{'errors':-1},

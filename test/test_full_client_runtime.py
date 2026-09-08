@@ -501,6 +501,27 @@ class RuntimeTests(unittest.TestCase):
         self.backend.verify_api_result = MagicMock()
         return online, events
 
+    def test_adaptive_controller_retains_ordinary_logout_before_metadata(self):
+        from full_client_adaptive import DEFAULT_PROTOCOL, PROTOCOL, prompt
+        online, events = self.controller_fixture()
+        protocol = copy.deepcopy(DEFAULT_PROTOCOL)
+        self.backend.scenario.update(protocol=PROTOCOL, adaptive_protocol=protocol, program_seconds=300,
+            instructions_sha256=hashlib.sha256(prompt(protocol).encode()).hexdigest())
+        self.backend.context["request"].update(schema_version=2, protocol=PROTOCOL)
+        original = self.backend.admin
+        self.backend.admin = MagicMock(side_effect=original)
+        self.backend.verify_adaptive_controller = MagicMock(return_value={"protocol":PROTOCOL,"api_requests":12})
+        receipt = self.backend.run_controller()
+        self.assertFalse(online[0])
+        self.assertLess(events.index("disconnect"), events.index("metadata"))
+        self.assertEqual(events.count("start"),1)
+        start = next(call for call in self.backend.admin.call_args_list if call.args[0]=="start")
+        self.assertEqual(start.kwargs['duration_seconds'],300)
+        self.assertEqual(start.kwargs['adaptive_protocol'],protocol)
+        self.backend.verify_adaptive_controller.assert_called_once()
+        self.backend.verify_api_result.assert_not_called()
+        self.assertEqual(receipt['api_requests'],12)
+
     def test_completed_run_logs_out_before_any_artifact_work(self):
         online, events = self.controller_fixture()
         receipt = self.backend.run_controller()
@@ -929,7 +950,7 @@ class RuntimeTests(unittest.TestCase):
     def web_fixture(self):
         script = self.root / "repo/scripts/serve-full-client.py"
         client = self.root / "client"
-        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
+        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
                     *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "waiting.html")),
                     *(client / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))]
         for path in required:
