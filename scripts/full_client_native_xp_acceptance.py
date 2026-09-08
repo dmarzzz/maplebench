@@ -9,6 +9,8 @@ from full_client_score import parse_json,read_artifact_bytes,read_json_artifact,
 from full_client_xp_windows import (IDENTITY,WINDOW_MS,MAX_LEDGER_BYTES,score_ledger,
     validate_contract,integer,require,PROTOCOL as WINDOW_PROTOCOL)
 PROTOCOL='native-xp-ledger-acceptance-v1'
+MAX_CONTROL_START_DELAY_MS=5000
+MAX_CONTROL_MS=30000
 
 
 def verify_control(control,scenario,identity,window,baseline_sha256,actual,program_raw):
@@ -62,7 +64,7 @@ def verify_control(control,scenario,identity,window,baseline_sha256,actual,progr
             'native_control_timing_required')
     started=timing['startedAtMs']+timeline['program_started_ms'];ended=timing['startedAtMs']+timeline['program_ended_ms']
     require(window['start_at_ms']<=timing['startedAtMs']<=started
-            and started-window['start_at_ms']<=5000
+            and started-window['start_at_ms']<=MAX_CONTROL_START_DELAY_MS
             and 0<ended-started<=native['wall_seconds']*1000
             and ended<=timing['endedAtMs']<=window['start_at_ms']+45000,'fixed_native_control_window_required')
     derived={'schema_version':1,'protocol':PROTOCOL,'run_id':identity['run_id'],'model':None,'api_calls':0,
@@ -72,13 +74,25 @@ def verify_control(control,scenario,identity,window,baseline_sha256,actual,progr
     return derived
 
 
-def verify_coverage(raw,identity,window):
+def verify_coverage(raw,identity,window,*,control=None):
     require(isinstance(raw,bytes) and 0<len(raw)<=256*1024 and raw.endswith(b'\n'),'native_coverage_missing')
     rows=[parse_json(line) for line in raw.splitlines()]
     require(2<=len(rows)<=301,'native_coverage_count')
     fields={'sequence','wall_ms','monotonic_ns','run_id','server_instance_id','account_id','character_id',
             'server_owned','account_online','renderer_fresh','controller_idle'}
     start=window['start_at_ms'];end=window['deadline_at_ms']
+    idle_deadline=start+MAX_CONTROL_START_DELAY_MS+MAX_CONTROL_MS
+    if control is not None:
+        # verify_bundle passes the control derived from original program evidence.
+        # Optional bounds may tighten this deadline, never extend the envelope.
+        require(isinstance(control,dict) and control.get('protocol')==PROTOCOL
+                and control.get('run_id')==identity['run_id'] and control.get('model') is None
+                and type(control.get('api_calls')) is int and control['api_calls']==0
+                and integer(control.get('started_at_ms')) and integer(control.get('ended_at_ms'))
+                and start<=control['started_at_ms']<=start+MAX_CONTROL_START_DELAY_MS
+                and 0<control['ended_at_ms']-control['started_at_ms']<=MAX_CONTROL_MS,
+                'native_coverage_control_mismatch')
+        idle_deadline=control['started_at_ms']+MAX_CONTROL_MS
     for i,row in enumerate(rows):
         require(isinstance(row,dict) and set(row)==fields and type(row['sequence']) is int and row['sequence']==i
                 and integer(row['wall_ms']) and integer(row['monotonic_ns'])
@@ -89,8 +103,12 @@ def verify_coverage(raw,identity,window):
             wall=row['wall_ms']-rows[0]['wall_ms'];elapsed=(row['monotonic_ns']-rows[0]['monotonic_ns'])/1000000
             gap=(row['monotonic_ns']-rows[i-1]['monotonic_ns'])/1000000
             require(0<gap<=1500 and abs(wall-elapsed)<=25,'native_coverage_gap_or_clock_jump')
-        # After the short finite control, only ordinary status observation remains.
-        if row['wall_ms']>=start+30000:require(row['controller_idle'] is True,'native_control_exceeded_recipe')
+        # Row zero precedes submission and is intentionally idle, even when the
+        # subsequent program's measured start shares its millisecond timestamp.
+        if i and control is not None and control['started_at_ms']<=row['wall_ms']<control['ended_at_ms']:
+            require(row['controller_idle'] is False,'native_control_idle_before_completion')
+        # Start may take at most five seconds; execution still lasts at most 30.
+        if row['wall_ms']>=idle_deadline:require(row['controller_idle'] is True,'native_control_exceeded_recipe')
     require(rows[0]['wall_ms']==start and end<=rows[-1]['wall_ms']<=end+1000
             and 300000<=(rows[-1]['monotonic_ns']-rows[0]['monotonic_ns'])/1000000<=301000,
             'incomplete_native_coverage')
@@ -162,9 +180,9 @@ def verify_bundle(manifest, root):
     validate_contract(scenario['xp_window_protocol'])
     actual=read_json_artifact(root,arts,'native_result')
     program_raw=read_artifact_bytes(root,arts['native_program'],'native_program',maximum=65536)
-    verify_control(controller,scenario,identity,window,manifest['baseline_sha256'],actual,program_raw)
+    controller=verify_control(controller,scenario,identity,window,manifest['baseline_sha256'],actual,program_raw)
     coverage=read_artifact_bytes(root,arts['coverage'],'coverage',maximum=256*1024)
-    verify_coverage(coverage,identity,window)
+    verify_coverage(coverage,identity,window,control=controller)
     require(session.get('controller_started_at_ms')==window['start_at_ms']
             and session.get('controller_ended_at_ms')==window['deadline_at_ms'], 'native_session_timing_mismatch')
     save=session.get('save',{});committed=save.get('committed_at_ms')

@@ -240,13 +240,36 @@ class ExecutorTests(unittest.TestCase):
 
     def test_stale_scene_changed_run_and_control_overrun_are_refused(self):
         for failure in ('stale', 'other_run', 'late'):
-            status = self.status_fixture(elapsed=31_000)
+            status = self.status_fixture(elapsed=35_000)
             if failure == 'stale': status['bridge']['fresh'] = False
             elif failure == 'other_run': status['bridge']['run']['id'] = 'c' * 32
             else: status['bridge']['run'].update(status='running', workerActive=True)
             with self.subTest(failure=failure), self.assertRaises(runtime.RuntimeErrorCode):
-                self.backend.sample(31)
+                self.backend.sample(35)
         self.assertNotIn('coverage_verified', self.backend.state)
+
+    def test_native_control_may_use_existing_start_delay_but_must_settle_by_35_seconds(self):
+        for elapsed in (30_000, 33_000, 34_999):
+            status = self.status_fixture(elapsed=elapsed)
+            status['bridge']['run'].update(status='running', workerActive=True)
+            row = self.backend.sample(elapsed // 1000)
+            self.assertFalse(row['controller_idle'])
+        self.status_fixture(elapsed=35_000)
+        self.backend.collect_short_control = MagicMock()
+        self.assertTrue(self.backend.sample(35)['controller_idle'])
+
+    def test_completed_label_without_inactive_worker_does_not_satisfy_deadline(self):
+        status = self.status_fixture(elapsed=35_000)
+        status['bridge']['run']['workerActive'] = True
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'native_xp_control_exceeded_recipe'):
+            self.backend.sample(35)
+        self.assertNotIn('coverage_verified', self.backend.state)
+
+    def test_capture_collection_limit_does_not_move_with_control_start_delay(self):
+        status = self.status_fixture(elapsed=45_000)
+        status['bridge']['run'].update(recordingStatus='pending', evidenceStatus='pending')
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'native_xp_short_capture_not_saved'):
+            self.backend.sample(45)
 
     def restore_fixture(self, reset=True):
         self.backend.safe_boundary = MagicMock()
