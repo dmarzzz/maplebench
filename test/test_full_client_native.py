@@ -19,15 +19,15 @@ def encoded_native_fixture():
  ledger={'schema_version':1,'codec':'vp8','timebase_us':1000,'flushed':True,
   'submitted_timestamps_us':[0,800000,1600000,2496000],
   'encoded_timestamps_us':[0,800000,1600000,2496000],
-  'durations_us':[800000,800000,896000,1000],'encoded_sha256':['d'*64]*4}
+  'durations_us':[800000,800000,896000,2000],'encoded_sha256':['d'*64]*4}
  raw=json.dumps(ledger,separators=(',',':'))
  receipt={'schema_version':1,'codec':'vp8','timebase_us':1000,'submitted_frames':4,'encoded_frames':4,
   'flushed':True,'ledger_sha256':hashlib.sha256(raw.encode()).hexdigest(),'ledger_bytes':len(raw),
   'webm_sha256':'d'*64,'webm_bytes':12345}
  fixture.value.update(schema_version=3,capture_duration_policy=dict(ENCODED_FRAME_POLICY),
   first_frame_offset_ms=2,last_frame_offset_ms=2498,rendered_frames=4,max_frame_gap_ms=896,encoder_receipt=receipt)
- fixture.probe={'duration_ms':2497,'presentation_span_ms':2496,'presentation_extent_ms':2497,
-  'last_packet_duration_ms':1,'frames':4,'packet_timestamps_us':ledger['submitted_timestamps_us'],
+ fixture.probe={'duration_ms':2498,'presentation_span_ms':2496,'presentation_extent_ms':2498,
+  'last_packet_duration_ms':2,'frames':4,'packet_timestamps_us':ledger['submitted_timestamps_us'],
   'packet_durations_us':ledger['durations_us'],'packet_sha256':ledger['encoded_sha256'],
   'encoder_ledger_json':raw,'webm_sha256':'d'*64,'webm_bytes':12345}
  return fixture
