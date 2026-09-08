@@ -70,15 +70,33 @@ That acceptance used no evaluated model. Rendering uses Chrome with SwiftShader
 on four dedicated virtual CPUs; the short acceptance sample produced roughly
 ten fresh rendered observations per second.
 
-The replacement explicit-frame recording path is implemented and passes isolated
-browser encode/decode tests, but has not passed loaded-game native acceptance.
-Two successive checks hit an eight-frame encoder backlog after roughly 2.4
-seconds, with 11 submitted frames and only three encoded outputs. Both checks
-closed without a publishable recording and restored the baseline. Changing the
-VP8 latency mode did not resolve that loaded-game failure. The next acceptance
-must demonstrate the complete capture alongside jump, combat and ordinary save;
-unit tests or encoder-only probes cannot close this gate. These checks used no
-model API calls and cannot reclassify the failed Terra recording.
+The replacement explicit-frame recording path passed loaded-game native
+acceptance on September 8. Its 23.024-second check preserved all 188 submitted,
+encoded and decoded frames. Independent video review confirmed a 39-pixel jump,
+a basic sword attack, buffs and visible Brandish damage to monsters. Ordinary
+logout and baseline restoration also passed. This scripted qualification used
+zero model API calls, killed no monster and earned zero persisted XP.
+
+Earlier checks exposed an encoder backlog from retaining game-canvas frames,
+a mismatch between request and worker timing origins, and capture boundaries
+that included time before the first frame or after the last one. The accepted
+path takes CPU-owned snapshots and anchors media boundaries to actual rendered
+frames, with bounded readiness and shutdown. Strict frame, timestamp and byte
+checks remain enabled; failed historical evidence is not reclassified.
+
+The first entry of a fresh four-model Hero plan saved a complete 291-frame
+recording but stopped after one confirmed Astra response and 12 accepted inputs.
+A subsequent keyboard request timed out near the 20-second program boundary;
+its dispatch disposition is uncertain, so the attempt remains unscored. Its
+failure evidence is preserved; original-owner cleanup and permanent cohort
+closeout passed without another API request. The three remaining models were
+not submitted. A reviewed admission fix reserves the full keyboard-request
+timeout before dispatching a new hold. It preserves acknowledgement checks and
+the historical failure. Its cloud acceptance remains separate from local tests.
+
+Replacement five-minute pilots reserve at most 240,000 tokens per model.
+Completion, playback and publication remain separate acceptance gates. The two
+public results above remain under their original protocol and budgets.
 Bowmaster and Ice/Lightning fixtures are prepared; native acceptance and their
 model cohorts remain pending. Native 15-second XP windows have an independently
 built candidate, but are not deployed or represented as completed research runs.
@@ -326,9 +344,10 @@ evidence. Code-ready is not live-accepted; local-gallery-ready is not public.
 The operator roadmap should stop accumulating one-off release procedures once
 the required group/lifecycle path is accepted.
 
-The current user-directed M2 pilot uses four five-minute adaptive trials: at
-most 12 API requests and 120,000 aggregate tokens per trial, or 48 requests and
-480,000 tokens across the group. Model latency counts against each wall budget.
+The current user-directed M2 replacement pilot uses four five-minute adaptive
+trials: at most 12 API requests and 240,000 aggregate tokens per trial, or
+48 requests and 960,000 tokens across the group. The earlier two published
+results retain their original 120,000-token per-trial reservation cap. Model latency counts against each wall budget.
 These are ceilings, not predicted usage. Further repetitions and class groups
 require separate finite plans; they do not inherit an unlimited queue. Record actual cost and useful gameplay
 per wall hour. Extra credits do not resolve browser or collection defects.
