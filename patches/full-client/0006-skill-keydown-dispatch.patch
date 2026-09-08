@@ -1,0 +1,17 @@
+diff --git a/src/client/Gameplay/Stage.cpp b/src/client/Gameplay/Stage.cpp
+--- a/src/client/Gameplay/Stage.cpp
++++ b/src/client/Gameplay/Stage.cpp
+@@ -469,7 +469,12 @@ namespace jrc
+             break;
+         }
+         case KeyType::SKILL:
+-            combat.use_move(action);
++            // A release must never start another discrete skill. Channelled
++            // skills will need a distinct stop path, not another use_move.
++            if (down)
++            {
++                combat.use_move(action);
++            }
+             break;
+         case KeyType::ITEM:
+             player.use_item(action);

@@ -73,6 +73,19 @@ native verification. This patch does
 not change that serializer. Keep failed class qualification evidence intact;
 do not infer a valid class benchmark from these focused tests.
 
+## Skill release correction (optional)
+
+`0006-skill-keydown-dispatch.patch` is the explicitly opt-in
+`skill-keydown-dispatch-v1` correction after the five patches above. It prevents
+skill keyup, including duplicate cleanup releases, from starting another
+discrete skill. Ordinary skill keydown, combat eligibility, basic attack/jump
+repeats and movement delivery are unchanged. It does not implement continuous
+Hurricane. See [the channel design and qualification boundary](../../docs/FULL_CLIENT_HURRICANE_CHANNEL.md).
+
+The compiled regression uses the actual pinned Stage dispatch methods. A new
+WASM/JS build, fresh runtime pins and native qualification remain necessary;
+existing cohort recordings and results must keep their original client version.
+
 ## Fixture attack classification
 
 Apply `0005-fixture-attack-flags.patch` after the client patches above. The
