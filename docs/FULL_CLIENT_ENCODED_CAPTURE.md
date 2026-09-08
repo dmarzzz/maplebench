@@ -16,7 +16,12 @@ encoded timestamp arrays, frame durations, and encoded payload SHA-256 hashes.
 The saved stream must decode to exactly those packets, timestamps, durations and
 payloads. Intermediate durations equal successive timestamp differences. Every
 frame is accounted for; dropped, duplicated, reordered or substituted packets
-fail verification. The final duration is bounded by the endpoint limit.
+fail verification. The final duration is bounded by the endpoint limit after quantization.
+Its end timestamp is exactly `max(last_pts_us + 1000,
+ceil(duration_ms - first_frame_offset_ms) * 1000)`. Producer and verifier
+subtract these same serialized offsets, avoiding different floating-point
+cancellation from separately subtracting absolute clock readings. No padding
+tolerance is added.
 
 The ledger is bounded to 8 MiB, the WebM to 95 MiB, and the count to 20,000 frames.
 Existing bounded descriptor-based probing reads the verified artifact, obtains

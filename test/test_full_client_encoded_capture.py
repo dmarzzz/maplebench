@@ -57,6 +57,27 @@ class EncodedCaptureTests(unittest.TestCase):
             with self.subTest(tail=tail),self.assertRaisesRegex(ValueError,'recording_encoded_timing_mismatch'):
                 verify_video_duration(probe,self.recording(),POLICY)
 
+    def test_terminal_rounding_uses_serialized_offsets_without_added_slack(self):
+        # Producer and verifier subtract the same serialized IEEE754 offsets.
+        # A value just above an integer tick must ceil to the next tick.
+        self.value['duration_ms']=1020.0000000000001
+        ledger=self.ledger|{'durations_us':[500000,500000,11000]}
+        raw=json.dumps(ledger,separators=(',',':'))
+        self.value['encoder_receipt']=self.encoder|{'ledger_sha256':hashlib.sha256(raw.encode()).hexdigest(),'ledger_bytes':len(raw)}
+        probe=self.probe|{'encoder_ledger_json':raw,'packet_durations_us':ledger['durations_us'],
+            'last_packet_duration_ms':11,'duration_ms':1011,'presentation_extent_ms':1011}
+        verify_video_duration(probe,self.recording(),POLICY)
+
+    def test_quantized_251ms_tail_fails_even_when_raw_tail_is_250ms(self):
+        self.value.update(duration_ms=1260.9,end_wall_ms=11281,last_frame_offset_ms=1010.9,last_frame_wall_ms=11031)
+        ledger=self.ledger|{'durations_us':[500000,500000,251000]}
+        raw=json.dumps(ledger,separators=(',',':'))
+        self.value['encoder_receipt']=self.encoder|{'ledger_sha256':hashlib.sha256(raw.encode()).hexdigest(),'ledger_bytes':len(raw)}
+        probe=self.probe|{'encoder_ledger_json':raw,'packet_durations_us':ledger['durations_us'],
+            'last_packet_duration_ms':251,'duration_ms':1251,'presentation_extent_ms':1251}
+        with self.assertRaisesRegex(ValueError,'recording_encoded_frames_mismatch'):
+            verify_video_duration(probe,self.recording(),POLICY)
+
     def test_original_policy_cannot_accept_new_receipt(self):
         from full_client_capture import CAPTURE_DURATION_POLICY
         with self.assertRaises(ValueError):verify_video_duration(self.probe,self.recording(),CAPTURE_DURATION_POLICY)
