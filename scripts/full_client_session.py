@@ -149,7 +149,7 @@ class SessionCoordinator:
         if not isinstance(request,dict):
             raise ControlError('invalid_admin_request')
         operation = request.get('op')
-        if descriptors and (operation!='start' or request.get('trial_context') is None):
+        if descriptors and (operation not in ('start','start_native') or (operation=='start' and request.get('trial_context') is None)):
             raise ControlError('unexpected_guard_descriptors')
         if operation=='status':
             with self.bridge.lock:
@@ -164,17 +164,24 @@ class SessionCoordinator:
             return self.dispatch({'op':'status'})
         if operation=='cancel':
             return self.bridge.cancel(request.get('run_id'))
-        if operation=='start':
+        if operation in ('start','start_native'):
+            native=operation=='start_native'
+            if native and set(request)!={'op','run_id','request_id','native_acceptance','docker_image_id','docker_binding','lock_paths'}:
+                raise ControlError('invalid_native_acceptance_request')
             run_id, request_id = request.get('run_id'), request.get('request_id')
             if not all(isinstance(value,str) and re.fullmatch('[a-f0-9]{32}',value) for value in (run_id,request_id)):
                 raise ControlError('invalid_run_identity')
-            if request.get('trial_context') is not None:
+            if native or request.get('trial_context') is not None:
                 validate_guard_descriptors(descriptors,request.get('lock_paths'),self.lock_paths)
             with self.bridge.lock:
                 existing = (self.bridge.output/run_id).exists() or (self.bridge.output/'requests'/f'{request_id}.json').exists()
                 if not existing and (self.owner is None or self.page!='game' or self.desired!='game'
                         or not self.acknowledged or not self._fresh_browser()):
                     raise ControlError('trial_renderer_not_connected')
+                if native:
+                    return self.bridge.start('script',None,30,client=self.owner,run_id=run_id,request_id=request_id,
+                        native_acceptance=request['native_acceptance'],docker_image_id=request['docker_image_id'],
+                        docker_binding=request['docker_binding'],lease_fds=descriptors,private=True)
                 return self.bridge.start('api',request.get('model'),request.get('duration_seconds',22),
                     client=self.owner,run_id=run_id,request_id=request_id,
                     total_token_limit=request.get('total_token_limit'),trial_context=request.get('trial_context'),

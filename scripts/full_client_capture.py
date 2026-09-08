@@ -51,10 +51,17 @@ def number(value, minimum=0, maximum=2**53-1):
 
 
 def capture_receipt(value, owner, anchor, clock, terminal):
+    native=owner.get('nativeAcceptance')
     policy=owner.get('adaptiveProtocol',{}).get('capture_duration_policy')
+    if native is not None:
+        from full_client_native import PROTOCOL,validate_contract
+        native=validate_contract(native)
+        if (owner.get('protocol')!=PROTOCOL or owner.get('mode')!='script' or owner.get('model') is not None
+                or owner.get('adaptiveProtocol')):raise ValueError('invalid_native_capture_identity')
+        policy=native['capture_duration_policy']
     if policy is not None:
         policy=validate_duration_policy(policy)
-        if owner.get('protocol')!='full-client-adaptive-pilot-v1':raise ValueError('invalid_capture_duration_policy')
+        if native is None and owner.get('protocol')!='full-client-adaptive-pilot-v1':raise ValueError('invalid_capture_duration_policy')
     required={'schema_version','run_id','client_id','start_wall_ms','end_wall_ms','duration_ms',
               'first_frame_wall_ms','last_frame_wall_ms','rendered_frames','max_frame_gap_ms',
               'hidden','errors','relay_lost','interrupted','clock','terminal_token'}
@@ -65,7 +72,7 @@ def capture_receipt(value, owner, anchor, clock, terminal):
         raise ValueError('capture_identity_mismatch')
     for key in ('start_wall_ms','end_wall_ms'):
         if not number(value[key]): raise ValueError('invalid_capture_timestamp')
-    maximum=335000 if owner.get('protocol')=='full-client-adaptive-pilot-v1' else 125000
+    maximum=native['capture_max_ms'] if native is not None else 335000 if owner.get('protocol')=='full-client-adaptive-pilot-v1' else 125000
     if (not number(value['duration_ms'],1,maximum) or not number(value['max_frame_gap_ms'],0,maximum)
             or type(value['rendered_frames']) is not int or not 0 <= value['rendered_frames'] <= 100000
             or type(value['errors']) is not int or not 0 <= value['errors'] <= 100000

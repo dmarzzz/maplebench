@@ -59,7 +59,9 @@ assert.equal(limit,120000);item.autoRunId='demo';delete run.readinessPolicy;
 """+timer+"""
 assert.equal(limit,120000);run.adaptiveProtocol={id:'full-client-adaptive-pilot-v1',wall_seconds:300};
 """+timer+"""
-assert.equal(limit,335000);
+assert.equal(limit,335000);delete run.adaptiveProtocol;run.nativeAcceptance={capture_max_ms:45000};
+"""+timer+"""
+assert.equal(limit,45000);
 let closed=false,pollAbort,acknowledgement=null,sessionAck=null,releaseAck=null,relayConnected=true,disconnectedAt=null;
 const clientId='renderer',performance={now:()=>100},observe=()=>({ready:true,capturedAt:Date.now()}),
  Module={MapleBenchRenderedAt:Date.now(),MapleBenchHud:null},renderHeader=()=>{},releaseAll=()=>{};
@@ -104,7 +106,7 @@ run.status='completed';assert.ok(!view().state.includes('Waiting for deadline'))
 const assert=require('node:assert/strict');
 let activeCommand=null,acknowledgement=null,clock=100;
 const performance={now:()=>clock};
-const keyNames={LEFT:'ArrowLeft'}, held=new Map(), cancelledRuns=new Set(['cancelled']);
+const skillKeyNames={PRIMARY_SKILL:'KeyA',BUFF_1:'KeyD'},keyNames={LEFT:'ArrowLeft'}, held=new Map(), cancelledRuns=new Set(['cancelled']);
 const document={hidden:false},relayConnected=true,run={id:'cancelled'},game={focus(){}};
 const capture={recorderStarted:true,frames:1,autoRunId:'cancelled',stopping:false};
 const observe=()=>({ready:true}),fresh=()=>true,renderHeader=()=>{};
@@ -114,6 +116,18 @@ const releaseAll=()=>{};
         result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+dispatch+checks],
             capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'),'Node is required for the browser dispatcher regression')
+    def test_native_recipe_dispatches_neutral_physical_keys(self):
+        self.run_dispatch("""
+(async()=>{
+ run.id='native';run.nativeAcceptance={id:'scripted-native-acceptance-v1'};capture.autoRunId='native';
+ await executeInput({id:'native-buff',runId:'native',keys:['BUFF_1'],durationMs:30},clock+1000);
+ assert.equal(acknowledgement.ok,true);assert.equal(events.filter(x=>x==='keydown').length,1);
+ await executeInput({id:'native-skill',runId:'native',keys:['PRIMARY_SKILL'],durationMs:30},clock+1000);
+ assert.equal(acknowledgement.ok,true);assert.equal(events.filter(x=>x==='keydown').length,2);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
 
     @unittest.skipUnless(shutil.which('node'),'Node is required for the browser dispatcher regression')
     def test_cancel_tombstone_rejects_a_late_command_response(self):
