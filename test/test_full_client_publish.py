@@ -1124,6 +1124,9 @@ class VideoTimestampProbeTests(unittest.TestCase):
     def test_absent_webm_duration_uses_actual_variable_packet_timestamps(self):
         value = _measure_video_probe(self.packets())
         self.assertAlmostEqual(value["duration_ms"], 137)
+        self.assertEqual(value['presentation_span_ms'],104)
+        self.assertEqual(value['presentation_extent_ms'],137)
+        self.assertEqual(value['last_packet_duration_ms'],33)
         self.assertEqual(value["frames"], 4)
         self.assertEqual((value["width"], value["height"]), (800, 720))
 

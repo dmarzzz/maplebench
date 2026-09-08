@@ -176,8 +176,8 @@ def project_member(entry,fixture,attempt_root,recordings,scenario):
             target=recordings/(ident+'.webm')
             copy_recording(folder,video,target,{},maximum=MAX_ADAPTIVE_VIDEO)
             measured=_probe_video(target,video['sha256'],maximum_ms=335000)
-            require(number(recording.get('duration_ms'),1,335000)
-                    and abs(measured['duration_ms']-recording['duration_ms'])<=100,'adaptive_recording_duration_mismatch')
+            from full_client_capture import verify_video_duration
+            verify_video_duration(measured,recording,scenario['adaptive_protocol'].get('capture_duration_policy'))
             row['recording']={'url':'./recordings/'+ident+'.webm','sha256':video['sha256'],
                               'reviewed':recording.get('reviewed') is True}
             cue=playback_cue(result,recording,counters['actions'])

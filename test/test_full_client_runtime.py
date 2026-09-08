@@ -696,6 +696,26 @@ class RuntimeTests(unittest.TestCase):
                 self.backend.copy_run()
             capture.assert_not_called()
 
+    def test_offline_copy_uses_only_explicit_frozen_frame_envelope(self):
+        from full_client_capture import CAPTURE_DURATION_POLICY
+        self.video_fixture()
+        reference=self.backend.state['artifacts']['recording']
+        recording=json.loads((self.backend.directory/reference['path']).read_text())
+        recording.update(duration_ms=302090.265,capture_duration_policy=dict(CAPTURE_DURATION_POLICY),
+            first_frame_offset_ms=109,last_frame_offset_ms=301994.265,wall_clock_drift_ms=.735,
+            rendered_frames=2337,interrupted=False,post_render_capture=True)
+        self.backend.state['artifacts']['recording']=self.backend.artifact('frame-recording.json',recording)
+        self.backend.scenario={'protocol':'full-client-adaptive-pilot-v1',
+            'adaptive_protocol':{'capture_duration_policy':dict(CAPTURE_DURATION_POLICY)}}
+        probe={'duration_ms':301973,'presentation_extent_ms':301973,'presentation_span_ms':301972,
+            'last_packet_duration_ms':1,'frames':2338,'width':800,'height':720}
+        with patch('full_client_publish._probe_video',return_value=probe) as decode, \
+                patch('full_client_publish.verify_capture_bundle') as capture:
+            self.backend.copy_run()
+        self.assertEqual(decode.call_args.kwargs,{'maximum_ms':335000});capture.assert_called_once()
+        saved=json.loads((self.backend.directory/self.backend.state['artifacts']['video_probe']['path']).read_text())
+        self.assertEqual(saved['presentation_span_ms'],301972)
+
     def test_status_does_not_treat_stale_waiting_page_as_ready(self):
         self.host.admin.return_value["session"]["fresh"] = False
         result = self.backend.status()
