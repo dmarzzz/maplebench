@@ -181,13 +181,21 @@
   function renderCatalog(){
     const node=$('catalog-cohorts'),catalog=snapshot.catalog;
     if(!node)return;
-    node.replaceChildren();node.hidden=!(catalog?.schema_version===1&&Array.isArray(catalog.cohorts)&&catalog.cohorts.length<=3);
+    const current=Array.isArray(catalog?.cohorts)?catalog.cohorts:[];
+    const previous=catalog?.schema_version===2&&Array.isArray(catalog.previous_cohorts)?catalog.previous_cohorts:[];
+    node.replaceChildren();node.hidden=!([1,2].includes(catalog?.schema_version)&&current.length<=3&&previous.length<=3);
     if(node.hidden)return;
-    for(const cohort of catalog.cohorts){
-      if(!/^\.\/cohorts\/[a-f0-9]{16}\/$/.test(cohort.url))continue;
-      const names={hero:'Hero',bowmaster:'Bowmaster',ice_lightning_arch_mage:'Ice/Lightning Arch Mage'};
-      const link=el('a',`${names[cohort.class_id]||'Declared class'} · ${cohort.verified} / 4 verified`);
-      link.href=cohort.url;link.className='pill';node.append(link,document.createTextNode(' '));
+    const names={hero:'Hero',bowmaster:'Bowmaster',ice_lightning_arch_mage:'Ice/Lightning Arch Mage'};
+    for(const [cohorts,isPrevious] of [[current,false],[previous,true]]){
+      if(!cohorts.length)continue;
+      const group=el('div');
+      group.append(el('p',isPrevious?'Previous pilot cohorts · separate frozen settings; excluded from the current matrix':'Current cohorts'));
+      for(const cohort of cohorts){
+        if(!/^\.\/cohorts\/[a-f0-9]{16}\/$/.test(cohort.url)||!Number.isInteger(cohort.verified)||cohort.verified<0||cohort.verified>4)continue;
+        const link=el('a',`${names[cohort.class_id]||'Declared class'} · ${cohort.verified} / 4 verified`);
+        link.href=cohort.url;link.className='pill';group.append(link,document.createTextNode(' '));
+      }
+      node.append(group);
     }
   }
   function renderResearch(){
@@ -292,7 +300,7 @@
       snapshot=next;renderCatalog();renderResearch();renderLive();renderComparisons();renderHistory();freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
-    finally{if(!closed&&(snapshot?.live_status_available!==false||snapshot?.catalog?.schema_version===1))timer=setTimeout(refresh,snapshot?.catalog?.schema_version===1?10000:2000);}
+    finally{if(!closed&&(snapshot?.live_status_available!==false||[1,2].includes(snapshot?.catalog?.schema_version)))timer=setTimeout(refresh,[1,2].includes(snapshot?.catalog?.schema_version)?10000:2000);}
   }
   window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
   refresh();

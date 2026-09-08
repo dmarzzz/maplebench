@@ -59,6 +59,23 @@ class AdaptiveHoldUITests(unittest.TestCase):
                               capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_previous_cohort_navigation_is_separate_and_bounded(self):
+        self.run_js([('renderCatalog(', 'renderResearch(')], r"""
+const document={createTextNode:text=>new Node('text',text)};
+const active={url:'./cohorts/'+'a'.repeat(16)+'/',class_id:'hero',verified:1};
+const prior={url:'./cohorts/'+'b'.repeat(16)+'/',class_id:'hero',verified:2};
+snapshot={catalog:{schema_version:2,cohorts:[active],previous_cohorts:[prior]}};
+renderCatalog();const nav=$('catalog-cohorts');assert.equal(nav.hidden,false);
+assert.equal(nav.children.length,2);assert.match(nav.children[0].textContent,/Current cohorts/);
+assert.match(nav.children[1].textContent,/Previous pilot cohorts/);
+assert.match(nav.children[1].textContent,/excluded from the current matrix/);
+assert.equal(nav.children[1].children[1].href,prior.url);
+snapshot.catalog.previous_cohorts=[{...prior,url:'https://untrusted.example/'}];
+renderCatalog();assert.equal(nav.children[1].children.length,1);
+snapshot.catalog.previous_cohorts=Array(4).fill(prior);renderCatalog();assert.equal(nav.hidden,true);
+snapshot.catalog={schema_version:1,cohorts:[active]};renderCatalog();assert.equal(nav.hidden,false);assert.equal(nav.children.length,1);
+""")
+
     def test_actual_wait_durations_and_fail_closed_metadata(self):
         self.run_js([('adaptiveHold(', 'adaptiveDetails(')], r"""
 let astra=row(),sol=row('gpt-5.6-sol',203573);
