@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import {PostRenderRecorder,muxWebM,LIMITS} from '../ui/full-client/webcodecs-recorder.js';
 
 function harness(behavior={}){
-  let time=1000,wallDelta=0;const calls=[],instances=[];
-  class Frame{constructor(source,init){Object.assign(this,init);this.source=source;this.closed=false;}
+  let time=1000,wallDelta=0;const calls=[],instances=[],frames=[],readbacks=[];
+  class Frame{constructor(source,init){if(behavior.frameFailure)throw Error('private frame error');
+      Object.assign(this,init);this.source=source;this.closed=false;
+      this.pixels=source instanceof Uint8ClampedArray?source.slice():source.pixels;
+      frames.push(this);calls.push(source instanceof Frame?'frame-clone':'frame-snapshot');}
     close(){assert.equal(this.closed,false);this.closed=true;calls.push('frame-close');}}
   class Encoder{
     static async isConfigSupported(config){if(behavior.hangConfig)return new Promise(()=>{});
@@ -25,10 +28,14 @@ function harness(behavior={}){
     }
     close(){this.state='closed';calls.push('close');}
   }
-  const canvas={width:32,height:24};
+  const canvasPixels=new Uint8ClampedArray(32*24*4);
+  const context={getImageData(...args){calls.push('readback');readbacks.push(args);
+    if(behavior.readbackFailure)throw Error('private canvas error');
+    return {width:32,height:24,colorSpace:'srgb',data:canvasPixels.slice(),...behavior.pixelsOverride};}};
+  const canvas={width:32,height:24,getContext:kind=>{assert.equal(kind,'2d');return behavior.noContext?null:context;}};
   const recorder=new PostRenderRecorder(canvas,{maxDurationMs:10000},{VideoFrame:Frame,VideoEncoder:Encoder,
     now:()=>time,wall:()=>100000+time+wallDelta,...(behavior.hash?{hash:behavior.hash}:{})});
-  return {recorder,canvas,calls,instances,set:n=>time=n,drift:n=>wallDelta=n};
+  return {recorder,canvas,canvasPixels,calls,instances,frames,readbacks,set:n=>time=n,drift:n=>wallDelta=n};
 }
 async function two(h){await h.recorder.initialize();h.set(1010);assert.equal(h.recorder.onRendered(),true);
   h.set(1044.2);h.recorder.onRendered();h.set(1050.1);}
@@ -48,6 +55,45 @@ test('each snapshot is retained until next timestamp gives its duration',async()
   assert.equal(h.recorder.submittedFrames,0);h.set(1044);h.recorder.onRendered();
   assert.equal(h.instances[0].inputs[0].duration,34000);h.set(1044);await h.recorder.stop();
   assert.equal(h.instances[0].inputs[1].duration,1000);
+});
+test('each hook synchronously snapshots exact CPU RGBA pixels before later canvas changes',async()=>{
+  const h=harness();await h.recorder.initialize();assert.equal(h.readbacks.length,0);
+  h.canvasPixels.fill(31);h.set(1010);h.recorder.onRendered();
+  assert.equal(h.frames.length,1);assert.equal(h.frames[0].timestamp,0);
+  assert.ok(h.frames[0].source instanceof Uint8ClampedArray);
+  assert.deepEqual(h.readbacks[0],[0,0,32,24,{colorSpace:'srgb',pixelFormat:'rgba-unorm8'}]);
+  assert.deepEqual(h.frames[0].colorSpace,{primaries:'bt709',transfer:'iec61966-2-1',matrix:'rgb',fullRange:true});
+  assert.equal(h.frames[0].format,'RGBA');assert.equal(h.frames[0].codedWidth,32);assert.equal(h.frames[0].codedHeight,24);
+  h.canvasPixels.fill(72);h.set(1050);h.recorder.onRendered();
+  assert.equal(h.instances[0].inputs[0].pixels[0],31);
+  assert.equal(h.instances[0].inputs[0].duration,40000);
+  assert.equal(h.frames[0].closed,true);assert.equal(h.frames[1].pixels[0],72);
+  h.canvasPixels.fill(99);h.set(1060);await h.recorder.stop();
+  assert.equal(h.instances[0].inputs[1].pixels[0],72);
+  assert.equal(h.readbacks.length,2);assert.equal(h.recorder.frames,2);
+  assert.ok(h.frames.every(frame=>frame.closed));
+  assert.deepEqual(h.calls.slice(2,5),['readback','frame-snapshot','readback']);
+});
+test('missing CPU context is refused before the encoder or capture clock starts',async()=>{
+  const h=harness({noContext:true});await assert.rejects(h.recorder.initialize(),/invalid_canvas/);
+  assert.equal(h.instances.length,0);assert.equal(h.recorder.startedAt,undefined);
+});
+for(const [name,behavior] of [['readback throws',{readbackFailure:true}],
+  ['raw frame construction throws',{frameFailure:true}],['wrong colorspace',{pixelsOverride:{colorSpace:'display-p3'}}],
+  ['wrong dimensions',{pixelsOverride:{width:31}}],['wrong byte count',{pixelsOverride:{data:new Uint8ClampedArray(4)}}],
+  ['wrong byte format',{pixelsOverride:{data:new Uint8Array(32*24*4)}}]]){
+  test(name+' fails capture without a canvas-source fallback',async()=>{
+    const h=harness(behavior);await h.recorder.initialize();h.set(1010);
+    assert.throws(()=>h.recorder.onRendered(),/^Error: capture_snapshot_failed$/);
+    assert.equal(h.recorder.frames,0);assert.equal(h.recorder.submittedFrames,0);
+    assert.equal(h.instances[0].state,'closed');assert.equal(h.frames.length,0);
+    await assert.rejects(h.recorder.stop(),/^Error: capture_snapshot_failed$/);
+  });
+}
+test('readback failure after one frame closes the retained CPU frame',async()=>{
+  const behavior={},h=harness(behavior);await h.recorder.initialize();h.set(1010);h.recorder.onRendered();
+  behavior.readbackFailure=true;h.set(1050);assert.throws(()=>h.recorder.onRendered(),/capture_snapshot_failed/);
+  assert.equal(h.frames[0].closed,true);assert.equal(h.recorder.submittedFrames,0);
 });
 test('terminal rounding uses the exact serialized clock operands',async()=>{
   const h=harness();h.set(0.1);await h.recorder.initialize();h.set(0.2);h.recorder.onRendered();
