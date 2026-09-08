@@ -601,6 +601,42 @@ class FullClientBridge:
         finally:os.close(directory)
         return 'saved'
 
+    def _acknowledge_only(self, body, obs, age, render_age, ack):
+        # A concurrent ordinary poll may carry an older frame. Never feed this
+        # expedited receipt into global observation/readiness/capture state.
+        with self.lock:
+            pending=self.pending;client=body['client']
+            if (ack is None or not pending or body.get('ackRunId')!=pending.get('runId')
+                    or self.run.get('id')!=pending.get('runId') or self.run.get('client')!=client
+                    or self.client!=client or client!=pending.get('client') or ack['id']!=pending['id']):
+                raise ControlError('input_ack_owner_mismatch')
+            self._check_cancelled(pending['runId'])
+            now=time.monotonic();received_ms=round(time.time()*1000)
+            valid=obs['ready'] and max(age,render_age)<1500
+            if self.run.get('readinessPolicy'):
+                clock=self.capture_clock;sent=body.get('clientSentAtMs')
+                proof=(clock is not None and self.run.get('captureClockAccepted')==clock['id']
+                    and body.get('captureClockAck')==clock['id']
+                    and body.get('captureClockReceivedAtMs')==self.capture_clock_received_ms
+                    and _number(self.capture_clock_received_ms) and _number(sent)
+                    and sent>=self.capture_clock_received_ms)
+                transit=received_ms-(sent+clock['server_sent_ms']-self.capture_clock_received_ms) if proof else -1
+                valid=valid and 0<=transit<=5000
+                if valid:age+=transit;render_age+=transit
+                valid=valid and max(age,render_age)<1500
+            if pending.get('sent') and 'ack' not in pending:
+                enough=now-pending['sentAt']>=pending['durationMs']/1000-0.001
+                pending['lastMatchingAck']={'receivedAt':now,'receivedAtMs':received_ms,
+                    'ok':ack['ok'],'validFrame':valid,'enoughTime':enough,
+                    'beforeDeadline':now<pending['deadline'],'clientTiming':ack.get('timing'),'transport':'urgent'}
+                self._input_failure(ack,valid,enough,now,received_ms,client)
+                if now<pending['deadline']:
+                    pending['ack']={'id':ack['id'],'ok':ack['ok'] and valid and enough}
+                    pending['ackObservation']=json.loads(json.dumps(obs)) | {'ageMs':age,'renderAgeMs':render_age}
+                    pending['ackObservedAt']=now
+                    self.lock.notify_all()
+            return {'command':None}
+
     def frame(self, body, *, acknowledgement_only=False):
         if not isinstance(body, dict):
             raise ValueError('Invalid client frame')
@@ -619,9 +655,9 @@ class FullClientBridge:
             raise ControlError('invalid_input_acknowledgement')
         if ack is not None and 'timing' in ack:
             timing=ack['timing']
-            if (not isinstance(timing,dict) or set(timing)!={'schema_version','received_at_ms','keydown_after_ms','finished_after_ms','urgent_post_after_ms'}
+            if (not isinstance(timing,dict) or set(timing)!={'schema_version','handler_started_monotonic_ms','keydown_after_ms','finished_after_ms','urgent_post_after_ms'}
                     or timing['schema_version']!=1 or type(timing['schema_version']) is not int
-                    or type(timing['received_at_ms']) is not int or not 0<=timing['received_at_ms']<=2**53-1
+                    or type(timing['handler_started_monotonic_ms']) is not int or not 0<=timing['handler_started_monotonic_ms']<=2**53-1
                     or any(type(timing[k]) is not int or not 0<=timing[k]<=350000 for k in ('finished_after_ms','urgent_post_after_ms'))
                     or timing['finished_after_ms']>timing['urgent_post_after_ms']
                     or timing['keydown_after_ms'] is not None and (type(timing['keydown_after_ms']) is not int
@@ -630,11 +666,9 @@ class FullClientBridge:
         if ack is not None and 'failure' in ack:
             if ack['ok']:raise ControlError('invalid_input_failure')
             input_failure(ack['failure'])
+        if acknowledgement_only:
+            return self._acknowledge_only(body,obs,age,render_age,ack)
         with self.lock:
-            if acknowledgement_only and (ack is None or not self.pending
-                    or body.get('ackRunId') != self.pending.get('runId')
-                    or client != self.pending.get('client') or ack['id'] != self.pending['id']):
-                raise ControlError('input_ack_owner_mismatch')
             now = time.monotonic()
             server_received_ms=round(time.time()*1000)
             active = self.run['status'] in ('requesting', 'running') or self.run.get('workerActive') or bool(self.leases) or self.pending is not None
@@ -800,9 +834,17 @@ class FullClientBridge:
                     self.lock.wait(left)
                 ack = pending['ack']
                 self._check_cancelled(run_id)
-                accepted = ack['ok'] and self.fresh()
                 timing=pending.get('lastMatchingAck')
-                return {**({'inputTiming':timing} if timing and timing.get('clientTiming') else {}), 'accepted': accepted, 'observation': self._snapshot() if self.fresh() else {'ready':False},
+                if 'ackObservation' in pending:
+                    elapsed=max(0,(time.monotonic()-pending['ackObservedAt'])*1000)
+                    observation=pending['ackObservation'] | {
+                        'ageMs':pending['ackObservation']['ageMs']+elapsed,
+                        'renderAgeMs':pending['ackObservation']['renderAgeMs']+elapsed}
+                    fresh=observation['ready'] and max(observation['ageMs'],observation['renderAgeMs'])<1500
+                else:
+                    fresh=self.fresh();observation=self._snapshot() if fresh else {'ready':False}
+                accepted = ack['ok'] and fresh
+                return {**({'inputTiming':timing} if timing and timing.get('clientTiming') else {}), 'accepted': accepted, 'observation': observation if fresh else {'ready':False},
                         'error': None if accepted else 'Client input was interrupted'}
             finally:
                 self.pending = None

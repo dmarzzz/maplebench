@@ -503,12 +503,14 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
             interrupted:capture.hidden||capture.errors>0||capture.relayLost||capture.stopping}:null,
           captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle',captureFailure};
   };
-  const sendUrgentAck = async (ack, runId) => {
+  const sendUrgentAck = async (ack, runId, startedAt) => {
     const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),2000);
     try {
       // One attempt only. The normal poll retains the same ACK on any reply.
+      const body={...ackFrame(ack,runId),ackRunId:runId};
+      ack.timing.urgent_post_after_ms=Math.round(performance.now()-startedAt);
       await fetch('/control/ack',{method:'POST',headers:{'Content-Type':'application/json'},
-        signal:abort.signal,body:JSON.stringify({...ackFrame(ack,runId),ackRunId:runId})});
+        signal:abort.signal,body:JSON.stringify(body)});
     } catch {} finally {clearTimeout(timer);}
   };
   const executeInput = async (command, deadline) => {
@@ -547,11 +549,11 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
           remaining_ms:Number.isSafeInteger(remaining)&&remaining>=-350000&&remaining<=3000?remaining:null};
       }
       const done=performance.now();
-      acknowledgement.timing={schema_version:1,received_at_ms:Math.round(item.startedAt),
+      acknowledgement.timing={schema_version:1,handler_started_monotonic_ms:Math.round(item.startedAt),
         keydown_after_ms:item.keydown?Math.round(item.keydownAt-item.startedAt):null,
         finished_after_ms:Math.round(done-item.startedAt),urgent_post_after_ms:Math.round(done-item.startedAt)};
       activeCommand=null; renderHeader();
-      sendUrgentAck(acknowledgement,command.runId).catch(()=>{});
+      sendUrgentAck(acknowledgement,command.runId,item.startedAt).catch(()=>{});
     }
   };
   const poll=async()=>{

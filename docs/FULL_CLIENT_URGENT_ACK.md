@@ -11,7 +11,9 @@ After releasing keys, the controller now makes one immediate same-origin
 fallback. A lost reply never retries input or creates another urgent POST.
 The endpoint validates the session, pending run, renderer, command, current
 observation, hold duration and original deadline. It cannot select an input
-command or advance session navigation. Duplicate ACKs cannot replace the first
+command, advance session navigation, or update global frame/capture/readiness
+state. Its validated observation is bound to the pending ACK so an older
+ordinary poll cannot replace the action response snapshot. Duplicate ACKs cannot replace the first
 terminal input decision. Neither the SDK budget nor keyboard hold limits change.
 
 New ACKs carry bounded, unscored client monotonic timing: handler entry,
