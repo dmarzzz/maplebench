@@ -236,7 +236,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     while (value.length && ctx.measureText(value).width > width) value = value.slice(0,-1);
     ctx.fillText(value === text ? value : value.slice(0,-1)+'…', x,y);
   };
-  const captureFailureCodes = new Set(["capture_clock_or_duration","capture_wall_clock_drift","capture_frame_limit","capture_dimensions_changed","capture_snapshot_failed","capture_frame_gap","duplicate_quantized_timestamp","invalid_frame_duration","encoder_backpressure","encoder_output_timing_mismatch","encoder_output_type","encoder_missing_requested_keyframe","capture_byte_limit","encoder_hash_backpressure","encoder_configuration_changed","vp8_hidden_or_mistyped_frame","vp8_keyframe_dimensions","encoded_hash_failed","encoder_stop_timeout","capture_already_stopping","incomplete_capture","capture_endpoint_gap","capture_quantized_endpoint_gap","encoder_flush_timeout","encoder_frame_count_mismatch","ledger_too_large","encoder_error","capture_duration_limit","encoder_configuration_timeout","vp8_configuration_unsupported","webcodecs_unavailable","invalid_canvas","invalid_capture_limit","capture_not_active","capture_already_initialized","render_hook_failed","encoder_initialization_failed","encoder_stop_failed","encoder_failure_unknown"]);
+  const captureFailureCodes = new Set(["capture_clock_or_duration","capture_wall_clock_drift","capture_frame_limit","capture_dimensions_changed","capture_snapshot_failed","capture_first_frame_timeout","capture_final_frame_timeout","capture_owner_changed","capture_interrupted","capture_frame_gap","duplicate_quantized_timestamp","invalid_frame_duration","encoder_backpressure","encoder_output_timing_mismatch","encoder_output_type","encoder_missing_requested_keyframe","capture_byte_limit","encoder_hash_backpressure","encoder_configuration_changed","vp8_hidden_or_mistyped_frame","vp8_keyframe_dimensions","encoded_hash_failed","encoder_stop_timeout","capture_already_stopping","incomplete_capture","capture_endpoint_gap","capture_quantized_endpoint_gap","encoder_flush_timeout","encoder_frame_count_mismatch","ledger_too_large","encoder_error","capture_duration_limit","encoder_configuration_timeout","vp8_configuration_unsupported","webcodecs_unavailable","invalid_canvas","invalid_capture_limit","capture_not_active","capture_already_initialized","render_hook_failed","encoder_initialization_failed","encoder_stop_failed","encoder_failure_unknown"]);
   const retainCaptureFailure = (item, code) => {
     if(!item?.encodedMode || item.autoRunId!==run.id || !/^[a-f0-9]{32}$/.test(item.autoRunId) || captureFailure?.run_id===item.autoRunId) return;
     const recorder=item.encodedRecorder, start=recorder?.startedAt ?? item.startedAt;
@@ -244,7 +244,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=20000?value:0;
     captureFailure={schema_version:1,run_id:item.autoRunId,policy_id:'post-render-encoded-frame-v1',
       code:captureFailureCodes.has(code)?code:'encoder_failure_unknown',
-      clock_origin:recorder?'encoder_start':'capture_request',elapsed_ms:offset(performance.now()) ?? 0,
+      clock_origin:Number.isFinite(recorder?.startedAt)?'encoder_start':'capture_request',elapsed_ms:offset(performance.now()) ?? 0,
       first_frame_offset_ms:offset(recorder?.firstFrameAt),last_frame_offset_ms:offset(recorder?.lastFrameAt),
       rendered_frames:count(recorder?.frames),submitted_frames:count(recorder?.submittedFrames),encoded_frames:count(recorder?.outputFrames)};
   };
@@ -273,7 +273,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       ctx.font='10px monospace';ctx.fillStyle=ink.muted;ctx.fillText('JOURNEY × COSMIC',283,21);
       ctx.fillStyle=ink.orange;ctx.font='bold 10px monospace';ctx.fillText('UNRANKED',width-186,21);
       ctx.strokeStyle='#946037';ctx.strokeRect(width-116,8,104,19);
-      ctx.fillText(`● REC ${((performance.now()-item.startedAt)/1000).toFixed(1)}s`,width-108,21);
+      ctx.fillText(item.encodedMode&&!item.frames?'● ARMING':`● REC ${((performance.now()-item.startedAt)/1000).toFixed(1)}s`,width-108,21);
       ctx.fillStyle=signal;ctx.fillRect(0,34,4,17);
       ctx.font='bold 17px sans-serif';ctx.fillStyle=ink.text;fitText(ctx,data.mode,12,47,width-24);
       ctx.font='11px sans-serif';ctx.fillStyle=alert ? ink.orange : ink.muted;fitText(ctx,data.state,12,63,width-24);
@@ -298,33 +298,43 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     // Capture while the client's just-drawn WebGL buffer is valid. A separate
     // browser RAF can read an older/discarded compositor frame.
     const animate = () => {
-      if(item.stopping) return;
+      if(capture!==item||(item.encodedMode&&item.autoRunId!==run.id)) { item.failFinalFrame?.(Error('capture_owner_changed')); return; }
+      if(item.stopping && !item.finalFrameRequested) return;
       draw();
       if(item.recorderStarted) {
-        if(item.encodedRecorder) item.encodedRecorder.onRendered();
+        if(item.encodedRecorder) {
+          item.encodedRecorder.onRendered();
+          item.startedAt=item.encodedRecorder.startedAt;item.startedWall=item.encodedRecorder.startedWall;
+          item.firstFrameAt=item.encodedRecorder.firstFrameAt;item.firstFrameWall=item.encodedRecorder.firstFrameWall;
+          if(!item.frames) notice.textContent='Recording verified post-render frames.';
+        }
         const now=performance.now(),wall=Date.now();
         item.maxGap=Math.max(item.maxGap,now-(item.lastFrameAt ?? item.startedAt));
         item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.firstFrameAt ??= now; item.lastFrameAt=now; item.frames=item.encodedRecorder?item.encodedRecorder.frames:item.frames+1;
       }
+      // The final real hook supplies its pixels before the endpoint is sampled.
+      // finishOnFrame calls recorder.stop() synchronously, before this stack yields.
+      if(item.finalFrameRequested) item.finishOnFrame();
     };
     item.onRendered = animate;
     const encoded = durationPolicy?.id === 'post-render-encoded-frame-v1';
     if(encoded) {
       item.encodedMode=true;item.durationPolicy=durationPolicy;capture=item;
       const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:335000;
+      item.captureDeadlineAt=item.startedAt+encodedLimit;
       item.maxTimer=setTimeout(()=>{retainCaptureFailure(item,'capture_duration_limit');item.errors++;stopRecording();},encodedLimit);
       try {
         item.encoderPromise=createPostRenderRecorder(output,{maxDurationMs:encodedLimit,onFailure:code=>{
           retainCaptureFailure(item,code);
+          item.failFinalFrame?.(Error(code));
           if(capture!==item) return;
           item.errors++; notice.textContent='Encoded frame capture failed; this recording cannot be accepted.';
           stopRecording();
         }});
         item.encodedRecorder=await item.encoderPromise;
         if(item.stopping || closed) return;
-        item.startedAt=item.encodedRecorder.startedAt;item.startedWall=item.encodedRecorder.startedWall;
         item.recorderStarted=true;
-        notice.textContent='Recording verified post-render frames.';renderHeader();
+        notice.textContent='Recorder ready; waiting for the first post-render frame.';renderHeader();
       } catch (error) {
         retainCaptureFailure(item,error?.message || 'encoder_initialization_failed');
         item.errors++;clearTimeout(item.maxTimer);
@@ -374,19 +384,60 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     }
   }
   Module.MapleBenchOnRendered = () => {
-    if (!capture || capture.stopping) return;
+    if (!capture || (capture.stopping && !capture.finalFrameRequested)) return;
     const item=capture;
-    try { item.onRendered(); } catch (error) { retainCaptureFailure(item,error?.message || 'render_hook_failed'); item.errors++; notice.textContent='Frame capture failed'; stopRecording(); }
+    try { item.onRendered(); } catch (error) { retainCaptureFailure(item,error?.message || 'render_hook_failed'); item.failFinalFrame?.(Error('render_hook_failed')); item.errors++; notice.textContent='Frame capture failed'; stopRecording(); }
   };
   async function stopRecording() {
     const item=capture;
-    if(!item||item.stopping) return;
+    if(!item) return;
+    if(item.stopping) {
+      if(item.encodedMode&&(closed||item.hidden||item.errors>0||item.relayLost)) {
+        item.failFinalFrame?.(Error('capture_interrupted'));
+        item.encodedRecorder?.abort('capture_interrupted');
+      }
+      return;
+    }
     item.stoppedAt=performance.now();item.stoppedWall=Date.now();
-    item.stopping=true; clearTimeout(item.finishTimer); clearTimeout(item.maxTimer); cancelAnimationFrame(item.animation);
+    item.stopping=true; clearTimeout(item.finishTimer); cancelAnimationFrame(item.animation);
     if(item.encodedMode) {
+      let stopTimer;
       try {
-        const recorder=item.encodedRecorder || await item.encoderPromise;
-        const finished=await recorder.stop();
+        // The 15s bound includes configuration settlement, the final-hook wait,
+        // encoder flush and hashing. A late factory cannot leak its encoder.
+        const timeout=new Promise((_,reject)=>{stopTimer=setTimeout(()=>{
+          item.stopExpired=true;
+          item.failFinalFrame?.(Error('encoder_stop_timeout'));
+          item.encodedRecorder?.abort('encoder_stop_timeout');
+          reject(Error('encoder_stop_timeout'));
+        },15000);});
+        const finish=(async()=>{
+          const recorder=item.encodedRecorder || await item.encoderPromise;
+          if(item.stopExpired){recorder.abort('encoder_stop_timeout');throw Error('encoder_stop_timeout');}
+          if(capture!==item||item.autoRunId!==run.id){recorder.abort('capture_owner_changed');throw Error('capture_owner_changed');}
+          if(closed||item.hidden||item.errors>0||item.relayLost)recorder.abort('capture_interrupted');
+          if(recorder.failed || !recorder.frames) return recorder.stop();
+          return new Promise((resolve,reject)=>{
+            const clear=()=>{
+              clearTimeout(item.finalFrameTimer);item.finalFrameRequested=false;
+              item.finishOnFrame=null;item.failFinalFrame=null;
+            };
+            item.failFinalFrame=error=>{clear();recorder.abort(error.message);reject(error);};
+            item.finishOnFrame=()=>{
+              if(capture!==item||item.autoRunId!==run.id){item.failFinalFrame(Error('capture_owner_changed'));return;}
+              if(performance.now()>item.captureDeadlineAt){item.failFinalFrame(Error('capture_duration_limit'));return;}
+              clear();
+              try{const ending=recorder.stop();clearTimeout(item.maxTimer);resolve(ending);}
+              catch(error){recorder.abort('encoder_stop_failed');reject(error);}
+            };
+            item.finalFrameRequested=true;
+            item.finalFrameTimer=setTimeout(()=>item.failFinalFrame?.(Error('capture_final_frame_timeout')),1000);
+          });
+        })();
+        const finished=await Promise.race([finish,timeout]);
+        clearTimeout(stopTimer);stopTimer=null;
+        if(capture!==item||item.autoRunId!==run.id)throw Error('capture_owner_changed');
+        if(item.encodedRecorder.startedAt+finished.measurements.duration_ms>item.captureDeadlineAt)throw Error('capture_duration_limit');
         pendingUpload={runId:item.autoRunId,blob:finished.blob,metadata:{
           schema_version:3,run_id:item.autoRunId,client_id:clientId,...finished.measurements,
           capture_duration_policy:item.durationPolicy,
@@ -398,11 +449,13 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
         await uploadRecording();
       } catch (error) {
         retainCaptureFailure(item,error?.message || 'encoder_stop_failed');
-        if(capture===item) capture=null;
-        notice.textContent='Encoded recording did not finish verification; the run has no accepted recording.';
-      }
+        if(capture===item) {
+          capture=null;notice.textContent='Encoded recording did not finish verification; the run has no accepted recording.';
+        }
+      } finally { clearTimeout(stopTimer);clearTimeout(item.maxTimer);clearTimeout(item.finalFrameTimer);item.finalFrameRequested=false;item.finishOnFrame=null;item.failFinalFrame=null; }
       renderHeader();return;
     }
+    clearTimeout(item.maxTimer);
     if(item.recorder.state!=='inactive') item.recorder.stop();
     else { item.stream.getTracks().forEach(track=>track.stop()); capture=null; }
     renderHeader();

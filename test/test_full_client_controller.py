@@ -17,7 +17,7 @@ let now=100,wall=1000;const performance={now:()=>now};Date.now=()=>wall;
 const item={autoRunId:'trial',startedAt:100,startedWall:1000,recorderStarted:true,frames:0,
  firstFrameAt:null,lastFrameAt:null,firstFrameWall:null,lastFrameWall:null,maxGap:0,chunks:[],
  hidden:false,errors:0,relayLost:false,clockVerified:false,terminalToken:null};
-const draw=()=>{},clientId='renderer';let pendingUpload;
+const draw=()=>{},clientId='renderer',capture=item;let pendingUpload;
 let durationPolicy={id:'post-render-frame-envelope-v1'};
 """
         checks="""
