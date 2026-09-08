@@ -29,6 +29,11 @@ int main() {
  assert(!has_ranged_projectile(false,false,true));
  assert(effective_ammunition(7,false,true)==7);
  assert(has_ranged_projectile(true,false,false));
+ assert(projectile_visual(0,true,false,true)==2060000);
+ assert(projectile_visual(0,false,true,true)==2061000);
+ assert(projectile_visual(2060001,true,false,true)==2060001);
+ assert(projectile_visual(0,true,false,false)==0);
+ assert(projectile_visual(0,false,false,true)==0);
 }
 '''
         with tempfile.TemporaryDirectory() as folder:
