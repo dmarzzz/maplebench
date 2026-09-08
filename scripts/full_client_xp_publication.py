@@ -1,7 +1,8 @@
 """Read-only, unranked projection of explicitly pinned native XP-window trials.
 
-This adapter never upgrades a pilot net-XP score, authorizes deployment, copies
-private evidence, or grants native-runtime acceptance. All public values are
+This adapter never upgrades a pilot net-XP score, authorizes deployment, or copies
+private evidence. Optional acceptance requires original separately pinned native
+evidence and an artifact-bound operator visual review. All public values are
 rebuilt from the native ledger, ordinary save, adaptive cycles and original
 capture; absent or inconsistent evidence stays unknown.
 """
@@ -54,7 +55,7 @@ def validate_context(context):
     return context
 
 
-def verify_attempt(root, context):
+def _verify_attempt(root, context):
     """Return only public-safe values after every enclosing receipt is checked.
 
     A complete projection is still unranked and publication-ineligible until the
@@ -195,11 +196,35 @@ def verify_attempt(root, context):
             'ranked': False, 'publication_eligible': False, 'publication_blocker': BLOCKER}
 
 
-def project_attempt(root, context):
+def _acceptance(row, root, context, native_acceptance, recording_review):
+    if native_acceptance is None:
+        require(recording_review is None, 'native_acceptance_required_before_model_review')
+        return row
+    from full_client_native_xp_gate import verify_native, verify_model_review
+    native = verify_native(native_acceptance, model_root=root, model_context=context,
+                           model_projection=row)
+    row['native_runtime_acceptance'] = native
+    row['publication_blocker'] = 'model_recording_visual_review_required'
+    if recording_review is not None:
+        review = verify_model_review(root, recording_review, context=context, projection=row, native=native)
+        row['recording']['visual_review'] = review['status']
+        row['recording']['visual_review_sha256'] = review['sha256']
+        row['publication_blocker'] = None
+        row['publication_eligible'] = True
+    return row
+
+
+def verify_attempt(root, context, *, native_acceptance=None, recording_review=None):
+    """Strict evidence verification; optional acceptance never authorizes deployment."""
+    row = _verify_attempt(root, context)
+    return _acceptance(row, root, context, native_acceptance, recording_review)
+
+
+def project_attempt(root, context, *, native_acceptance=None, recording_review=None):
     """A malformed caller context is an error; unavailable evidence is unknown."""
     validate_context(context)
     try:
-        return verify_attempt(root, context)
+        row = _verify_attempt(root, context)
     except (ValueError, OSError, TypeError, KeyError, IndexError, OverflowError, RecursionError):
         return {'schema_version': 1, 'protocol': PROTOCOL, 'trial_protocol': windows.PROTOCOL,
                 'run_id': context['run_id'], 'requested_model': context['request']['model'], 'returned_model': None,
@@ -207,3 +232,12 @@ def project_attempt(root, context):
                 'authoritative_peak_xp_per_minute': None, 'persisted_net_xp': None, 'control_window_net_xp': None,
                 'complete_windows': None, 'windows': [], 'recording': None, 'adaptive': None,
                 'ranked': False, 'publication_eligible': False, 'publication_blocker': BLOCKER}
+    try:
+        return _acceptance(row, root, context, native_acceptance, recording_review)
+    except (ValueError, OSError, TypeError, KeyError, IndexError, OverflowError, RecursionError):
+        # A review failure cannot erase an independently verified signed metric.
+        # It only closes publication; unknown evidence is never manufactured zero.
+        row['publication_eligible'] = False
+        row['publication_blocker'] = ('model_recording_visual_review_unverified'
+            if row.get('native_runtime_acceptance') else 'native_runtime_acceptance_unverified')
+        return row
