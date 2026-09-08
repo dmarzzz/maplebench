@@ -52,6 +52,12 @@ int main(){using namespace jrc;Combat combat;
  assert(attack_packets==(FIXED?3:0));assert(targets==attack_packets);assert(effects==attack_packets);assert(use_packets==(FIXED?0:3));
  for(int id:{3101004,3121002,2001002,2201001}){assert(!SkillData(id).is_attack());combat.apply_move(SpecialMove(id));}
  assert(use_packets==(FIXED?4:7));assert(SkillData(SkillId::BRANDISH).is_attack());
+ const int before_attacks=attack_packets,before_uses=use_packets;
+ // Night Lord's selected attacks already use the real ranged damage branch.
+ for(int id:{4121007,4111005}){assert(SkillData(id).is_attack());assert(SkillData(id).flags&SkillData::RANGED);combat.apply_move(SpecialMove(id));}
+ assert(attack_packets==before_attacks+2);assert(use_packets==before_uses);
+ for(int id:{4101003,4101004}){assert(!SkillData(id).is_attack());combat.apply_move(SpecialMove(id));}
+ assert(attack_packets==before_attacks+2);assert(use_packets==before_uses+2);
  assert(!SkillData(9999999).is_attack());assert(!SkillData(3120005).is_attack());
 }
 '''.replace('FIXED','true' if fixed else 'false')
