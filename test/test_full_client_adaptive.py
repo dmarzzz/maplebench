@@ -165,6 +165,16 @@ class AdaptiveTests(unittest.TestCase):
         text=adaptive.prompt(self.h.p);self.assertIn('Hurricane',text);self.assertNotIn('Combo Attack',text)
         malformed=copy.deepcopy(self.h.p);malformed['wall_seconds']=True
         with self.assertRaises(adaptive.AdaptiveError):adaptive.validate_protocol(malformed)
+    def test_native_bowmaster_names_and_mage_teleport_are_preserved(self):
+        profile={'id':'bowmaster-180','class_name':'Bowmaster','level':180,
+                 'skill_keys':{'PRIMARY_SKILL':'Hurricane','BUFF_1':'Soul Arrow : Bow'}}
+        self.h.p['profile']=profile
+        self.assertEqual(adaptive.validate_protocol(self.h.p)['profile'],profile)
+        text=adaptive.prompt(self.h.p)
+        self.assertIn('Soul Arrow : Bow',text)
+        self.assertIn('A mapped native Teleport skill is allowed.',text)
+        self.assertNotIn('No teleport',text)
+
     def test_neutral_skill_slots_are_versioned_and_legacy_keys_unchanged(self):
         from maple_agent import validate_rpc
         rpc={'type':'rpc','id':1,'method':'pressKeys','args':[['PRIMARY_SKILL'],100]}

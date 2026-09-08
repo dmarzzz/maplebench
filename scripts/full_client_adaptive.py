@@ -44,7 +44,7 @@ def validate_protocol(value):
             and isinstance(profile['class_name'],str) and re.fullmatch('[A-Za-z0-9 ()/,-]{1,64}',profile['class_name'])
             and type(profile['level']) is int and 1<=profile['level']<=255
             and isinstance(profile['skill_keys'],dict) and set(profile['skill_keys'])<=KEYS
-            and all(isinstance(v,str) and re.fullmatch('[A-Za-z0-9 ()+/-]{1,80}',v) for v in profile['skill_keys'].values()),
+            and all(isinstance(v,str) and re.fullmatch('[A-Za-z0-9 ()+/:,-]{1,80}',v) for v in profile['skill_keys'].values()),
             'invalid_adaptive_profile')
     return json.loads(json.dumps(value))
 
@@ -69,8 +69,8 @@ PRIMARY_SKILL, SECONDARY_SKILL, BUFF_1 and BUFF_2 press A, S, D and F.
 The profile declares the actual skill behind each mapped key; undeclared skill
 keys are not promised to be useful. Coordinates increase right/down. Face nearby
 monsters on your platform to attack. Re-observe and respond to HP/MP and movement.
-No teleport, stat edits, shell, imports, network, assets or account credentials
-are available. Each program gets at most {p['program_seconds']} seconds and the
+No arbitrary position edits, stat edits, shell, imports, network, assets or
+account credentials are available. A mapped native Teleport skill is allowed. Each program gets at most {p['program_seconds']} seconds and the
 remaining aggregate SDK/action budget. Return before its deadline. Local program
 variables do not survive between responses. The next input contains your recent
 programs and their actual outcomes, so you can revise your own strategy.
