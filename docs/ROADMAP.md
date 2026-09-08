@@ -60,6 +60,24 @@ verified while its incomplete action evidence blocked full publication.
 Those outcomes do not establish relative model quality. The current public
 site is a saved snapshot, not a continuously running experiment.
 
+## September 8 implementation update
+
+The preceding historical results remain unchanged. The research framing and
+protocol-separated matrix are now public. An isolated cloud worker has passed
+scripted native acceptance: 72 pixels of vertical jump displacement, physical
+attack, mapped skill MP consumption, monster contact, and a targeted monster
+removal accompanied by +4,500 client XP. Ordinary logout independently persisted
+that same gain. These checks used no evaluated model and are not pilot results.
+The baseline was then restored with the world stopped under both locks.
+
+The combined adaptive/publication release `14a1fa8499a031ff89f0548e29556192b0db911a`
+passed 637 Linux tests, with 19 explicitly skipped, and is staged on the worker.
+The five-minute model cohort has not yet run at this update. Rendering uses
+Chrome with SwiftShader on four dedicated virtual CPUs; a short acceptance
+sample produced roughly ten fresh rendered observations per second. This is a
+measured setup limitation, not a frame-rate or reliability guarantee. Native
+15-second XP windows remain separate unfinished work.
+
 ## What RuneBench quality means here
 
 RuneBench provides a useful model: agents use a TypeScript SDK and reference
@@ -135,13 +153,13 @@ Already verified foundations:
 - [x] A successful run has attributable, saved and inspected gameplay evidence.
 - [x] A public Vercel page serves the verified Astra recording.
 
-There are **23 remaining release deliverables** below, with one of 24 accepted.
+There are **22 remaining release deliverables** below, with two of 24 accepted.
 These are acceptance
 counts, not equal effort units or a percentage-complete estimate. Some supporting
 code already exists. Track code-ready, live-accepted and published separately;
 close each box only at the gate specified here.
 
-### M1 — An isolated cloud experiment worker: 1/4
+### M1 — An isolated cloud experiment worker: 2/4
 
 This milestone is implemented in parallel with M2. Infrastructure code, deployment
 plans and deployment receipts belong in the private `agent-devops` repository;
@@ -153,9 +171,12 @@ MapleBench owns the benchmark runtime and evidence contract.
   Accepted: [agent-devops PR #10](https://github.com/dmarzzz/agent-devops/pull/10),
   isolated six-resource plan, one 12-hour dedicated-CPU pilot and external
   receipt-bound destruction controller. Provisioning does not establish runtime readiness.
-- [ ] **M1.2 Deploy and configure the pilot.** Apply the reviewed isolated plan and
+- [x] **M1.2 Deploy and configure the pilot.** Apply the reviewed isolated plan and
   configure the machine through Ansible. Import only the pinned private runtime
   artifacts required for its own world/database/browser; no shared live world.
+  Accepted September 8: Ansible completed, all 24,296 imported files matched the
+  pinned manifest, and an independent native world and sandboxed Chrome started.
+  Deployment and sanitizer repairs are tracked in agent-devops PR #10.
 - [ ] **M1.3 Accept cloud rendering and evidence.** Prove fresh post-render frames,
   ordinary physical controls and saved gameplay on the cloud worker. Profile CPU,
   memory and frame timing; verify ordinary persistence before model comparisons.
@@ -290,10 +311,11 @@ evidence. Code-ready is not live-accepted; local-gallery-ready is not public.
 The operator roadmap should stop accumulating one-off release procedures once
 the required group/lifecycle path is accepted.
 
-M2 is four planned API calls. M3 adds eight short calls if M2 qualifies, plus
-separately bounded failure testing as needed. M4/M5 have multiple calls per
-trial, so their credit ceilings must be computed from the new frozen protocol,
-not inferred from today's one-call price. Record actual cost and useful gameplay
+The current user-directed M2 pilot uses four five-minute adaptive trials: at
+most 12 API requests and 120,000 aggregate tokens per trial, or 48 requests and
+480,000 tokens across the group. Model latency counts against each wall budget.
+These are ceilings, not predicted usage. Further repetitions and class groups
+require separate finite plans; they do not inherit an unlimited queue. Record actual cost and useful gameplay
 per wall hour. Extra credits do not resolve browser or collection defects.
 
 There is no defensible calendar completion date yet. Establish actual batch
