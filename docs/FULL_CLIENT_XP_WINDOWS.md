@@ -66,6 +66,10 @@ The arithmetic supports horizons up to 30 minutes (120 complete windows), but
 the full bundle verifier currently accepts only the implemented 300-second
 adaptive controller (20 windows). A 30-minute controller, native runtime
 acceptance, and an accepted publication adapter remain separate requirements.
+The current controller can finish early when its call/token/action limit is
+exhausted. Such a result retains its original net-XP meaning but cannot satisfy
+this full-300-second window contract; it is unknown here. This version does not
+silently add idle gameplay or extend capture after an early controller exit.
 The frozen adaptive pilot also rejects later-cycle level changes; supporting
 adaptation across level-ups requires its own controller revision. The ledger
 arithmetic is tested across those transitions without claiming a live adaptive
@@ -158,9 +162,41 @@ cycle evidence, exact controller interval, ordinary logout, positive native
 save receipt, reviewed logs, all file hashes, and final progression. It does not
 substitute a last-cycle receipt for the full adaptive trace. Existing recorder
 proof and native-runtime admission still belong to the trial/publication adapter.
-The current runtime collector does not yet enable these new settings or produce
-this manifest automatically. Wire collection only in a new pinned trial protocol
-after native acceptance; do not reinterpret an old pilot's score.
+The runtime collector supports these settings only when its private configuration
+contains `"xp_window_protocol": "full-client-xp-windows-v1"` and the frozen
+scenario contains the matching object above. Either declaration without the
+other fails closed. A window trial uses request `schema_version: 3` and
+`protocol: "full-client-xp-windows-v1"`, with the same 300-second controller and
+bounded adaptive budgets as schema 2. The scenario's controller `protocol`
+remains `full-client-adaptive-pilot-v1`; controller identity and scoring identity
+are deliberately distinct. Older requests cannot launch the new scoring mode.
+
+Offline inventory requires both native journal classes in the pinned JAR.
+The launcher writes all seven XP values into its existing owned drop-in from
+the verified initial snapshot and frozen declarations. Before ordinary login,
+readiness requires the native initialization marker and a fresh journal that
+contains only the expected header, identity, baseline, multipliers, and table.
+Its header hash is saved and checked again at final collection. A legacy
+configuration refuses unexpected XP initialization or leftover XP settings.
+
+After ordinary logout and the normal recording checks, the collector copies
+`native-xp.jsonl`, writes `xp-window-manifest.json`, and invokes the strict
+window verifier. The trial runner independently rereads and verifies those
+same bytes before allowing terminal cleanup/completion. It writes a separate
+`xp-window-status.json`: valid coverage is `verified_native_windows`; missing
+or inconsistent coverage has `status: "unknown"` and `task_score: null`, then
+fails/quarantines the attempt without replaying the API. No zero score or
+legacy persistence fallback is emitted on that path. Publication candidates
+use schema 4, `xp_window_pilot`, and the new protocol; publication still requires
+an accepted adapter and is never granted by the collector.
+
+Pin the new `full_client_xp_windows.py` with all existing runtime, trial, scorer,
+adaptive-evidence, and capture dependencies. `CommandAdapter` includes it in
+its automatic source fingerprint. The ordinary standalone trial runner supports
+schema 3. The finite experiment-plan builder and public adaptive gallery still
+accept their previous protocols only; they must explicitly adopt this new one
+before a window cohort can be scheduled or published. Do not silently relabel
+an existing plan or reinterpret an old pilot's score.
 
 An offline diagnostic invocation is:
 
@@ -184,3 +220,55 @@ tests. Python fixtures cover fixed boundaries, deadline exclusion, signed
 losses, normalization, zero/missing windows, 30-minute arithmetic, tampering,
 ordinary-save reconciliation, and the full synthetic adaptive evidence bundle.
 These are synthetic tests, not model runs or native runtime acceptance.
+
+## Native acceptance before deployment
+
+This is an ordered acceptance plan, not an instruction to modify an active
+pilot. Finish the current group first. Use an independently frozen candidate,
+new native JAR and baseline fingerprints, and the existing world/queue locks.
+Do not mix either the source/JAR or the score protocol within a cohort.
+
+1. Build the pinned Cosmic source plus this overlay in an isolated directory.
+   Run the two journal test classes under the shared serial lock, fresh-memory
+   check, 2300 MiB total cap, 768 MiB Maven heap, one 1024 MiB test fork, two CPUs,
+   and five-minute deadline. Verify repeated bootstrap application does not
+   change the patched source. Freeze the exact built JAR and runtime inventory.
+2. With Cosmic stopped, queue empty and both normal locks owned, prepare an
+   explicitly synthetic acceptance fixture. Keep credentials generated on the
+   host. Freeze a new SQL hash, native threshold-array hash, and scenario for
+   each materially different initial state. In addition to an ordinary fixture,
+   use one just below a level threshold and one susceptible to a real death
+   penalty. Administrative XP commands do not substitute for these cases.
+3. Start the candidate once through the owned launcher. Check that all seven
+   XP values match the frozen fixture, both journal files are new mode-0600
+   regular files, both initialization markers occur exactly once, and the
+   recorded header matches the accepted table and baseline before login.
+   Missing initialization, a changed table, or an already-used file must stop
+   before ordinary login and before any model request.
+4. Log in normally and use real native inputs for an explicitly labeled
+   **native acceptance smoke test**. Observe a real monster defeat and its
+   signed XP event. In the near-threshold fixture, defeat a monster to cross
+   the level boundary; verify one settled outer progression change, without
+   counting its nested level-up twice. In the death fixture, verify the actual
+   penalty and zero clamp. A surviving idle interval must also have complete
+   zero coverage. These tests do not need API calls and are not model trials.
+5. Disconnect normally, confirm the native SQL commit, then collect offline
+   initial/final rows, both native journals, and complete invocation logs.
+   Recompute every signed transaction and reconcile final progression using
+   the frozen table. Confirm native timestamps are ordered and align with the
+   declared start/deadline; boundary and cutoff arithmetic remains separately
+   covered by deterministic tests. Preserve actual native event timing rather
+   than pretending a smoke-test action landed on an exact millisecond.
+6. Against copies of this evidence, remove a transaction/footer, change the
+   table or multiplier, and truncate the reviewed log envelope. Each must
+   become unknown. Test missing/read-only/reused output locations in isolated
+   startup checks; never damage an active trial's journal to simulate failure.
+   Confirm cleanup removes the owned drop-in and cached XP settings while
+   retaining evidence and the ordinary account-offline state.
+7. Only after the native evidence is accepted, freeze a fresh schema-3 request
+   and run one bounded 300-second API pilot. Check exact model attribution,
+   all controller cycles, capture/first-input evidence, twenty complete native
+   windows, independent runner re-verification, ordinary logout, and terminal
+   cleanup. No second API attempt is automatically queued after failure.
+   Record accepted evidence references before extending experiment planning
+   or public publication to the new protocol.

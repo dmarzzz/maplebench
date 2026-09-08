@@ -28,6 +28,7 @@ import uuid
 
 from full_client_score import verify_trial_bundle
 from full_client_freeze import FREEZE_ERROR_CODES
+import full_client_xp_windows as xp_windows
 
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\Z")
@@ -109,6 +110,9 @@ unowned_server_cleanup_refused unprivileged_services_required unsupported_progra
 unsupported_runtime_config waiting_browser_required web_entrypoint_mismatch web_interpreter_mismatch
 web_process_missing web_process_predates_frozen_sources web_runtime_paths_mismatch web_uid_mismatch
 world_helper_or_worker_active world_or_queue_lock_not_owned
+xp_window_opt_in_required unsupported_xp_window_protocol invalid_xp_window_contract
+native_xp_ledger_class_missing native_xp_initialization_missing native_xp_header_invalid
+xp_window_evidence_incomplete
 """.split()) | FREEZE_ERROR_CODES | RELAY_ERROR_CODES
 
 
@@ -234,12 +238,13 @@ def read_private_json(path):
 
 def validate_spec(spec):
     require(isinstance(spec, dict), "invalid_spec")
-    adaptive = spec.get("schema_version") == 2
+    adaptive = spec.get("schema_version") in (2, 3)
     fields = {"schema_version", "model", "scenario_fingerprint", "baseline_sha256", "budgets"}
     require(set(spec) == fields | ({"protocol"} if adaptive else set()), "invalid_spec_fields")
-    require(type(spec["schema_version"]) is int and spec["schema_version"] in (1, 2), "unsupported_schema")
+    require(type(spec["schema_version"]) is int and spec["schema_version"] in (1, 2, 3), "unsupported_schema")
     if adaptive:
-        require(spec.get("protocol") == "full-client-adaptive-pilot-v1", "unsupported_protocol")
+        require(spec.get("protocol") == (xp_windows.PROTOCOL if spec["schema_version"] == 3 else "full-client-adaptive-pilot-v1"),
+                "unsupported_protocol")
     require(isinstance(spec["model"], str) and ID.fullmatch(spec["model"]), "invalid_model")
     for name in ("scenario_fingerprint", "baseline_sha256"):
         require(isinstance(spec[name], str) and SHA.fullmatch(spec[name]), "invalid_" + name)
@@ -312,7 +317,7 @@ class CommandAdapter:
                 arguments.append(path)
         scorer = Path(sys.modules[verify_trial_bundle.__module__].__file__).resolve()
         self.pinned_files = sorted({str(path.absolute()) for path in
-                                    (executable, Path(__file__), scorer,
+                                    (executable, Path(__file__), scorer, Path(xp_windows.__file__).resolve(),
                                      *arguments, *(Path(path) for path in dependencies))})
         self.fingerprint = self._fingerprint()
 
@@ -538,7 +543,7 @@ class TrialRunner:
                               ("controller_ms", budgets["controller_seconds"] * 1000)):
             require(type(receipt.get(name)) is int and 0 <= receipt[name] <= maximum,
                     "usage_invalid_" + name)
-        require((receipt["api_requests"] >= 1 if spec["schema_version"] == 2 else receipt["api_requests"] == 1)
+        require((receipt["api_requests"] >= 1 if spec["schema_version"] in (2, 3) else receipt["api_requests"] == 1)
                 and (spec["schema_version"] == 1 or receipt.get("protocol") == spec["protocol"])
                 and receipt["total_tokens"] >= receipt["output_tokens"],
                 "usage_inconsistent")
@@ -583,11 +588,17 @@ class TrialRunner:
                         evidence = receipt.get("evidence")
                         require(isinstance(evidence, dict) and evidence.get("run_id") == attempt_id,
                                 "evidence_attempt_mismatch")
-                        require(evidence.get("scenario_fingerprint") == spec["scenario_fingerprint"]
-                                and isinstance(evidence.get("baseline"), dict)
-                                and evidence["baseline"].get("sha256") == spec["baseline_sha256"],
-                                "evidence_baseline_mismatch")
-                        self.state["score"] = self.verify_bundle(evidence, attempt_dir, receipt.get("artifacts"))
+                        if spec["schema_version"] == 3:
+                            require(evidence.get("protocol") == xp_windows.PROTOCOL
+                                    and evidence.get("scenario_fingerprint") == spec["scenario_fingerprint"]
+                                    and evidence.get("baseline_sha256") == spec["baseline_sha256"], "evidence_baseline_mismatch")
+                            self.state["score"] = xp_windows.verify_trial_bundle(evidence, attempt_dir, receipt.get("artifacts"))
+                        else:
+                            require(evidence.get("scenario_fingerprint") == spec["scenario_fingerprint"]
+                                    and isinstance(evidence.get("baseline"), dict)
+                                    and evidence["baseline"].get("sha256") == spec["baseline_sha256"],
+                                    "evidence_baseline_mismatch")
+                            self.state["score"] = self.verify_bundle(evidence, attempt_dir, receipt.get("artifacts"))
                         self._event("evidence_verified")
                     elif operation == "cleanup":
                         require(receipt.get("clean") is True, "cleanup_unconfirmed")

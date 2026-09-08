@@ -19,6 +19,9 @@ SOURCE='cosmic_native_xp_ledger'
 WINDOW_MS=15000
 MAX_LEDGER_BYTES=64*1024*1024
 IDENTITY=('run_id','server_instance_id','character_id','account_id')
+XP_ENV_NAMES=('MAPLEBENCH_XP_JOURNAL','MAPLEBENCH_XP_BASELINE_LEVEL','MAPLEBENCH_XP_BASELINE_EXP',
+              'MAPLEBENCH_XP_SERVER_NUMERATOR','MAPLEBENCH_XP_SERVER_DENOMINATOR',
+              'MAPLEBENCH_XP_SIMULATION_NUMERATOR','MAPLEBENCH_XP_SIMULATION_DENOMINATOR')
 
 
 def require(value, code):
@@ -33,6 +36,49 @@ def multiplier(value):
     require(isinstance(value,dict) and set(value)=={'numerator','denominator'}
             and all(integer(value[k],1,1000000) for k in value),'invalid_multiplier')
     return Fraction(value['numerator'],value['denominator'])
+
+
+def validate_contract(value):
+    require(isinstance(value,dict) and set(value)=={'id','window_ms','wall_seconds','experience_table_sha256','normalization'}
+            and value['id']==PROTOCOL and type(value['window_ms']) is int and value['window_ms']==WINDOW_MS
+            and type(value['wall_seconds']) is int and value['wall_seconds']==300
+            and isinstance(value['experience_table_sha256'],str)
+            and re.fullmatch('[a-f0-9]{64}',value['experience_table_sha256']) is not None,'invalid_frozen_window_contract')
+    norm=value['normalization']
+    require(isinstance(norm,dict) and set(norm)=={'server_xp_multiplier','simulation_speed_multiplier'},'invalid_normalization')
+    for pair in norm.values():multiplier(pair)
+    require(multiplier(norm['server_xp_multiplier']).denominator==1,'unsupported_native_world_rate')
+    return value
+
+
+def verify_native_header(raw, *, identity, initial, contract):
+    """Pre-login check: a newly started, unused native journal has only a header."""
+    validate_contract(contract)
+    require(isinstance(identity,dict) and set(identity)==set(IDENTITY)
+            and all(isinstance(identity[k],str) and re.fullmatch('[a-f0-9]{32}',identity[k])
+                    for k in ('run_id','server_instance_id'))
+            and all(integer(identity[k],1,2**31-1) for k in ('character_id','account_id')),'invalid_identity')
+    require(isinstance(raw,bytes) and 0<len(raw)<=65536 and raw.endswith(b'\n') and raw.count(b'\n')==1,
+            'native_header_not_fresh')
+    row=parse_json(raw)
+    fields={'schema_version','source','kind',*IDENTITY,'sequence','wall_ms','elapsed_ns','previous_sha256',
+            'level','exp','thresholds','server_xp_multiplier','simulation_speed_multiplier'}
+    require(isinstance(row,dict) and set(row)==fields and type(row['schema_version']) is int and row['schema_version']==1
+            and row['source']==SOURCE and row['kind']=='header' and type(row['sequence']) is int and row['sequence']==0
+            and type(row['elapsed_ns']) is int and row['elapsed_ns']==0 and integer(row['wall_ms'])
+            and row['previous_sha256']=='0'*64
+            and all(type(row.get(k)) is type(v) and row[k]==v for k,v in identity.items()),'native_header_identity_mismatch')
+    thresholds=row['thresholds']
+    require(isinstance(thresholds,list) and len(thresholds)==199 and all(integer(n,1,2**31-1) for n in thresholds)
+            and hashlib.sha256(json.dumps(thresholds,separators=(',',':')).encode()).hexdigest()==contract['experience_table_sha256'],
+            'unfrozen_native_experience_table')
+    require(same_json({k:row[k] for k in ('level','exp')},initial)
+            and integer(row['level'],1,200) and integer(row['exp'],0,2**31-1)
+            and (row['exp']==0 if row['level']==200 else row['exp']<thresholds[row['level']-1])
+            and same_json({k:row[k] for k in contract['normalization']},contract['normalization']),
+            'native_header_baseline_or_multiplier_mismatch')
+    return {'sha256':hashlib.sha256(raw).hexdigest(),'wall_ms':row['wall_ms'],
+            'experience_table_sha256':contract['experience_table_sha256']}
 
 
 def score_ledger(raw, *, identity, initial, final, window, normalization, committed_at_ms):
@@ -216,7 +262,20 @@ def verify_bundle(manifest, root):
     require(initial['captured_at_ms']<=header['wall_ms']<=session['login_at_ms'],'native_header_outside_new_session')
     require(score['experience_table_sha256']==manifest['experience_table_sha256'],'unfrozen_native_experience_table')
     return score|{'artifacts_verified':True,'baseline_reset_verified':True,
+        'scenario_fingerprint':manifest['scenario_fingerprint'],'baseline_sha256':manifest['baseline_sha256'],
         'publication_blocker':'new_native_runtime_and_baseline_acceptance_required'}
+
+
+def verify_trial_bundle(evidence, root, artifacts):
+    """Runner boundary: re-read the saved manifest and bind every collected ref."""
+    require(isinstance(artifacts,dict),'incomplete_artifact_bundle')
+    saved=read_json_artifact(root,artifacts,'xp_manifest')
+    require(same_json(saved,evidence),'window_manifest_receipt_mismatch')
+    aliases={'native_save':'save','baseline_sql':'baseline','controller_result':'result'}
+    require(isinstance(saved.get('artifacts'),dict)
+            and all(same_json(ref,artifacts.get(aliases.get(name,name))) for name,ref in saved['artifacts'].items()),
+            'window_artifact_receipt_mismatch')
+    return verify_bundle(saved,root)
 
 
 def aggregate_task_scores(scores):
