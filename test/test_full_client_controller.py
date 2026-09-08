@@ -94,6 +94,11 @@ const data=view();assert.equal(data.mode,'OpenAI API · gpt-5.6-sol');
 assert.equal(data.state,'Waiting for deadline · game remains live · 8 actions · 250 / 300s');
 assert.equal(data.keys,'Keys: none');assert.equal(data.stale,false);
 run.status='completed';assert.ok(!view().state.includes('Waiting for deadline'));
+run.nativeAcceptance={profile:{class_name:'Bowmaster',skill_keys:{PRIMARY_SKILL:'Hurricane'}}};
+held.set('KeyA',1);skillNamesByCode.KeyA='PRIMARY_SKILL';namesByCode.KeyA='Brandish';
+assert.equal(view().keys,'Keys: Hurricane');
+run.nativeAcceptance.profile={class_name:'Ice/Lightning Arch Mage',skill_keys:{PRIMARY_SKILL:'Chain Lightning'}};
+assert.equal(view().keys,'Keys: Chain Lightning');
 """
         result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+view+checks],
                               capture_output=True,text=True,timeout=5)

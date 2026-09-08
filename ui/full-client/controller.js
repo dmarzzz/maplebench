@@ -189,7 +189,8 @@
       && Number.isFinite(character.exp) && Number.isFinite(baseline.exp) ? character.exp - baseline.exp : null;
     const xp = delta === null ? (available && baseline && character.level !== baseline.level ? 'XP Δ unavailable (level changed)' : 'XP Δ —')
       : `XP Δ ${delta >= 0 ? '+' : ''}${format(delta)} (${baselineScope})`;
-    const keys = [...new Set([...held.keys(),...physical])].map(code => {const key=(run.adaptiveProtocol?skillNamesByCode[code]:null)||namesByCode[code]||code; return run.adaptiveProtocol?.profile?.skill_keys?.[key]||key;}).join(' + ') || 'none';
+    const skillProfile = run.adaptiveProtocol?.profile || run.nativeAcceptance?.profile;
+    const keys = [...new Set([...held.keys(),...physical])].map(code => {const key=(skillProfile?skillNamesByCode[code]:null)||namesByCode[code]||code; return skillProfile?.skill_keys?.[key]||key;}).join(' + ') || 'none';
     return {mode,state,hp:`HP ${available ? format(character.hp)+' / '+format(character.maxHp) : '—'}`,
       mp:`MP ${available ? format(character.mp)+' / '+format(character.maxMp) : '—'}`,xp,keys:`Keys: ${keys}`,
       hpFraction:available ? fraction(character.hp,character.maxHp) : 0,
