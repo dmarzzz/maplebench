@@ -11,14 +11,16 @@ from maple_agent import validate_rpc
 
 
 class RecipeTests(unittest.TestCase):
- def execute(self,class_id='ice_lightning_arch_mage',behavior='near'):
+ def execute(self,class_id='ice_lightning_arch_mage',behavior='near',protocol=None):
   node=shutil.which('node')
   if not node:self.skipTest('Node is required to execute the generated program')
-  code=native.program(native.contract(class_id,'a'*64,protocol=native.NATIVE_V3_PROTOCOL))
+  protocol=protocol or native.NATIVE_V3_PROTOCOL
+  code=native.program(native.contract(class_id,'a'*64,protocol=protocol))
   harness=r'''
 const calls=[];let movements=0,afterMovement=0,time=0;
 function observation(){
  let x=80;
+ if(behavior.startsWith('distance_'))x=Number(behavior.slice(9));
  if(behavior==='far_four')x=movements<4?400:80;
  if(behavior==='cross_before_face'&&movements>=1&&afterMovement>=1)x=-80;
  if(behavior==='cross_before_face'&&movements>=2)x=-80;
@@ -42,7 +44,7 @@ const sdk={
   data=json.loads(result.stdout);self.assertTrue(data['completed'])
   for index,call in enumerate(data['calls'],1):
    validate_rpc({'type':'rpc','id':index,'method':call['method'],'args':call['args']},
-                {'adapter':'full-client','protocol':native.NATIVE_V3_PROTOCOL})
+                {'adapter':'full-client','protocol':protocol})
   self.assertLessEqual(len(data['calls']),100)
   self.assertLessEqual(sum(c['method']=='pressKeys' for c in data['calls']),12)
   self.assertLessEqual(data['time'],30000)
@@ -100,17 +102,53 @@ const sdk={
 
 class V3ControlTests(unittest.TestCase):
  def test_existing_native_guards_and_capture_verifier_apply_to_v3(self):
+  self.verify_guards(native.NATIVE_V3_PROTOCOL)
+
+ def test_existing_native_guards_and_capture_verifier_apply_to_v4(self):
+  self.verify_guards(native.NATIVE_V4_PROTOCOL)
+
+ def verify_guards(self,protocol):
   # Run actual existing bridge/socket/capture tests with the explicit V3 contract.
   names=['test_native_start_requires_private_locks_and_no_model_contract',
    'test_native_worker_never_reads_api_key_or_calls_model',
    'test_native_protocol_is_rejected_by_model_trial_admission',
    'test_native_capture_policy_is_independent_and_not_accepted_as_api',
    'test_capture_bundle_verifies_native_timeline_without_fake_api_interval']
-  def contract(cls,digest):return native.contract(cls,digest,protocol=native.NATIVE_V3_PROTOCOL)
-  with mock.patch.object(prior,'contract',side_effect=contract),mock.patch.object(prior,'PROTOCOL',native.NATIVE_V3_PROTOCOL):
+  def contract(cls,digest):return native.contract(cls,digest,protocol=protocol)
+  with mock.patch.object(prior,'contract',side_effect=contract),mock.patch.object(prior,'PROTOCOL',protocol):
    result=unittest.TestResult()
    for name in names:prior.NativeTests(name).run(result)
   self.assertEqual(result.testsRun,len(names));self.assertFalse(result.errors,result.errors);self.assertFalse(result.failures,result.failures)
+
+class V4RangeTests(unittest.TestCase):
+ def test_actual_150_pixel_target_and_boundary_receive_primary_but_301_does_not(self):
+  for cls in ('bowmaster','ice_lightning_arch_mage'):
+   for distance,expected in ((150,2),(300,2),(301,0)):
+    with self.subTest(cls=cls,distance=distance):
+     data=RecipeTests.execute(self,cls,'distance_'+str(distance),native.NATIVE_V4_PROTOCOL)
+     self.assertEqual(sum(c['method']=='pressKeys' and c['args'][0]==['PRIMARY_SKILL'] for c in data['calls']),expected)
+  prior_result=RecipeTests.execute(self,behavior='distance_150')
+  self.assertFalse(any(c['args']==[['PRIMARY_SKILL'],1200] for c in prior_result['calls']))
+
+ def test_v4_retains_worst_case_action_sdk_and_time_caps(self):
+  for cls in ('bowmaster','ice_lightning_arch_mage'):
+   data=RecipeTests.execute(self,cls,'far_four',native.NATIVE_V4_PROTOCOL)
+   self.assertEqual(sum(c['method']=='pressKeys' for c in data['calls']),12)
+
+ def test_v3_bytes_unchanged_and_v4_only_changes_header_and_horizontal_limit(self):
+  expected={
+   'hero':('35dce2d10d8ded8af2ab8ec4ce5ef07e2f28fbbc8e554f0bdfa381e01a05df11','6839cdd56919ed4aa9dd3e679f84645be10664a970317f78e1c3f53b1ea19e7c'),
+   'bowmaster':('7cdc0f151a2eb35782b0788358af208699b2cc9d256c71e9795514afed9c858d','bf23b1475890e800c3dfb69a9ca72058cabd50c74beeb1c458fe9b26ce638cc7'),
+   'ice_lightning_arch_mage':('b8127a06cda14bb1ab815b35d8f057df9c55c7c97232376c6df733c0338dba74','0b79a9788b0adb6d8076d894e41a4076b7d152c09901446b52bbc3400fbb9af9')}
+  for cls,(program_hash,contract_hash) in expected.items():
+   v3=native.contract(cls,'a'*64,protocol=native.NATIVE_V3_PROTOCOL)
+   v4=native.contract(cls,'a'*64,protocol=native.NATIVE_V4_PROTOCOL)
+   before,after=native.program(v3),native.program(v4)
+   self.assertEqual(hashlib.sha256(before.encode()).hexdigest(),program_hash)
+   self.assertEqual(native.fingerprint(v3),contract_hash)
+   self.assertEqual(v4|{'id':v3['id']},v3)
+   self.assertEqual(native.contract(cls,'a'*64)['id'],native.NATIVE_V2_PROTOCOL)
+   self.assertEqual(after,before if cls=='hero' else before.replace('acceptance v3;','acceptance v4;').replace('<=110','<=300'))
 
 
 V2_HASHES = {
