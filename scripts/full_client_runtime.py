@@ -1337,8 +1337,9 @@ class CosmicRuntime:
             if not self.state.get("failure_cleanup_status"):
                 self.state["failure_cleanup_status"] = status
                 self.persist()
-            if run.get("failureAcknowledged") is not True:
-                self.admin("release_failed_run", run_id=self.run_id)
+            # cancel() sets an in-memory acknowledgment, but ordinary login
+            # after restart also requires a durable release receipt.
+            self.admin("release_failed_run", run_id=self.run_id)
 
     def preserve_failure_evidence(self):
         require(self.account_state() == 0, "controller_collection_requires_logout")
