@@ -6,6 +6,8 @@ only deploy call; later invocations reconcile metadata or remain uncertain.
 No model, trial, database, game service or credential-management operations.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from threading import Event
 import fcntl
 import hashlib
 import json
@@ -160,7 +162,7 @@ class SameOriginRedirect(HTTPRedirectHandler):
         return super().redirect_request(request,fp,code,msg,headers,target)
 
 
-def read_public(url,maximum,headers,deadline):
+def read_public(url,maximum,headers,deadline,*,cancelled=None):
     remaining=deadline-time.monotonic();require(remaining>0,'publication_deadline')
     request=Request(url,headers={'Accept-Encoding':'identity','Cache-Control':'no-cache',**headers})
     try:
@@ -168,6 +170,7 @@ def read_public(url,maximum,headers,deadline):
             result={'status':response.status,'headers':{k.lower():v for k,v in response.headers.items()}}
             hashed=hashlib.sha256();size=0
             while True:
+                require(cancelled is None or not cancelled.is_set(),'public_verification_cancelled')
                 require(time.monotonic()<deadline,'publication_deadline')
                 block=response.read(min(1024**2,maximum+1-size))
                 if not block:break
@@ -178,21 +181,56 @@ def read_public(url,maximum,headers,deadline):
 
 
 def verify_public(base,stage,files,deadline,fetch=read_public):
-    checked=[];ranges=[]
-    for name,expected in files.items():
-        if Path(name).name in ('vercel.json','README.md'):continue
-        result=fetch(base+'/'+name,expected['bytes'],{},deadline)
+    # A job owns one full-file stream followed by its range check. At most four
+    # jobs exist at once; large videos are never collected in memory here.
+    entries=[(name,expected) for name,expected in files.items()
+             if Path(name).name not in ('vercel.json','README.md')]
+    results=[None]*len(entries);cancelled=Event()
+    def request(url,maximum,headers):
+        require(not cancelled.is_set(),'public_verification_cancelled')
+        require(time.monotonic()<deadline,'publication_deadline')
+        if fetch is read_public:
+            value=fetch(url,maximum,headers,deadline,cancelled=cancelled)
+        else:
+            value=fetch(url,maximum,headers,deadline)
+        require(time.monotonic()<deadline,'publication_deadline')
+        require(not cancelled.is_set(),'public_verification_cancelled')
+        return value
+    def verify(entry):
+        name,expected=entry
+        result=request(base+'/'+name,expected['bytes'],{})
         require(result['status']==200 and result['bytes']==expected['bytes'] and result['sha256']==expected['sha256'],
                 'public_content_mismatch')
-        checked.append({'path':name,**expected})
+        video_range=None
         if name.endswith('.webm'):
-            count=min(16,expected['bytes']);response=fetch(base+'/'+name,count,{'Range':f'bytes=0-{count-1}'},deadline)
+            count=min(16,expected['bytes']);response=request(base+'/'+name,count,{'Range':f'bytes=0-{count-1}'})
             with (stage/name).open('rb') as stream:first=stream.read(count)
             require(response['status']==206 and response['bytes']==count
                     and response['headers'].get('content-range')==f'bytes 0-{count-1}/{expected["bytes"]}'
                     and response['sha256']==digest(first),'public_video_range_mismatch')
-            ranges.append({'path':name,'status':206,'bytes':count,'total_bytes':expected['bytes']})
-    return {'files':checked,'video_ranges':ranges,'anonymous_access':True}
+            video_range={'path':name,'status':206,'bytes':count,'total_bytes':expected['bytes']}
+        return {'path':name,**expected},video_range
+    pool=ThreadPoolExecutor(max_workers=4,thread_name_prefix='public-verify')
+    pending={};next_index=0
+    try:
+        while next_index<len(entries) and len(pending)<4:
+            pending[pool.submit(verify,entries[next_index])]=next_index;next_index+=1
+        while pending:
+            remaining=deadline-time.monotonic();require(remaining>0,'publication_deadline')
+            done,_=wait(pending,timeout=remaining,return_when=FIRST_COMPLETED)
+            require(done,'publication_deadline')
+            # Inspect every completed job before scheduling more work, so a
+            # concurrently completed failure cannot enqueue another file.
+            for future in done:
+                results[pending.pop(future)]=future.result()
+            while next_index<len(entries) and len(pending)<4:
+                pending[pool.submit(verify,entries[next_index])]=next_index;next_index+=1
+    finally:
+        cancelled.set()
+        for future in pending:future.cancel()
+        pool.shutdown(wait=True,cancel_futures=True)
+    return {'files':[row[0] for row in results],
+            'video_ranges':[row[1] for row in results if row[1] is not None],'anonymous_access':True}
 
 
 def find_deployment(executable,stage,link,marker,deadline,run_cli):
