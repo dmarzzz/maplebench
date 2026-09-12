@@ -105,7 +105,9 @@ def cohort_content(manifest,site):
     """Check public cohort semantics after the caller binds its exact file bytes."""
     require(type(manifest['schema_version']) is int,'catalog_package_schema')
     content=manifest['content'];site=directory(site)
-    require(set(content)-{'presentation_parent_sha256','horizon_seconds'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+    require(set(content)-{'presentation_parent_sha256','horizon_seconds','skill_preview_payload_sha256'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+        and ('skill_preview_payload_sha256' not in content or (isinstance(content['skill_preview_payload_sha256'],str)
+            and SHA.fullmatch(content['skill_preview_payload_sha256'])))
         and ('presentation_parent_sha256' not in content or (isinstance(content['presentation_parent_sha256'],str)
             and SHA.fullmatch(content['presentation_parent_sha256'])))
         and type(content['schema_version']) is int and content['schema_version']==1

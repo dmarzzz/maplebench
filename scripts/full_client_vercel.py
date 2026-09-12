@@ -36,7 +36,7 @@ META_PAYLOAD='maplebenchPayloadSha256'
 META_NONCE='maplebenchPublicationId'
 MAX_PAYLOAD=512*1024**2
 MAX_OUTPUT=2*1024**2
-PUBLIC_NAME=re.compile(r'(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:index\.html|dashboard\.js|style\.css|results\.json|recording-manifest\.json|vercel\.json|README\.md|recordings/[a-f0-9]{32}\.webm)\Z')
+PUBLIC_NAME=re.compile(r'(?:(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:index\.html|dashboard\.js|style\.css|results\.json|recording-manifest\.json|vercel\.json|README\.md|recordings/[a-f0-9]{32}\.webm)|previews/([a-f0-9]{32})/recordings/\1\.webm)\Z')
 DEPLOYMENT=re.compile(r'dpl_[A-Za-z0-9]{8,80}\Z')
 
 
@@ -60,6 +60,11 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
     else:files=raw
     require(1<=len(files)<=100,'payload_file_count_limit')
     content=package_manifest['content']
+    if 'skill_preview_payload_sha256' in content:
+        require(isinstance(content['skill_preview_payload_sha256'],str)
+            and SHA.fullmatch(content['skill_preview_payload_sha256'])
+            and content['skill_preview_payload_sha256']==digest(encoded(files)),
+            'skill_preview_payload_binding_mismatch')
     video_limits=cohort_video_limits(supplied,files,package_manifest)
     total=0
     for name,expected in files.items():
