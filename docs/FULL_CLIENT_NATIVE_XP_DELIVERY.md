@@ -134,8 +134,16 @@ The immutable package additionally declares `horizon_seconds: 1800`; catalog
 validation binds every accepted row to it. Timing and capture limits are never
 chosen because an existing recording failed the short contract.
 
-The deployment driver accepts a larger video only with a verified native XP
-primary package declaring that long horizon. Total public payload remains
+The deployment driver accepts a larger video only at the exact file path owned
+by a verified native XP package declaring that long horizon. A catalog containing
+long cohorts adds `cohort_manifests` to its private payload inventory: the exact
+public package manifests, without private paths or native artifacts. The driver
+rechecks each content digest, complete mounted file mapping and public cohort
+semantics. Each recording inherits its own cohort's limit, so a new short primary
+can retain an earlier long cohort. Unbound supplemental files retain the short
+limit; the primary cannot grant its limit to other recordings. Inventories without
+the extension keep their existing shape and primary binding. The inventory is
+never uploaded as part of the public site. Total public payload remains
 512 MiB, checked before upload. Exceeding it returns an explicit capacity error;
 no partial copy, trimming, model replay or silent result omission is used to fit
 sixteen long videos. A storage/deployment policy decision may therefore still
