@@ -58,21 +58,24 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
         require(len(files)==len(raw),'duplicate_payload_path')
     else:files=raw
     require(1<=len(files)<=100,'payload_file_count_limit')
+    content=package_manifest['content']
+    long=content.get('protocol')=='full-client-xp-windows-v1' and type(content.get('horizon_seconds')) is int and content['horizon_seconds']==1800
+    maximum_video=600*1024**2 if long else 96*1024**2
     total=0
     for name,expected in files.items():
         require(isinstance(name,str) and PUBLIC_NAME.fullmatch(name) and isinstance(expected,dict)
                 and set(expected)=={'sha256','bytes'} and isinstance(expected['sha256'],str)
                 and SHA.fullmatch(expected['sha256']) and type(expected['bytes']) is int and expected['bytes']>0,
                 'invalid_public_payload_file')
-        maximum=96*1024**2 if name.endswith('.webm') else 4*1024**2
-        require(stable_fingerprint(payload/name,maximum)==expected,'public_payload_changed')
+        maximum=maximum_video if name.endswith('.webm') else 4*1024**2
         total+=expected['bytes'];require(total<=MAX_PAYLOAD,'public_payload_size_limit')
+        require(expected['bytes']<=maximum,'public_payload_file_limit')
+        require(stable_fingerprint(payload/name,maximum)==expected,'public_payload_changed')
     actual=set()
     for count,path in enumerate(payload.rglob('*'),1):
         require(count<=150 and not path.is_symlink(),'unexpected_public_payload_file')
         if path.is_file():actual.add(path.relative_to(payload).as_posix())
     require(actual==set(files),'unexpected_public_payload_file')
-    content=package_manifest['content']
     require(content.get('target_path')=='/' or (isinstance(content.get('target_path'),str)
             and re.fullmatch(r'/cohorts/[a-f0-9]{16}/',content['target_path'])),'invalid_cohort_target')
     prefix=content['target_path'].lstrip('/')
@@ -98,9 +101,9 @@ def stage_payload(payload,files,package,link):
         for name,expected in files.items():
             target=stage/name;target.parent.mkdir(parents=True,exist_ok=True)
             if name.endswith('.webm'):
-                copy_recording(payload,{'path':name,'sha256':expected['sha256']},target,{},maximum=96*1024**2)
+                copy_recording(payload,{'path':name,'sha256':expected['sha256']},target,{},maximum=MAX_PAYLOAD)
             else:write_new(target,stable_bytes(payload/name,4*1024**2),0o644)
-            require(stable_fingerprint(target,96*1024**2 if name.endswith('.webm') else 4*1024**2)==expected,
+            require(stable_fingerprint(target,MAX_PAYLOAD if name.endswith('.webm') else 4*1024**2)==expected,
                     'staged_payload_changed')
         (stage/'.vercel').mkdir(mode=0o700)
         write_new(stage/'.vercel/project.json',encoded(link))
@@ -114,7 +117,7 @@ def checked_stage(stage,package,files,link):
     stage=directory(stage)
     require(stage.parent==package and stage.name.startswith('.vercel-payload-'),'invalid_publication_stage')
     for name,expected in files.items():
-        require(stable_fingerprint(stage/name,96*1024**2 if name.endswith('.webm') else 4*1024**2)==expected,
+        require(stable_fingerprint(stage/name,MAX_PAYLOAD if name.endswith('.webm') else 4*1024**2)==expected,
                 'staged_payload_changed')
     linked=Reader().json(stage,'.vercel/project.json')
     require(all(linked.get(k)==v for k,v in link.items()),'staged_project_link_changed')

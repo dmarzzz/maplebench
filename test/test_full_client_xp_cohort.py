@@ -25,6 +25,9 @@ import test_full_client_xp_publication as fixtures
 class NativeCohortTests(unittest.TestCase):
     def setUp(self):
         self.f = fixtures.NativePublicationTests(); self.f.setUp(); self.addCleanup(self.f.doCleanups)
+        if getattr(self,'long',False):
+            from full_client_adaptive import LONG_FINAL_SLOT_POLICY
+            self.f.make(horizon=LONG_FINAL_SLOT_POLICY)
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.attempts = self.root / 'attempts'; self.attempts.mkdir()
@@ -82,7 +85,7 @@ class NativeCohortTests(unittest.TestCase):
         result = self.prepare(); row = self.snapshot['attempts'][0]
         self.assertEqual(row['persisted_xp'], 4500)
         self.assertEqual(row['authoritative_peak_xp_per_minute'], 18000)
-        self.assertEqual(len(row['native_xp']['windows']), 20)
+        self.assertEqual(len(row['native_xp']['windows']), 120 if getattr(self,'long',False) else 20)
         self.assertTrue(row['publication_eligible']); self.assertFalse(row['ranked'])
         self.assertEqual(self.snapshot['cohort']['verified'], 1)
         self.assertEqual(len(self.snapshot['attempts']), 4)
@@ -133,6 +136,17 @@ class NativeCohortTests(unittest.TestCase):
     def test_same_accepted_evidence_is_idempotent(self):
         self.assertEqual(self.prepare()['content_sha256'], self.prepare()['content_sha256'])
 
+    def test_refreshed_presentation_keeps_native_results_and_catalog_valid(self):
+        from full_client_presentation import refresh
+        result = self.prepare(); output = self.root / 'refreshed'; output.mkdir()
+        updated = refresh(result['package'], result['content_sha256'], output)
+        original = package.verify_package(result['package'], result['content_sha256'])
+        newer = package.verify_package(updated['package'], updated['content_sha256'])
+        self.assertEqual(newer['content']['presentation_parent_sha256'], result['content_sha256'])
+        for name, value in original['content']['files'].items():
+            if name not in package.ASSETS: self.assertEqual(newer['content']['files'][name], value)
+        catalog.cohort(updated['package'], updated['content_sha256'])
+
     def test_private_evidence_is_not_in_public_projection(self):
         self.prepare(); raw = json.dumps(self.snapshot)
         for value in (str(self.root), str(self.f.root), 'account_id', 'character_id',
@@ -164,6 +178,19 @@ class NativeCohortTests(unittest.TestCase):
                        lambda r: r['native_xp'].update(complete_windows=19)):
             row = copy.deepcopy(original); change(row)
             with self.assertRaises(ValueError): catalog.verified(row)
+
+
+class LongNativeCohortTests(NativeCohortTests):
+    long=True
+
+    def test_pinned_long_package_horizon_cannot_be_omitted_or_replaced(self):
+        result=self.prepare()
+        manifest=package.verify_package(result['package'],result['content_sha256'])
+        self.assertEqual(manifest['content']['horizon_seconds'],1800)
+        self.assertEqual(self.snapshot['attempts'][0]['native_xp']['complete_windows'],120)
+        broken=copy.deepcopy(self.snapshot['attempts'][0])
+        broken['native_xp']['wall_budget_ms']=300000
+        with self.assertRaises(ValueError):catalog.verified(broken)
 
 
 if __name__ == '__main__': unittest.main()

@@ -17,7 +17,7 @@ import tempfile
 
 from full_client_dashboard import Reader, RUN, SHA, model, number, project_attempt
 from full_client_gallery import copy_recording, directory
-from full_client_publication import (ADAPTIVE_PROTOCOL, XP_PROTOCOL, ASSETS, MAX_ADAPTIVE_VIDEO,
+from full_client_publication import (ADAPTIVE_PROTOCOL, XP_PROTOCOL, ASSETS, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO,
     digest, encoded, require, stable_bytes, stable_fingerprint, verify_package, write_new)
 from full_client_adaptive_publication import VERIFIED
 from full_client_xp_cohort import VERIFIED as XP_VERIFIED, checked_public as checked_native_public
@@ -50,7 +50,7 @@ def safe_public(value,depth=0,parent=None):
                     'logs','environment','credentials','password','api_key','account_id','character_id'},'catalog_private_field')
             safe_public(item,depth+1,key)
     elif isinstance(value,list):
-        require(len(value)<=100,'catalog_public_shape')
+        require(len(value)<=(120 if parent=='windows' else 100),'catalog_public_shape')
         for item in value:safe_public(item,depth+1,parent)
     elif isinstance(value,str):
         require(len(value)<=512 and not re.search(r'[\x00-\x1f<>\\]',value),'catalog_public_text')
@@ -100,7 +100,7 @@ def cohort(package,expected):
     manifest=verify_package(package,expected)
     require(type(manifest['schema_version']) is int,'catalog_package_schema')
     content=manifest['content'];site=directory(Path(package)/'site')
-    require(set(content)-{'presentation_parent_sha256'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+    require(set(content)-{'presentation_parent_sha256','horizon_seconds'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
         and ('presentation_parent_sha256' not in content or (isinstance(content['presentation_parent_sha256'],str)
             and SHA.fullmatch(content['presentation_parent_sha256'])))
         and type(content['schema_version']) is int and content['schema_version']==1
@@ -120,6 +120,7 @@ def cohort(package,expected):
         if row.get('score_verification')==verifier:
             require(verified(row) and row.get('protocol_id')==protocol
                 and row['adaptive'].get('class_profile',{}).get('class_name')==CLASSES[metadata[0]['class_id']]
+                and (protocol!=XP_PROTOCOL or row['native_xp']['wall_budget_ms']==content.get('horizon_seconds',300)*1000)
                 and SHA.fullmatch(str(row.get('comparison_group'))),'catalog_verified_row_inconsistent')
         else:require(row.get('persisted_xp') is None and row.get('comparison_group') is None
             and row.get('authoritative_peak_xp_per_minute') is None
@@ -144,6 +145,7 @@ def cohort(package,expected):
             require(isinstance(recording,dict) and set(recording)<={'url','sha256','reviewed','playback'}
                 and recording.get('url')=='./recordings/'+filename and filename in declared
                 and recording.get('sha256')==declared[filename]['sha256']
+                and declared[filename]['bytes'] <= (MAX_LONG_VIDEO if content.get('horizon_seconds')==1800 else MAX_ADAPTIVE_VIDEO)
                 and verified(row) and row.get('recording_publication')=='verified_bytes','catalog_recording_binding')
             linked.add(filename)
         else:require(row.get('recording_publication')!='verified_bytes','catalog_recording_binding')
@@ -166,9 +168,9 @@ def cohort(package,expected):
 def copy_file(source,name,target,expected):
     target.parent.mkdir(parents=True,exist_ok=True)
     if name.endswith('.webm'):
-        copy_recording(source,{'path':name,'sha256':expected['sha256']},target,{},maximum=MAX_ADAPTIVE_VIDEO)
+        copy_recording(source,{'path':name,'sha256':expected['sha256']},target,{},maximum=MAX_LONG_VIDEO)
     else:write_new(target,stable_bytes(source/name,4*1024**2),0o644)
-    require(stable_fingerprint(target,MAX_ADAPTIVE_VIDEO if name.endswith('.webm') else 4*1024**2)==expected,
+    require(stable_fingerprint(target,MAX_LONG_VIDEO if name.endswith('.webm') else 4*1024**2)==expected,
             'catalog_source_changed')
 
 
@@ -324,7 +326,7 @@ def compose(request,output_root):
             (site/prefix/'recordings').mkdir(parents=True,mode=0o755)
             for name,value in content['files'].items():copy_file(p['site'],name,site/prefix/name,value)
         for name,raw in root_data.items():write_new(site/name,raw,0o644)
-        files={p.relative_to(site).as_posix():stable_fingerprint(p,MAX_ADAPTIVE_VIDEO if p.suffix=='.webm' else 4*1024**2)
+        files={p.relative_to(site).as_posix():stable_fingerprint(p,MAX_LONG_VIDEO if p.suffix=='.webm' else 4*1024**2)
                for p in sorted(site.rglob('*')) if p.is_file()}
         require(same_json(files,planned_files),'catalog_source_changed')
         inventory=encoded({'schema_version':1,'files':files});write_new(stage/'payload-inventory.json',inventory)

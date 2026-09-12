@@ -42,6 +42,9 @@ class NativePublicationTests(unittest.TestCase):
     def make(self, *, progression=False, final_level=180, final_exp=4500, initial_exp=0, normalization=None, transitions=None, frame_policy=False, horizon=None):
         self.h = Harness(self.root, calls=12)
         self.h.p['horizon_policy'] = copy.deepcopy(horizon or adaptive.FULL_HORIZON_POLICY)
+        long=horizon==adaptive.LONG_FINAL_SLOT_POLICY
+        shift=1500000 if long else 0
+        if long:self.h.p=adaptive.long_horizon_protocol(self.h.p['profile'])
         if frame_policy:
             self.h.p['capture_duration_policy'] = copy.deepcopy(CAPTURE_DURATION_POLICY)
         ordinary_observation = self.h.observation
@@ -63,12 +66,28 @@ class NativePublicationTests(unittest.TestCase):
         self.refs = copy.deepcopy(self.f.arts)
         for source, target in (('native_save', 'save'), ('baseline_sql', 'baseline'), ('controller_result', 'result')):
             self.refs[target] = self.refs.pop(source)
+        if long:
+            def moved(value):
+                if isinstance(value,dict):return {k:moved(v) for k,v in value.items()}
+                if isinstance(value,list):return [moved(v) for v in value]
+                return value+shift if type(value) is int and 1300000<=value<=1310000 else value
+            for name in ('final_db','session'):
+                self.save(name,moved(self.read(name)))
+            for name in ('save','server_log'):
+                raw=(self.root/self.refs[name]['path']).read_bytes()
+                self.save(name,b''.join(json.dumps(moved(json.loads(line))).encode()+b'\n' for line in raw.splitlines()),raw=True)
+            session=self.read('session');session['save'].update(evidence_sha256=self.refs['save']['sha256'],logs_sha256=self.refs['server_log']['sha256']);self.save('session',session)
         scenario = self.read('scenario')
         scenario['adaptive_protocol'] = copy.deepcopy(self.h.p)
         scenario['instructions_sha256'] = self.result['adaptive']['instructions']['sha256']
         scenario['settlement_policy'] = copy.deepcopy(SETTLEMENT_POLICY)
+        if long:
+            scenario['settlement_policy']={**SETTLEMENT_POLICY,'upload_after_program_ms':180000,'disconnect_after_program_ms':180000}
+            scenario['xp_window_protocol']['wall_seconds']=1800
         scenario['trial_budgets'] = {'total_seconds': 1200, 'operation_seconds': 360, 'controller_seconds': 300,
             'max_actions': 1600, 'max_api_requests': 12, 'max_output_tokens': 36000, 'max_total_tokens': 120000}
+        if long:scenario['trial_budgets'].update(total_seconds=2400,operation_seconds=1835,controller_seconds=1800,
+            max_actions=14400,max_api_requests=72,max_output_tokens=216000,max_total_tokens=1440000)
         scenario['xp_window_protocol']['normalization'] = copy.deepcopy(normalization or NORM)
         self.save('scenario', scenario)
         initial = self.read('initial_db'); initial['character']['exp'] = initial_exp
@@ -80,11 +99,11 @@ class NativePublicationTests(unittest.TestCase):
                              normalization=normalization)
         for at, level, exp in (transitions if transitions is not None else [(1025000 if progression else 1005000, final_level, final_exp)]):
             self.ledger.transition(at, level, exp)
-        self.ledger.commit(1302000); self.save('xp_ledger', self.ledger.bytes(), raw=True)
-        session = self.read('session'); session['upload_observed_at_ms'] = 1300500
+        self.ledger.commit(1302000+shift); self.save('xp_ledger', self.ledger.bytes(), raw=True)
+        session = self.read('session'); session['upload_observed_at_ms'] = 1300500+shift
         self.save('session', session)
         upload = {'schema_version': 1, 'source': 'full_client_runtime_status', **IDENTITY,
-            'observed_at_ms': 1300500, 'status': {'bridge': {'run': {'id': self.ident, 'status': 'completed',
+            'observed_at_ms': 1300500+shift, 'status': {'bridge': {'run': {'id': self.ident, 'status': 'completed',
                 'evidenceStatus': 'saved', 'recordingStatus': 'saved', 'workerActive': False,
                 'leaseReleasePending': False}, 'browserReleasePending': False}, 'session': {'artifactsSettled': True}}}
         self.save('upload_status', upload)
@@ -94,6 +113,7 @@ class NativePublicationTests(unittest.TestCase):
         request = {'schema_version': 3, 'protocol': windows.PROTOCOL, 'model': self.model,
                    'scenario_fingerprint': self.refs['scenario']['sha256'], 'baseline_sha256': self.refs['baseline']['sha256'],
                    'budgets': scenario['trial_budgets']}
+        if long:request['horizon_seconds']=1800
         trial_context = {key: request[key] for key in ('scenario_fingerprint', 'baseline_sha256')}
         self.result['trialContext'] = trial_context
         self.result['controller'].update(mode='api', client='synthetic-browser', trialContext=trial_context,
@@ -115,6 +135,20 @@ class NativePublicationTests(unittest.TestCase):
             capture.update(schema_version=2, capture_duration_policy=copy.deepcopy(CAPTURE_DURATION_POLICY),
                 first_frame_offset_ms=109, last_frame_offset_ms=capture['duration_ms'] - 96,
                 first_frame_wall_ms=start + 109, last_frame_wall_ms=end + 4, max_frame_gap_ms=215)
+        if long:
+            capture.update(schema_version=3,capture_duration_policy=copy.deepcopy(self.h.p['capture_duration_policy']),
+                first_frame_offset_ms=0,last_frame_offset_ms=capture['duration_ms']-1,
+                first_frame_wall_ms=start,last_frame_wall_ms=start+capture['duration_ms']-1,max_frame_gap_ms=1000)
+            times=[n*1000 for n in range(0,int(capture['duration_ms']),1000)]+[(int(capture['duration_ms'])-1)*1000]
+            durations=[b-a for a,b in zip(times,times[1:])]+[1000]
+            ledger={'schema_version':1,'codec':'vp8','timebase_us':1000,'flushed':True,
+                'submitted_timestamps_us':times,'encoded_timestamps_us':times,'durations_us':durations,'encoded_sha256':['d'*64]*len(times)}
+            ledger_raw=json.dumps(ledger,separators=(',',':'))
+            video_bytes=(self.root/self.refs['video']['path']).stat().st_size
+            capture['rendered_frames']=len(times)
+            capture['encoder_receipt']={'schema_version':1,'codec':'vp8','timebase_us':1000,'flushed':True,
+                'submitted_frames':len(times),'encoded_frames':len(times),'ledger_sha256':hashlib.sha256(ledger_raw.encode()).hexdigest(),
+                'ledger_bytes':len(ledger_raw),'webm_sha256':self.refs['video']['sha256'],'webm_bytes':video_bytes}
         for name, value in [('capture', capture), ('capture_clock', clock), ('capture_ready', ready), ('capture_terminal', terminal)]:
             self.save(name, value)
         recording = {'status': 'completed', 'sha256': self.refs['video']['sha256'],
@@ -125,6 +159,7 @@ class NativePublicationTests(unittest.TestCase):
         self.save('recording', recording)
         names = {'native_save': 'save', 'baseline_sql': 'baseline', 'controller_result': 'result'}
         self.manifest = copy.deepcopy(self.f.manifest)
+        if long:self.manifest['window']['deadline_at_ms']+=shift
         self.manifest.update(scenario_fingerprint=request['scenario_fingerprint'],
                              normalization=scenario['xp_window_protocol']['normalization'])
         self.manifest['artifacts'] = {name: self.refs[names.get(name, name)] for name in self.f.manifest['artifacts']}
@@ -144,6 +179,10 @@ class NativePublicationTests(unittest.TestCase):
             'scorer_sha256': hashlib.sha256(Path(windows.__file__).read_bytes()).hexdigest()}
         self.repin()
         self.probe = {'duration_ms': recording['duration_ms'], 'width': 1024, 'height': 768, 'frames': 9000}
+        if long:self.probe.update(duration_ms=capture['duration_ms'],presentation_span_ms=capture['duration_ms']-1,
+            presentation_extent_ms=capture['duration_ms'],last_packet_duration_ms=1,frames=len(times),
+            packet_timestamps_us=times,packet_durations_us=durations,packet_sha256=ledger['encoded_sha256'],
+            encoder_ledger_json=ledger_raw,webm_sha256=self.refs['video']['sha256'],webm_bytes=video_bytes)
         if frame_policy:
             extent = recording['duration_ms'] - 117.265
             self.probe.update(duration_ms=extent, presentation_span_ms=extent - 1,
@@ -196,6 +235,17 @@ class NativePublicationTests(unittest.TestCase):
         self.assertEqual(value['authoritative_peak_xp_per_minute'], 18000)
         self.assertEqual(value['adaptive']['horizon_policy'], adaptive.FINAL_SLOT_POLICY)
         self.assertFalse(value['publication_eligible'])
+
+    def test_exact_long_policy_projects_120_windows_and_requires_long_video_probe(self):
+        self.make(horizon=adaptive.LONG_FINAL_SLOT_POLICY)
+        with patch('full_client_publish._probe_video',return_value=self.probe) as probe:
+            value=publication.verify_attempt(self.root,self.context)
+        self.assertEqual(value['complete_windows'],120)
+        self.assertEqual(value['wall_budget_ms'],1800000)
+        self.assertEqual(value['adaptive']['wall_budget_ms'],1800000)
+        self.assertFalse(value['publication_eligible'])
+        self.assertEqual(probe.call_args.kwargs,{'maximum_ms':1835000,
+            'duration_policy':self.h.p['capture_duration_policy']})
 
     def test_zero_is_only_published_with_complete_evidence(self):
         self.make(final_exp=0, transitions=[])

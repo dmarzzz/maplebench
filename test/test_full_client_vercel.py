@@ -113,6 +113,32 @@ class VercelPublicationTests(unittest.TestCase):
         again=self.publish();self.assertEqual(again['status'],'published');self.assertEqual(len(self.calls),3)
         self.assertFalse(again['deployment_allowed'])
 
+    def test_long_primary_payload_keeps_explicit_video_and_total_size_limits(self):
+        # Sizes are synthetic; fingerprint I/O is mocked to test admission at
+        # exact boundaries without allocating hundreds of megabytes of media.
+        manifest=publication.verify_package(self.package,self.content)
+        video=next(name for name in self.files if name.endswith('.webm'))
+        self.files[video]['bytes']=97*1024**2
+        manifest['content']['files']=copy.deepcopy(self.files)
+        def save():
+            self.inventory.write_text(json.dumps({'files':self.files}))
+            self.inventory_sha=driver.digest(self.inventory.read_bytes())
+        def check():
+            return driver.checked_payload(self.payload,self.inventory,self.inventory_sha,manifest)
+        def measured(path,maximum):
+            expected=self.files[path.relative_to(self.payload).as_posix()]
+            self.assertLessEqual(expected['bytes'],maximum)
+            return expected
+        save()
+        with patch.object(driver,'stable_fingerprint',side_effect=measured):
+            with self.assertRaisesRegex(ValueError,'public_payload_file_limit'):check()
+            manifest['content'].update(protocol='full-client-xp-windows-v1',horizon_seconds=1800)
+            check()
+            self.files[video]['bytes']=driver.MAX_PAYLOAD-sum(ref['bytes'] for name,ref in self.files.items() if name!=video)
+            manifest['content']['files']=copy.deepcopy(self.files);save();check()
+            self.files[video]['bytes']+=1;save()
+            with self.assertRaisesRegex(ValueError,'public_payload_size_limit'):check()
+
     def test_lost_reply_reconciles_existing_metadata_without_resubmission(self):
         self.lose_reply=True
         self.assertEqual(self.publish()['status'],'published')

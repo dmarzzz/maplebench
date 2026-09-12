@@ -28,7 +28,7 @@ CONTROL_FILES = {'native_result': 'result.json', 'native_program': 'program.js',
     'controller': 'controller.json', 'capture': 'capture.json', 'capture_ready': 'capture-ready.json',
     'capture_clock': 'capture-clock.json', 'capture_terminal': 'capture-terminal.json',
     'recording': 'recording.json'}
-CLASS_JOBS = {'hero': 112, 'bowmaster': 312, 'ice_lightning_arch_mage': 222}
+CLASS_JOBS = {'hero': 112, 'bowmaster': 312, 'ice_lightning_arch_mage': 222, 'night_lord': 412}
 FROZEN_MODULES = ('full_client_native_xp_runtime', 'full_client_native_xp_acceptance',
     'full_client_xp_windows', 'full_client_native', 'full_client_runtime', 'full_client_publish',
     'full_client_capture', 'full_client_score', 'full_client_collect', 'full_client_freeze',
@@ -110,7 +110,7 @@ class NativeXpRuntime(CosmicRuntime):
                 and all(candidate[k] == self.manifest['server_jar'][k] for k in candidate),
                 'native_xp_candidate_manifest_required')
         refs = {ref['path']: ref for ref in self.manifest.get('extra_files', [])}
-        for name in FROZEN_MODULES:
+        for name in FROZEN_MODULES + (('full_client_skill_toolkit',) if 'skill_toolkit' in self.native else ()):
             path = str(Path(importlib.import_module(name).__file__).resolve())
             require(path in refs, 'native_xp_executor_sources_not_frozen')
             ref_bytes(refs[path])
@@ -122,7 +122,9 @@ class NativeXpRuntime(CosmicRuntime):
                 and self.config.get('xp_window_protocol') == windows.PROTOCOL
                 and self.scenario.get('protocol') == acceptance.PROTOCOL,
                 'native_xp_explicit_protocol_required')
-        return windows.validate_contract(self.scenario['xp_window_protocol'])
+        contract=windows.validate_contract(self.scenario['xp_window_protocol'])
+        require(contract['wall_seconds']==300,'native_xp_explicit_protocol_required')
+        return contract
 
     def service_runtime_seconds(self):
         return TOTAL_SECONDS - 60
@@ -219,14 +221,14 @@ class NativeXpRuntime(CosmicRuntime):
             control_limit = acceptance.MAX_CONTROL_START_DELAY_MS + self.native['wall_seconds'] * 1000
             require(elapsed < control_limit or idle, 'native_xp_control_exceeded_recipe')
             if stopped_capture(status) and 'short_control_terminal' not in self.state:
-                require(elapsed <= 45000, 'native_xp_short_capture_not_saved')
+                require(elapsed <= self.native['capture_max_ms'], 'native_xp_short_capture_not_saved')
                 self.state['short_control_terminal'] = self.control_file_stamps()
                 self.persist()
             if 'short_control_terminal' in self.state:
                 require(stopped_capture(status), 'native_xp_short_capture_not_saved')
                 require(self.control_file_stamps() == self.state['short_control_terminal'],
                         'native_xp_terminal_evidence_changed')
-            require(elapsed < 45000 or 'short_control_terminal' in self.state,
+            require(elapsed < self.native['capture_max_ms'] or 'short_control_terminal' in self.state,
                     'native_xp_short_capture_not_saved')
         return row
 
@@ -374,8 +376,9 @@ class NativeXpRuntime(CosmicRuntime):
         recording = parse_json(read_artifact_bytes(self.directory, arts['recording'], 'recording'))
         result = parse_json(read_artifact_bytes(self.directory, arts['native_result'], 'native_result'))
         probe = _probe_video(self.directory / arts['video']['path'], recording['sha256'])
-        require(self.native['capture_max_ms'] == 45000 and all(
-                    type(probe.get(key)) in (int, float) and 0 < probe[key] <= 45000
+        native.validate_contract(self.native)
+        require(all(
+                    type(probe.get(key)) in (int, float) and 0 < probe[key] <= self.native['capture_max_ms']
                     for key in ('duration_ms', 'presentation_span_ms', 'presentation_extent_ms')),
                 'native_xp_short_video_bound')
         arts['video_probe'] = self.artifact('video-probe.json', probe)
