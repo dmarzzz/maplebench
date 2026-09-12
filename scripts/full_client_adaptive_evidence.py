@@ -6,6 +6,7 @@ Persisted net XP is verified separately from native logout/database receipts.
 from full_client_adaptive import PROTOCOL, PASSIVE_STOP_REASONS, digest, prompt, validate_protocol, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY, final_slot_offer
 from full_client_score import EvidenceError, parse_json, read_artifact_bytes, same_json
 from maple_agent import model_decision, validate_rpc
+from full_client_skill_toolkit import sdk_scenario
 import math
 import json
 
@@ -258,7 +259,7 @@ def verify_result(result, root, *, protocol, model, native_progression=None):
             if step.get('kind')=='rejected_rpc':
                 rpc=step.get('rpc'); invalid=False
                 try:
-                    validate_rpc(rpc,{'adapter':'full-client','protocol':PROTOCOL})
+                    validate_rpc(rpc,{'adapter':'full-client',**sdk_scenario(p)})
                     invalid=rpc['id'] in seen
                 except (ValueError,TypeError):invalid=True
                 require(invalid and isinstance(step.get('error'),str) and len(step['error'])<=512)
@@ -267,7 +268,7 @@ def verify_result(result, root, *, protocol, model, native_progression=None):
             seen.add(step['rpcId'])
             try:
                 method, argument=validate_rpc({'type':'rpc','id':step['rpcId'],'method':step.get('method'),
-                    'args':step.get('args')},{'adapter':'full-client','protocol':PROTOCOL})
+                    'args':step.get('args')},{'adapter':'full-client',**sdk_scenario(p)})
             except ValueError:raise EvidenceError('adaptive: invalid SDK arguments') from None
             receipt=step.get('result'); require(isinstance(receipt,dict) and receipt.get('error') in (None,''))
             if method=='pressKeys':
