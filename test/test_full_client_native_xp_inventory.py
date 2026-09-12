@@ -9,7 +9,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'scripts'))
 import full_client_native_xp_inventory as inventory
@@ -144,6 +144,70 @@ class InventoryTests(unittest.TestCase):
                 with self.assertRaises((ValueError,TimeoutError)):inventory.collect_owned(backend,'after_logout')
                 self.assertEqual(backend.host.command.call_count,1 if error=='query' else 0)
                 self.assertEqual(backend.host.deadline,deadline)
+
+
+class RuntimeInventoryTests(unittest.TestCase):
+    def setUp(self):
+        from test_full_client_native_xp_runtime import ExecutorTests
+        self.h=ExecutorTests();self.h.setUp();self.addCleanup(self.h.doCleanups)
+        self.backend=self.h.backend
+        helper=InventoryTests();native,raw,items=helper.fixture('hero')
+        self.backend.native=native
+        self.backend.config['baseline']=self.h.fixture.ref('toolkit-baseline',raw,raw=True)
+        self.backend.config['runtime_manifest']={'sha256':'c'*64}
+        self.backend.config['mysql'].update(character_id=5,account_id=2)
+        self.items=items
+
+    def snapshot(self,phase,at=200):
+        ident=self.backend.identity()
+        header={'kind':'character','character_id':5,'account_id':2,'job':112,'level':180,
+                'account_logged_in':0,'transactional_tables':3}
+        return inventory.parse(InventoryTests.raw([header,*self.items]),native=self.backend.native,**ident,
+            phase=phase,runtime_manifest_sha256=self.backend.config['runtime_manifest']['sha256'],captured_at_ms=at)
+
+    def test_actual_capture_method_writes_once_and_reinspection_cannot_hide_changed_inventory(self):
+        value=self.snapshot('after_restore')
+        with patch.object(inventory,'collect_owned',return_value=value):
+            self.backend.capture_toolkit_inventory('after_restore')
+        ref=copy.deepcopy(self.backend.state['artifacts']['inventory_after_restore'])
+        value['captured_at_ms']+=1
+        with patch.object(inventory,'collect_owned',return_value=value):
+            self.backend.capture_toolkit_inventory('after_restore')
+        self.assertEqual(self.backend.state['artifacts']['inventory_after_restore'],ref)
+        value['use_inventory'][0]['quantity']-=1
+        with patch.object(inventory,'collect_owned',return_value=value),self.assertRaisesRegex(ValueError,'inventory_receipt_failed'):
+            self.backend.capture_toolkit_inventory('after_restore')
+        self.assertEqual(self.backend.state['artifacts']['inventory_after_restore'],ref)
+
+    def test_before_inventory_is_captured_after_baseline_and_before_start(self):
+        from full_client_runtime import CosmicRuntime
+        events=[]
+        self.backend.capture_toolkit_inventory=Mock(side_effect=lambda phase:events.append(phase))
+        with patch.object(CosmicRuntime,'restore_baseline',side_effect=lambda:events.append('baseline')):
+            self.backend.restore_baseline()
+        self.assertEqual(events,['baseline','before_login'])
+
+    def test_saved_inventory_is_collected_after_logout_before_final_character_snapshot(self):
+        events=[];self.backend.safe_boundary=Mock();self.backend.state['coverage_verified']=True
+        self.backend.disconnect=Mock(side_effect=lambda:events.append('logout'))
+        self.backend.collect_short_control=Mock(side_effect=lambda:events.append('control'))
+        def capture(phase):events.append(phase);raise ValueError('stop_after_inventory')
+        self.backend.capture_toolkit_inventory=Mock(side_effect=capture)
+        with self.assertRaisesRegex(ValueError,'stop_after_inventory'):self.backend.collect_final()
+        self.assertEqual(events,['logout','control','after_logout']);self.h.host.snapshot.assert_not_called()
+
+    def test_failed_inventory_restore_cannot_mark_native_cleanup_complete(self):
+        self.h.restore_fixture()
+        self.backend.capture_toolkit_inventory=Mock(side_effect=ValueError('inventory_changed'))
+        with self.assertRaisesRegex(ValueError,'inventory_changed'):self.backend.restore_after()
+        self.assertFalse(self.backend.state['native_restored'])
+        self.backend.prepare_cleanup_wait.assert_not_called()
+
+    def test_legacy_native_contract_has_no_inventory_read_or_new_artifact(self):
+        self.backend.native=contract('hero','a'*64)
+        with patch.object(inventory,'collect_owned',side_effect=AssertionError('legacy SQL forbidden')):
+            self.assertIsNone(self.backend.capture_toolkit_inventory('before_login'))
+        self.assertFalse(inventory.ARTIFACTS & set(self.backend.state['artifacts']))
 
 
 if __name__=='__main__':unittest.main()
