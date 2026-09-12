@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from full_client_presentation import refresh
-from full_client_publication import ASSETS, MAX_ADAPTIVE_VIDEO, XP_PROTOCOL, digest, encoded, file_inventory, verify_package
+from full_client_publication import ASSETS, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO, XP_PROTOCOL, digest, encoded, file_inventory, verify_package
 
 
 class PresentationTests(unittest.TestCase):
@@ -44,11 +44,16 @@ class PresentationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'presentation_paths_overlap'):
             refresh(self.package,self.sha,self.package,ui_root=self.ui)
     def test_xp_package_preserves_its_existing_larger_video_limit(self):
+        self.check_xp_video_limit(33*1024**2,MAX_ADAPTIVE_VIDEO)
+    def test_explicit_long_xp_package_preserves_its_own_video_limit(self):
+        self.check_xp_video_limit(97*1024**2,MAX_LONG_VIDEO,horizon=1800)
+    def check_xp_video_limit(self,size,maximum,horizon=None):
         site=self.package/'site';video=site/'recordings'/('a'*32+'.webm')
-        with video.open('r+b') as stream:stream.truncate(33*1024**2)
+        with video.open('r+b') as stream:stream.truncate(size)
         manifest=json.loads((self.package/'package-manifest.json').read_bytes())
         content=manifest['content'];content['protocol']=XP_PROTOCOL
-        content['files']=file_inventory(site,maximum_video=MAX_ADAPTIVE_VIDEO)
+        if horizon is not None:content['horizon_seconds']=horizon
+        content['files']=file_inventory(site,maximum_video=maximum)
         sha=digest(encoded(content));manifest['content_sha256']=sha
         (self.package/'package-manifest.json').write_bytes(encoded(manifest))
         result=refresh(self.package,sha,self.output,ui_root=self.ui)

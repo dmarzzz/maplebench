@@ -81,6 +81,10 @@ def public_cycles(result,checked):
     # Input receipts establish a key press, not that the server cast a spell.
     skills={key:{'key':key,'name':name,'acknowledged_inputs':0,'held_ms':0}
             for key,name in trace['limits']['profile']['skill_keys'].items()}
+    if 'skill_toolkit' in limits:
+        for skill in limits['skill_toolkit']['skills']:
+            skills[skill['slot']].update(declared_level=skill['level'],role=skill['route'],
+                                        description=skill['description'])
     allowed_status={'executed','invalid_program','budget_rejected','window_closed','response_saved','not_executed','completed'}
     allowed_reason={'completed','program_complete','program_error','program_timeout','output_limit',
                     'time_limit','action_limit','rpc_limit','death'}
@@ -123,6 +127,10 @@ def public_cycles(result,checked):
         'class_profile':{k:trace['limits']['profile'][k] for k in ('id','class_name','level','skill_keys')}}
     public['skill_usage']={'basis':'acknowledged_skill_inputs','skills':list(skills.values()),
         'successful_casts':None,'server_effects_verified':False}
+    if 'skill_toolkit' in limits:
+        from full_client_skill_toolkit import fingerprint
+        public['skill_usage']['toolkit_sha256']=fingerprint(limits['skill_toolkit'])
+        public['skill_usage']['declared_starting_resources']=limits['skill_toolkit']['resources']
     public['timing_breakdown']={
         'basis':'verified_cycle_intervals',
         'model_wait_ms':checked['api_ms'],

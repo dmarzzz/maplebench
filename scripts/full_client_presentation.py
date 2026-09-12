@@ -9,7 +9,7 @@ import shutil
 import tempfile
 
 from full_client_gallery import copy_recording, directory
-from full_client_publication import (ASSETS, ADAPTIVE_PROTOCOL, XP_PROTOCOL, MAX_ADAPTIVE_VIDEO,
+from full_client_publication import (ASSETS, ADAPTIVE_PROTOCOL, XP_PROTOCOL, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO,
     MAX_VIDEO, digest, encoded, file_inventory, require, stable_bytes,
     verify_package, write_new)
 from full_client_trial import publish_attempt, sync_directory
@@ -21,7 +21,7 @@ def refresh(package, expected, output_root, *, ui_root=None):
             'presentation_paths_overlap')
     manifest=verify_package(package,expected);original=manifest['content']
     ui=directory(Path(ui_root) if ui_root else Path(__file__).resolve().parents[1]/'ui/full-client-dashboard')
-    maximum=MAX_ADAPTIVE_VIDEO if original.get('protocol') in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) else MAX_VIDEO
+    maximum=MAX_LONG_VIDEO if original.get('protocol')==XP_PROTOCOL and original.get('horizon_seconds')==1800 else MAX_ADAPTIVE_VIDEO if original.get('protocol') in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) else MAX_VIDEO
     staging=Path(tempfile.mkdtemp(prefix='.presentation-',dir=output_root))
     try:
         site=staging/'site';site.mkdir(mode=0o755);(site/'recordings').mkdir(mode=0o755)

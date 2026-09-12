@@ -38,6 +38,28 @@ class SkillUsageTests(unittest.TestCase):
         self.assertEqual(public['cycles'][0]['execution_slot']['kind'],'final')
         self.assertEqual(public['timing_breakdown']['observation_only_ms'],289000)
         self.assertIsNone(public['authoritative_peak_xp_per_minute'])
+    def test_new_toolkit_slots_keep_declared_levels_and_resource_identity(self):
+        from full_client_skill_toolkit import toolkit,profile,fingerprint
+        from full_client_catalog import safe_public
+        kit=toolkit('hero');self.h.p.update(profile=profile(kit),skill_toolkit=kit)
+        def execute(code,**kw):
+            self.h.now+=1
+            step={'kind':'sdk','rpcId':1,'method':'pressKeys','args':[['SKILL_5'],100],
+                  'result':{'accepted':True,'observation':self.h.observation()}}
+            kw['step_callback'](step)
+            return {'actions':1,'actionAttempts':1,'rpcRequests':1,'steps':[step],
+                    'reason':'program_complete','error':None}
+        self.h.run(execute=execute);result=self.h.result()
+        public=public_cycles(result,verify_result(result,self.h.root,protocol=self.h.p,model=MODEL))
+        usage=public['skill_usage'];skills={r['key']:r for r in usage['skills']}
+        self.assertEqual(len(skills),10)
+        self.assertEqual(skills['SKILL_5']['acknowledged_inputs'],1)
+        self.assertEqual(skills['SKILL_5']['name'],'Rush')
+        self.assertEqual(skills['SKILL_5']['declared_level'],30)
+        self.assertEqual(skills['SKILL_10']['acknowledged_inputs'],0)
+        self.assertEqual(usage['toolkit_sha256'],fingerprint(kit))
+        self.assertEqual(usage['declared_starting_resources'],kit['resources'])
+        self.assertFalse(usage['server_effects_verified']);safe_public(public)
     def test_long_projection_preserves_late_cycles_and_declared_wall(self):
         self.h.p=long_horizon_protocol(self.h.p['profile']);self.h.program_seconds=1000
         self.h.run(sleep=lambda n:setattr(self.h,'now',self.h.now+n))
