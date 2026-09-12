@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import full_client_native_xp_gate as gate
@@ -14,6 +14,7 @@ from full_client_score import EvidenceError
 import test_full_client_native_xp_acceptance as native_fixtures
 import test_full_client_xp_publication as model_fixtures
 import full_client_xp_publication as publication
+import test_full_client_native_xp_runtime as producer_fixtures
 
 
 class NativeGateTests(unittest.TestCase):
@@ -34,6 +35,8 @@ class NativeGateTests(unittest.TestCase):
             'extra_files': [{'path': '/release/native.py', 'sha256': '2' * 64}]}
         self.put('runtime_manifest', self.runtime)
         self.native = self.read('scenario')['native_contract']
+        logout=self.producer_receipts()
+        self.checked=verify_bundle(self.manifest,self.root)
         self.put('native_xp_manifest', self.manifest); self.put('native_xp_result', self.checked)
         self.put('video', b'SYNTHETIC VIDEO: decoding is explicitly mocked', raw=True)
         self.put('recording', {'status': 'completed', 'interrupted': False, 'post_render_capture': True,
@@ -50,8 +53,9 @@ class NativeGateTests(unittest.TestCase):
             'result': self.checked, 'artifacts': self.arts}
         self.backend = {'attempt_id': 'a' * 32, 'server_instance_id': 'b' * 32,
             'maintenance_protocol': gate.NATIVE, 'clean': True, 'native_restored': True,
-            'publication_eligible': False, 'ordinary_logout': {'confirmed': True}, 'artifacts': self.arts,
-            'intents': ['restore_baseline', 'native_control_submit', 'native_xp_restore_after']}
+            'publication_eligible': False, 'ordinary_logout': logout['ordinary_logout'], 'artifacts': self.arts,
+            'session':logout['session'],'committed_at_ms':logout['committed_at_ms'],
+            'intents': ['restore_baseline', 'native_control_submit', 'disconnect', 'native_xp_restore_after']}
         self.context = {'schema_version': 1, 'protocol': gate.PROTOCOL, 'root': str(self.root),
             'run_id': 'a' * 32, 'runtime_manifest': self.arts['runtime_manifest']}
         self.model_root = self.root.parent / (self.root.name + '-model'); self.model_root.mkdir()
@@ -63,6 +67,29 @@ class NativeGateTests(unittest.TestCase):
                 'experience_table_sha256': self.manifest['experience_table_sha256']}}
         self.probe = {'duration_ms': 20100, 'presentation_span_ms': 20099, 'presentation_extent_ms': 20100}
         self.repin()
+
+    def producer_receipts(self):
+        """Use actual executor/disconnect producers with mocked host boundaries."""
+        f=producer_fixtures.ExecutorTests();f.setUp();self.addCleanup(f.doCleanups);f.window_fixture()
+        backend=f.backend;backend.native=self.native
+        backend.config['mysql'].update({k:self.manifest[k] for k in ('character_id','account_id')})
+        backend.native_window()
+        self.runtime.update(backend.manifest,docker_binding=backend.docker_binding())
+        self.put('runtime_manifest',self.runtime)
+        for key in ('window_origin','native_request'):
+            ref=backend.state['artifacts'][key]
+            self.put(key,json.loads((backend.directory/ref['path']).read_bytes()))
+        ref=backend.state['artifacts']['coverage']
+        self.arts['coverage']=self.write('producer-coverage.jsonl',(backend.directory/ref['path']).read_bytes(),True)
+        self.manifest['artifacts']['coverage']=self.arts['coverage']
+        session=self.read('session');native=backend.directory/'native-save';native.mkdir()
+        (native/'save.jsonl').write_bytes((self.root/self.arts['native_save']['path']).read_bytes())
+        backend.state['native_directory']=str(native)
+        backend.owned_server=MagicMock();backend.account_state=MagicMock(return_value=0)
+        f.host.now.side_effect=[session['disconnect_requested_at_ms'],session['logged_out_at_ms']]
+        backend.request_ordinary_disconnect()
+        self.assertNotIn('confirmed',backend.state['ordinary_logout'])
+        return backend.state
 
     def write(self, filename, value, raw=False):
         data = value if raw else (json.dumps(value, sort_keys=True) + '\n').encode()
@@ -126,11 +153,27 @@ class NativeGateTests(unittest.TestCase):
             self.complete = original
 
     def test_ordinary_logout_and_one_submission_required(self):
-        self.backend['ordinary_logout']['confirmed'] = False; self.repin()
-        with self.assertRaisesRegex(EvidenceError, 'native_backend'): self.verify()
-        self.backend['ordinary_logout']['confirmed'] = True
+        original=copy.deepcopy(self.backend['ordinary_logout'])
+        self.backend['ordinary_logout']={'confirmed':True};self.repin()
+        with self.assertRaisesRegex(EvidenceError, 'native_ordinary_logout'): self.verify()
+        self.backend['ordinary_logout']=original
         self.backend['intents'].append('native_control_submit'); self.repin()
         with self.assertRaisesRegex(EvidenceError, 'native_backend'): self.verify()
+
+    def test_producer_origin_request_and_logout_are_bound_to_original_evidence(self):
+        for key,change in (('window_origin',{'wall_ms':1000001}),
+                           ('native_request',{'run_id':'f'*32}),
+                           ('native_request',{'docker_image_id':'sha256:'+'f'*64})):
+            original=self.read(key);self.put(key,original|change);self.repin()
+            with self.subTest(key=key,change=change),self.assertRaisesRegex(EvidenceError,'native_(window_origin|submission_receipt)'):
+                self.verify()
+            self.put(key,original)
+        for key in ('save_committed_at_ms','logged_out_at_ms','disconnect_requested_at_ms'):
+            original=self.backend['ordinary_logout'][key]
+            self.backend['ordinary_logout'][key]+=1;self.repin()
+            with self.subTest(key=key),self.assertRaisesRegex(EvidenceError,'native_ordinary_logout'):
+                self.verify()
+            self.backend['ordinary_logout'][key]=original
 
     def test_runtime_class_baseline_table_and_normalization_are_pinned(self):
         cases = ((self.model_context, 'runtime_manifest_sha256', '9' * 64),

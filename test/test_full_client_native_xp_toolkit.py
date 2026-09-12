@@ -34,6 +34,7 @@ class ToolkitNativeXpTests(unittest.TestCase):
         g.model_context['request']['baseline_sha256']=g.manifest['baseline_sha256']
         reset=g.read('reset');reset['baseline_sha256']=g.manifest['baseline_sha256'];g.put('reset',reset)
         g.native = native.contract('hero', g.manifest['baseline_sha256'], protocol=skills.NATIVE_PROTOCOL)
+        request=g.read('native_request');request['native_acceptance']=g.native;g.put('native_request',request)
         scenario = g.read('scenario'); scenario['native_contract'] = g.native; g.put('scenario', scenario)
         g.manifest['scenario_fingerprint'] = g.arts['scenario']['sha256']
         program = native.program(g.native).encode(); g.put('native_program', program, raw=True)

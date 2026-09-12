@@ -26,7 +26,8 @@ ARTIFACTS = frozenset(('baseline', 'baseline_snapshot', 'scenario', 'runtime_man
     'initial_db', 'reset', 'native_result', 'native_program', 'controller', 'capture',
     'capture_ready', 'capture_clock', 'capture_terminal', 'recording', 'video',
     'controller_result', 'coverage', 'final_db', 'native_save', 'xp_ledger', 'native_log',
-    'server_log', 'session', 'native_xp_manifest', 'native_xp_result', 'video_probe', 'restored_db'))
+    'server_log', 'session', 'native_xp_manifest', 'native_xp_result', 'video_probe', 'restored_db',
+    'window_origin', 'native_request'))
 TOOLKIT_INVENTORY_ARTIFACTS = frozenset(('inventory_before_login', 'inventory_after_logout', 'inventory_after_restore'))
 
 
@@ -112,10 +113,11 @@ def verify_native(context, *, model_root, model_context, model_projection):
             and backend.get('maintenance_protocol') == NATIVE and backend.get('clean') is True
             and backend.get('native_restored') is True and backend.get('pending') is None
             and backend.get('publication_eligible') is False
-            and backend.get('ordinary_logout', {}).get('confirmed') is True
+            and isinstance(backend.get('ordinary_logout'),dict)
             and same_json(backend.get('artifacts'), arts)
             and isinstance(backend.get('intents'), list)
             and backend['intents'].count('native_control_submit') == 1
+            and backend['intents'].count('disconnect') == 1
             and backend['intents'].count('native_xp_restore_after') == 1,
             'native_backend_not_clean_and_restored')
     require(arts['runtime_manifest'] == context['runtime_manifest']
@@ -147,6 +149,33 @@ def verify_native(context, *, model_root, model_context, model_projection):
     require(same_json(manifest['artifacts'], required_mapping), 'native_manifest_artifacts_changed')
     scenario = read_json_artifact(root, arts, 'scenario')
     native = validate_contract(scenario['native_contract'])
+    session=read_json_artifact(root,arts,'session')
+    expected_logout={'schema_version':1,'source':'cosmic_ordinary_disconnect',
+        **{k:manifest[k] for k in IDENTITY},
+        'disconnect_requested_at_ms':session['disconnect_requested_at_ms'],
+        'logged_out_at_ms':session['logged_out_at_ms'],
+        'save_committed_at_ms':session['save']['committed_at_ms']}
+    require(same_json(backend['ordinary_logout'],expected_logout)
+            and backend.get('committed_at_ms')==session['save']['committed_at_ms']
+            and all(backend.get('session',{}).get(k)==session[k] for k in
+                ('disconnect_requested_at_ms','logged_out_at_ms')),
+            'native_ordinary_logout_receipt_mismatch')
+    origin=read_json_artifact(root,arts,'window_origin')
+    coverage=read_artifact_bytes(root,arts['coverage'],'coverage',maximum=256*1024)
+    require(same_json(origin,json.loads(coverage.splitlines()[0]))
+            and origin['wall_ms']==manifest['window']['start_at_ms']
+            and origin['controller_idle'] is True,'native_window_origin_mismatch')
+    request=read_json_artifact(root,arts,'native_request')
+    require(isinstance(request,dict) and set(request)=={'op','run_id','request_id','native_acceptance',
+            'docker_image_id','docker_binding','lock_paths'} and request['op']=='start_native'
+            and request['run_id']==request['request_id']==ident
+            and same_json(request['native_acceptance'],native)
+            and request['docker_image_id']==runtime.get('docker_image_id')
+            and isinstance(request['docker_image_id'],str) and re.fullmatch('sha256:[a-f0-9]{64}',request['docker_image_id'])
+            and isinstance(request['docker_binding'],dict) and same_json(request['docker_binding'],runtime.get('docker_binding'))
+            and isinstance(request['lock_paths'],dict) and set(request['lock_paths'])=={'world','queue'}
+            and all(isinstance(p,str) and p.startswith('/') and len(p)<=4096 for p in request['lock_paths'].values())
+            and len(set(request['lock_paths'].values()))==2,'native_submission_receipt_mismatch')
     require(set(arts) == (ARTIFACTS | TOOLKIT_INVENTORY_ARTIFACTS if 'skill_toolkit' in native else ARTIFACTS),
             'exact_toolkit_inventory_artifacts_required')
     baseline = read_json_artifact(root, arts, 'baseline_snapshot')
