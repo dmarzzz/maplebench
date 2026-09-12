@@ -40,7 +40,8 @@ native_xp_short_capture_not_saved native_xp_api_evidence_forbidden native_xp_vid
 native_xp_terminal_evidence_changed native_xp_deferred_collection_requires_offline_coverage
 native_xp_window_time_insufficient native_xp_execution_time_insufficient native_xp_preflight_time_insufficient
 native_xp_header_invalid native_xp_save_log_failed native_xp_short_video_bound
-native_xp_restore_unconfirmed native_xp_initial_restore_not_started native_xp_cleanup_unconfirmed'''.split())
+native_xp_restore_unconfirmed native_xp_initial_restore_not_started native_xp_cleanup_unconfirmed
+native_xp_inventory_receipt_failed native_xp_inventory_baseline_mismatch native_xp_inventory_receipt_changed'''.split())
 
 
 def stopped_capture(status):
@@ -110,12 +111,48 @@ class NativeXpRuntime(CosmicRuntime):
                 and all(candidate[k] == self.manifest['server_jar'][k] for k in candidate),
                 'native_xp_candidate_manifest_required')
         refs = {ref['path']: ref for ref in self.manifest.get('extra_files', [])}
-        for name in FROZEN_MODULES + (('full_client_skill_toolkit',) if 'skill_toolkit' in self.native else ()):
+        for name in FROZEN_MODULES + (('full_client_skill_toolkit', 'full_client_native_xp_inventory',
+                'full_client_toolkit_fixture') if 'skill_toolkit' in self.native else ()):
             path = str(Path(importlib.import_module(name).__file__).resolve())
             require(path in refs, 'native_xp_executor_sources_not_frozen')
             ref_bytes(refs[path])
         self.docker_binding()
         self.xp_window_contract()
+
+    def capture_toolkit_inventory(self, phase):
+        if 'skill_toolkit' not in self.native:
+            return None
+        from full_client_native_xp_inventory import collect_owned, expected, verify_restored
+        try:
+            value = collect_owned(self, phase)
+            baseline_sql = ref_bytes(self.config['baseline'], MAX_SQL)
+            if phase == 'before_login':
+                wanted = expected(self.native, baseline_sql,
+                    character_id=self.config['mysql']['character_id'], account_id=self.config['mysql']['account_id'])
+                require(same_json(value['use_inventory'], wanted), 'native_xp_inventory_baseline_mismatch')
+            if phase == 'after_restore':
+                verify_restored(value, native=self.native, baseline_sql=baseline_sql, identity=self.identity(),
+                    runtime_manifest_sha256=self.config['runtime_manifest']['sha256'])
+        except RuntimeErrorCode:
+            raise
+        except (ValueError, TypeError, KeyError):
+            raise RuntimeErrorCode('native_xp_inventory_receipt_failed') from None
+        key = 'inventory_' + phase
+        if key in self.state['artifacts']:
+            original = parse_json(read_artifact_bytes(self.directory, self.state['artifacts'][key], key))
+            # Reinspection never rewrites an original receipt. A repeated
+            # cleanup may only reconfirm the same exact offline inventory.
+            fields = lambda row: {k: v for k, v in row.items() if k != 'captured_at_ms'}
+            require(same_json(fields(original), fields(value)), 'native_xp_inventory_receipt_changed')
+        else:
+            self.state['artifacts'][key] = self.artifact(key.replace('_', '-') + '.json', value)
+            self.persist()
+        return value
+
+    def restore_baseline(self):
+        result = super().restore_baseline()
+        self.capture_toolkit_inventory('before_login')
+        return result
 
     def xp_window_contract(self):
         require(self.config.get('native_xp_protocol') == acceptance.PROTOCOL
@@ -325,6 +362,7 @@ class NativeXpRuntime(CosmicRuntime):
         self.collect_short_control()
         self.intent('collect_native_xp')
         arts = self.state['artifacts']
+        self.capture_toolkit_inventory('after_logout')
         final = self.host.snapshot(self.config['mysql'], self.run_id)
         self.event('collection_completed', final['captured_at_ms'])
         arts['final_db'] = self.artifact('final-db.json', final)
@@ -403,6 +441,7 @@ class NativeXpRuntime(CosmicRuntime):
                 and same_json(restored['keymap'], self.baseline['keymap']), 'native_xp_restore_unconfirmed')
         if 'restored_db' not in self.state['artifacts']:
             self.state['artifacts']['restored_db'] = self.artifact('restored-db.json', restored)
+        self.capture_toolkit_inventory('after_restore')
         self.prepare_cleanup_wait()
         self.state['native_restored'] = True
         self.persist()

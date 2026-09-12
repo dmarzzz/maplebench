@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 
 from full_client_score import (EvidenceError, read_json_artifact, same_json,
-                               verified_artifact)
+                               verified_artifact, read_artifact_bytes)
 from full_client_native import validate_contract
 from full_client_native_xp_acceptance import PROTOCOL as NATIVE, verify_bundle
 from full_client_xp_windows import IDENTITY
@@ -27,6 +27,7 @@ ARTIFACTS = frozenset(('baseline', 'baseline_snapshot', 'scenario', 'runtime_man
     'capture_ready', 'capture_clock', 'capture_terminal', 'recording', 'video',
     'controller_result', 'coverage', 'final_db', 'native_save', 'xp_ledger', 'native_log',
     'server_log', 'session', 'native_xp_manifest', 'native_xp_result', 'video_probe', 'restored_db'))
+TOOLKIT_INVENTORY_ARTIFACTS = frozenset(('inventory_before_login', 'inventory_after_logout', 'inventory_after_restore'))
 
 
 def require(value, code):
@@ -104,7 +105,7 @@ def verify_native(context, *, model_root, model_context, model_projection):
             and complete['clean'] is True and complete['native_restored'] is True
             and complete['failure'] is None, 'original_successful_native_closeout_required')
     arts = complete['artifacts']
-    require(isinstance(arts, dict) and set(arts) == ARTIFACTS
+    require(isinstance(arts, dict) and set(arts) in (ARTIFACTS, ARTIFACTS | TOOLKIT_INVENTORY_ARTIFACTS)
             and all(reference(ref) for ref in arts.values()), 'complete_native_artifacts_required')
     require(backend.get('attempt_id') == ident
             and backend.get('server_instance_id') == complete['server_instance_id']
@@ -146,6 +147,8 @@ def verify_native(context, *, model_root, model_context, model_projection):
     require(same_json(manifest['artifacts'], required_mapping), 'native_manifest_artifacts_changed')
     scenario = read_json_artifact(root, arts, 'scenario')
     native = validate_contract(scenario['native_contract'])
+    require(set(arts) == (ARTIFACTS | TOOLKIT_INVENTORY_ARTIFACTS if 'skill_toolkit' in native else ARTIFACTS),
+            'exact_toolkit_inventory_artifacts_required')
     baseline = read_json_artifact(root, arts, 'baseline_snapshot')
     restored = read_json_artifact(root, arts, 'restored_db')
     final = read_json_artifact(root, arts, 'final_db')
@@ -169,6 +172,21 @@ def verify_native(context, *, model_root, model_context, model_projection):
             and same_json(restored.get('keymap'), baseline.get('keymap'))
             and type(restored.get('captured_at_ms')) is int
             and restored['captured_at_ms'] >= final['captured_at_ms'], 'actual_restored_baseline_required')
+    resource_proof = None
+    review_after_ms = restored['captured_at_ms']
+    if 'skill_toolkit' in native:
+        from full_client_native_xp_inventory import verify_triplet
+        snapshots = [read_json_artifact(root, arts, 'inventory_' + phase)
+                     for phase in ('before_login', 'after_logout', 'after_restore')]
+        try:
+            resource_proof = verify_triplet(*snapshots, native=native,
+                baseline_sql=read_artifact_bytes(root, arts['baseline'], 'baseline', maximum=64 * 1024**2),
+                identity={k: manifest[k] for k in IDENTITY}, runtime_manifest_sha256=context['runtime_manifest']['sha256'],
+                session=read_json_artifact(root, arts, 'session'), reset=read_json_artifact(root, arts, 'reset'), final_db=final)
+        except (ValueError, KeyError, TypeError):
+            raise EvidenceError('native_xp_gate: toolkit_resource_proof_invalid') from None
+        require(snapshots[-1]['captured_at_ms'] >= restored['captured_at_ms'], 'inventory_restore_timing_changed')
+        review_after_ms = snapshots[-1]['captured_at_ms']
     from full_client_publish import _probe_video, verify_capture_bundle
     from full_client_capture import verify_video_duration
     result = read_json_artifact(root, arts, 'native_result')
@@ -193,9 +211,12 @@ def verify_native(context, *, model_root, model_context, model_projection):
     labels=('vertical_jump', 'monster_contact', 'native_class_hud', 'script_overlay')
     if 'skill_toolkit' in native:
         binding['skill_toolkit_sha256']=fingerprint(toolkit)
+        binding['resource_proof_sha256']=digest(resource_proof)
+        binding['inventory_artifact_sha256']={name:arts[name]['sha256'] for name in sorted(TOOLKIT_INVENTORY_ARTIFACTS)}
         labels+=tuple('skill_'+skill['slot'] for skill in toolkit['skills'])
+        labels+=('potion_resource_effect',)
     visual_review(root, context['visual_review'], protocol=NATIVE_REVIEW, binding=binding,
-        duration_ms=probe['duration_ms'], after_ms=restored['captured_at_ms'],labels=labels)
+        duration_ms=probe['duration_ms'], after_ms=review_after_ms,labels=labels)
     for key, original in (('complete', complete), ('backend', backend), ('runtime_manifest', runtime)):
         require(same_json(original, read_json_artifact(root, context, key)), 'native_acceptance_changed')
     proof = {'protocol': PROTOCOL, 'native_run_id': ident, 'native_manifest_sha256': arts['native_xp_manifest']['sha256'],
@@ -205,7 +226,9 @@ def verify_native(context, *, model_root, model_context, model_projection):
         'video_sha256': arts['video']['sha256'], 'visual_review_sha256': context['visual_review']['sha256'],
         'class_id': native['class_id'], 'baseline_sha256': manifest['baseline_sha256'],
         'experience_table_sha256': manifest['experience_table_sha256'], 'normalization': manifest['normalization']}
-    if 'skill_toolkit' in native:proof['skill_toolkit_sha256']=fingerprint(toolkit)
+    if 'skill_toolkit' in native:
+        proof['skill_toolkit_sha256']=fingerprint(toolkit)
+        proof['resource_proof_sha256']=digest(resource_proof)
     return {'status': 'native_runtime_evidence_rechecked', 'sha256': digest(proof), **proof,
             'trust_boundary': 'explicit_operator_pins_and_artifact_bound_visual_attestation'}
 

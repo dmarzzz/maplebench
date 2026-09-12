@@ -95,6 +95,29 @@ and server-backed buff/resource effects; actual displacement for movement; and
 ordinary persisted resource changes. Keep a per-skill acceptance matrix so a
 single successful Brandish/Hurricane cast cannot certify an expanded kit.
 
+For this opt-in toolkit only, the native XP owner also collects three bounded,
+consistent READ ONLY USE-inventory snapshots under its existing maintenance
+locks: `inventory_before_login` after the initial baseline restore,
+`inventory_after_logout` after the ordinary saved disconnect, and
+`inventory_after_restore` after stopped-server restoration. These artifacts are
+required in the final backend/complete receipt. The earlier XP manifest stays
+unchanged because final restoration has not happened when it is written.
+
+The final gate rechecks all three receipts against the exact baseline SQL,
+native/toolkit/runtime identities and session timestamps. Before and restored
+rows must match that baseline. Ordinary logout may regenerate row IDs; saved
+consumption is compared by item and inventory slot. Supplies may decrease or
+disappear when exhausted; increases, new consumables and moved stacks fail the
+gate. Qualification requires positive saved Power Elixir use and, for Night
+Lord, positive saved star use. Soul Arrow can legitimately preserve Bowmaster's
+physical arrows. Counts never establish an attack count, hit or XP award.
+The resource proof and raw receipt hashes are bound into the final visual
+review, including an observed potion-effect interval. Cleanup independently
+checks exact inventory restoration even when the original run had no effect.
+
+This inventory path has synthetic collector, lifecycle and publication-gate
+tests. No live inventory transaction has been qualified by those tests.
+
 ## Known omissions and port limitations
 
 - Hurricane remains discrete native casts. Authentic continuous channeling is

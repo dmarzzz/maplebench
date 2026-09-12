@@ -10,14 +10,29 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import full_client_native as native
 import full_client_native_xp_acceptance as acceptance
 import full_client_skill_toolkit as skills
+import full_client_native_xp_inventory as inventory
 import test_full_client_native_xp_gate as gate_fixtures
 from full_client_score import EvidenceError
+from full_client_toolkit_fixture import transform, table, replace
+from test_full_client_skill_toolkit import sql_fixture, definitions
 
 
 class ToolkitNativeXpTests(unittest.TestCase):
     def setUp(self):
         self.g = gate_fixtures.NativeGateTests(); self.g.setUp(); self.addCleanup(self.g.doCleanups)
         g = self.g
+        policy=skills.toolkit('hero');raw,_=transform(sql_fixture('hero'),policy,definitions(policy));text=raw.decode()
+        for name in ('accounts','characters','skills','keymap','inventoryitems'):
+            rows=table(text,name)[1]
+            for row in rows:
+                if name=='accounts':row['id']='9'
+                if name=='characters':row.update(id='7',accountid='9',exp='0')
+                if 'characterid' in row:row['characterid']='7'
+            text=replace(text,name,rows)
+        raw=text.encode();g.arts['baseline']=g.write('toolkit-baseline.sql',raw,raw=True)
+        g.manifest['baseline_sha256']=g.arts['baseline']['sha256']
+        g.model_context['request']['baseline_sha256']=g.manifest['baseline_sha256']
+        reset=g.read('reset');reset['baseline_sha256']=g.manifest['baseline_sha256'];g.put('reset',reset)
         g.native = native.contract('hero', g.manifest['baseline_sha256'], protocol=skills.NATIVE_PROTOCOL)
         scenario = g.read('scenario'); scenario['native_contract'] = g.native; g.put('scenario', scenario)
         g.manifest['scenario_fingerprint'] = g.arts['scenario']['sha256']
@@ -43,11 +58,31 @@ class ToolkitNativeXpTests(unittest.TestCase):
         g.row['adaptive']['class_profile'] = copy.deepcopy(g.native['profile'])
         g.row['provenance']['skill_toolkit_sha256'] = skills.fingerprint(g.native['skill_toolkit'])
         g.probe = {'duration_ms':60100,'presentation_span_ms':60099,'presentation_extent_ms':60100}
+        ident={k:g.manifest[k] for k in acceptance.IDENTITY}
+        items=inventory.expected(g.native,raw,character_id=7,account_id=9)
+        for phase,at in (('before_login',999825),('after_logout',1303500),('after_restore',1305000)):
+            rows=copy.deepcopy(items)
+            if phase=='after_logout':
+                rows[0]['quantity']-=1
+                for row in rows:row['inventoryitemid']+=1000
+            header={'kind':'character','character_id':7,'account_id':9,'job':112,'level':180,
+                    'account_logged_in':0,'transactional_tables':3}
+            value=inventory.parse(b'\n'.join(json.dumps(row).encode() for row in [header,*rows]),
+                native=g.native,**ident,phase=phase,runtime_manifest_sha256=g.arts['runtime_manifest']['sha256'],captured_at_ms=at)
+            g.put('inventory_'+phase,value)
         self.repin_review()
 
     def repin_review(self):
         g = self.g; g.repin()
         g.review['binding']['skill_toolkit_sha256'] = skills.fingerprint(g.native['skill_toolkit'])
+        snapshots=[g.read('inventory_'+phase) for phase in inventory.PHASES]
+        resource=inventory.verify_triplet(*snapshots,native=g.native,
+            baseline_sql=(g.root/g.arts['baseline']['path']).read_bytes(),
+            identity={k:g.manifest[k] for k in acceptance.IDENTITY},runtime_manifest_sha256=g.arts['runtime_manifest']['sha256'],
+            session=g.read('session'),reset=g.read('reset'),final_db=g.read('final_db'))
+        g.review['binding']['resource_proof_sha256']=gate_fixtures.gate.digest(resource)
+        g.review['binding']['inventory_artifact_sha256']={name:g.arts[name]['sha256'] for name in sorted(inventory.ARTIFACTS)}
+        g.review['observations']['potion_resource_effect']={'start_ms':100,'end_ms':200}
         g.review['observations'].update({'skill_'+s['slot']:{'start_ms':100,'end_ms':200}
                                       for s in g.native['skill_toolkit']['skills']})
         g.context['visual_review'] = g.write('review.json', g.review)
@@ -73,6 +108,14 @@ class ToolkitNativeXpTests(unittest.TestCase):
     def test_seventy_five_second_capture_is_still_a_hard_bound(self):
         self.g.probe['duration_ms'] = 75001
         with self.assertRaisesRegex(EvidenceError, 'native_video_75s_bound'): self.g.verify()
+
+    def test_missing_or_zero_depletion_inventory_cannot_qualify_new_toolkit(self):
+        g=self.g;missing=g.arts.pop('inventory_after_restore');g.repin()
+        with self.assertRaisesRegex(EvidenceError,'complete_native_artifacts_required'):g.verify()
+        g.arts['inventory_after_restore']=missing
+        after=g.read('inventory_after_logout');after['use_inventory'][0]['quantity']=100
+        g.put('inventory_after_logout',after);g.repin()
+        with self.assertRaisesRegex(EvidenceError,'toolkit_resource_proof_invalid'):g.verify()
 
     def test_unfrozen_extended_duration_and_false_idle_are_refused(self):
         raw = (self.g.root/self.g.arts['coverage']['path']).read_bytes()
