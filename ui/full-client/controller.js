@@ -110,9 +110,10 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   const keyNames = {LEFT:'ArrowLeft',RIGHT:'ArrowRight',UP:'ArrowUp',DOWN:'ArrowDown',JUMP:'Space',
     ATTACK:'ControlLeft',BRANDISH:'KeyA',COMBO:'KeyS',BOOSTER:'KeyD',MAPLE_WARRIOR:'KeyF',HP_POTION:'KeyQ',MP_POTION:'KeyW'};
   const skillKeyNames={PRIMARY_SKILL:'KeyA',SECONDARY_SKILL:'KeyS',BUFF_1:'KeyD',BUFF_2:'KeyF'};
-  const skillNamesByCode=Object.fromEntries(Object.entries(skillKeyNames).map(([name,code])=>[code,name]));
+  const toolkitKeyNames={...skillKeyNames,SKILL_5:'KeyG',SKILL_6:'KeyH',SKILL_7:'KeyZ',SKILL_8:'KeyX',SKILL_9:'KeyC',SKILL_10:'KeyV'};
+  const skillNamesByCode=Object.fromEntries(Object.entries(toolkitKeyNames).map(([name,code])=>[code,name]));
   const namesByCode = Object.fromEntries(Object.entries(keyNames).map(([name, code]) => [code, name]));
-  const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87};
+  const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87,KeyG:71,KeyH:72,KeyZ:90,KeyX:88,KeyC:67,KeyV:86};
   const held = new Map(), physical = new Set(), manualButtons = [], runButtons = [];
   const cancelledRuns = new Set();
   let run = {status:'idle',mode:'manual',model:null}, baseline = null, baselineScope = 'session';
@@ -516,7 +517,13 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   const executeInput = async (command, deadline) => {
     if(activeCommand) return;
     const item={interrupted:false,failure:null,keydown:false,startedAt:performance.now()}; activeCommand=item;
-    const keys=Array.isArray(command.keys)?command.keys.map(name=>(run.adaptiveProtocol||run.nativeAcceptance)?(skillKeyNames[name]||keyNames[name]):keyNames[name]):[];
+    const toolkit=run.adaptiveProtocol?.skill_toolkit||run.nativeAcceptance?.skill_toolkit;
+    const skillMap=toolkit?.id==='full-client-skill-toolkit-v1'?toolkitKeyNames:skillKeyNames;
+    const declared=toolkit?new Set(toolkit.skills?.map(skill=>skill.slot)||[]):null;
+    const keys=Array.isArray(command.keys)?command.keys.map(name=>{
+      if(toolkitKeyNames[name]&&declared&&!declared.has(name))return undefined;
+      return(run.adaptiveProtocol||run.nativeAcceptance)?(skillMap[name]||keyNames[name]):keyNames[name];
+    }):[];
     let ok=false;
     const reject=code=>{item.failure ??= code;throw Error(code);};
     try {

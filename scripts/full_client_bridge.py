@@ -21,6 +21,7 @@ from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, 
 from full_client_docker import DockerBindingError, validate_binding
 from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
 from full_client_adaptive import AdaptiveError, PROTOCOL as ADAPTIVE_PROTOCOL, run_adaptive, validate_protocol
+from full_client_skill_toolkit import sdk_scenario
 
 
 class ControlError(ValueError):
@@ -826,7 +827,9 @@ class FullClientBridge:
             if not url.endswith('/v1/action') or not isinstance(payload, dict) or payload.get('type') != 'press_keys':
                 raise ValueError('Only full-client keyboard actions are supported')
             _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},
-                SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) else {}))
+                SCENARIO | (sdk_scenario(self.run['nativeAcceptance']) if self.run.get('nativeAcceptance')
+                    else sdk_scenario(self.run['adaptiveProtocol']) if self.run.get('adaptiveProtocol')
+                    else {'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) else {}))
             if self.pending:
                 raise ValueError('Another input is in flight')
             requested=time.monotonic()
@@ -1004,7 +1007,7 @@ class FullClientBridge:
         if native_acceptance is not None:
             try:native_acceptance=validate_native(native_acceptance)
             except (ValueError,TypeError) as error:raise ControlError('invalid_native_acceptance') from None
-            if (not private or mode!='script' or model is not None or duration_seconds!=30
+            if (not private or mode!='script' or model is not None or duration_seconds!=native_acceptance['wall_seconds']
                     or adaptive_protocol is not None or trial_context is not None or readiness_policy is not None
                     or total_token_limit is not None or run_id is None or run_id!=request_id
                     or docker_binding is None or docker_image_id is None
@@ -1016,7 +1019,7 @@ class FullClientBridge:
             except AdaptiveError as error:raise ControlError(str(error)) from None
             if mode!='api' or duration_seconds!=adaptive_protocol['wall_seconds'] or total_token_limit!=adaptive_protocol['max_total_tokens']:
                 raise ControlError('adaptive_controller_budget_mismatch')
-        if type(duration_seconds) is not int or duration_seconds not in ((30,) if native_acceptance is not None else (adaptive_protocol['wall_seconds'],) if adaptive_protocol is not None else (22, 60)):
+        if type(duration_seconds) is not int or duration_seconds not in ((native_acceptance['wall_seconds'],) if native_acceptance is not None else (adaptive_protocol['wall_seconds'],) if adaptive_protocol is not None else (22, 60)):
             raise ValueError('Run duration must be 22 or 60 seconds')
         if mode == 'script' and native_acceptance is None and duration_seconds != 22:
             raise ValueError('Scripted smoke runs last at most 22 seconds')
@@ -1111,7 +1114,8 @@ class FullClientBridge:
                         'workerActive':True,
                         'client':self.client, 'recordingStatus':'pending', 'evidenceStatus':'pending'}
             if native_acceptance is not None:
-                value.update(actionLimit=12,sdkRequestLimit=100,controllerSeconds=30,apiOutcome='not_started',publicationEligible=False)
+                value.update(actionLimit=native_acceptance['max_actions'],sdkRequestLimit=native_acceptance['max_sdk_requests'],
+                    controllerSeconds=native_acceptance['wall_seconds'],apiOutcome='not_started',publicationEligible=False)
             if adaptive_protocol is not None:
                 value.update(actionLimit=adaptive_protocol['max_actions'],sdkRequestLimit=adaptive_protocol['max_sdk_requests'],
                     controllerSeconds=adaptive_protocol['wall_seconds'],cycleProgramSeconds=adaptive_protocol['program_seconds'],
@@ -1300,7 +1304,7 @@ class FullClientBridge:
             phase = 'program_execution'
             program_started=time.monotonic()
             input_deadline=program_started+program_seconds
-            result = execute_program(code, SCENARIO | ({'protocol':run['nativeAcceptance']['id']} if run.get('nativeAcceptance') else {}), 'http://127.0.0.1:8840',
+            result = execute_program(code, SCENARIO | (sdk_scenario(run['nativeAcceptance']) if run.get('nativeAcceptance') else {}), 'http://127.0.0.1:8840',
                                      deadline=time.monotonic()+program_seconds+2, program_seconds=program_seconds,
                                      max_actions=action_limit, max_requests=sdk_request_limit,
                                      request_fn=run_request, step_callback=record_progress,cancel_event=cancel_event,
@@ -1471,7 +1475,7 @@ class FullClientBridge:
             try:return bounded_request(url,body,key,remaining)
             finally:del key
         def execute(code,**kwargs):
-            return execute_program(code,SCENARIO|{'protocol':ADAPTIVE_PROTOCOL},'http://127.0.0.1:8840',request_fn=request,
+            return execute_program(code,SCENARIO|sdk_scenario(run['adaptiveProtocol']),'http://127.0.0.1:8840',request_fn=request,
                 cancel_event=self.cancel_events.get(run['id']),
                 **({'docker_binding':run['dockerBinding']} if run.get('dockerBinding') else {}),
                 **({'docker_image':run['dockerImageId']} if run.get('dockerImageId') else {}),**kwargs)

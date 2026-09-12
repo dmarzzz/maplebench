@@ -44,7 +44,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 def validate_protocol(value):
-    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','progression_policy','capture_duration_policy'},'invalid_adaptive_protocol')
+    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','progression_policy','capture_duration_policy','skill_toolkit'},'invalid_adaptive_protocol')
     require(value.get('schema_version')==1 and type(value['schema_version']) is int
             and value.get('id')==PROTOCOL and type(value.get('wall_seconds')) is int
             and value['wall_seconds'] in (300,1800),'invalid_adaptive_protocol')
@@ -67,11 +67,16 @@ def validate_protocol(value):
     from full_client_capture import LONG_ENCODED_FRAME_POLICY
     require((value.get('capture_duration_policy')==LONG_ENCODED_FRAME_POLICY)==long,'long_capture_policy_required')
     profile=value.get('profile')
+    keys=KEYS
+    if 'skill_toolkit' in value:
+        from full_client_skill_toolkit import validate_toolkit, allowed_keys
+        try:keys=allowed_keys(validate_toolkit(value['skill_toolkit'],profile))
+        except (ValueError,TypeError):raise AdaptiveError('invalid_adaptive_skill_toolkit') from None
     require(isinstance(profile,dict) and set(profile)=={'id','class_name','level','skill_keys'}
             and isinstance(profile['id'],str) and re.fullmatch('[a-z0-9][a-z0-9-]{0,63}',profile['id'])
             and isinstance(profile['class_name'],str) and re.fullmatch('[A-Za-z0-9 ()/,-]{1,64}',profile['class_name'])
             and type(profile['level']) is int and 1<=profile['level']<=255
-            and isinstance(profile['skill_keys'],dict) and set(profile['skill_keys'])<=KEYS
+            and isinstance(profile['skill_keys'],dict) and set(profile['skill_keys'])<=keys
             and all(isinstance(v,str) and re.fullmatch('[A-Za-z0-9 ()+/:,-]{1,80}',v) for v in profile['skill_keys'].values()),
             'invalid_adaptive_profile')
     if 'progression_policy' in value:
@@ -176,6 +181,9 @@ skill points, alter stats, restore HP, or reset the character for you. Native
 ledger and ordinary persisted-save evidence are required to verify this variant.
 '''
     if p['wall_seconds']==1800:text=text.replace('Frozen final-program-slot-v1:', 'Frozen final-program-slot-1800-v1:')
+    if 'skill_toolkit' in p:
+        from full_client_skill_toolkit import prompt_reference
+        text+=prompt_reference(p['skill_toolkit'])
     return text
 
 def run_adaptive(*, run_id, model, protocol, initial, observe, request_api,

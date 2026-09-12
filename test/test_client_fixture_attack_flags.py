@@ -18,7 +18,9 @@ class FixtureAttackFlagsTest(unittest.TestCase):
    p=Path(directory);dest=p/'src/client/Data/SkillData.cpp';dest.parent.mkdir(parents=True);shutil.copyfile(FIXTURE/'SkillData.cpp',dest)
    subprocess.run(['patch','-p1','--batch','-i',str(ROOT/'patches/full-client/0005-fixture-attack-flags.patch')],cwd=p,check=True,capture_output=True,timeout=5)
    original=(FIXTURE/'SkillData.cpp').read_text();patched=dest.read_text()
-   for fixed,source in [(False,original),(True,patched)]:
+   subprocess.run(['patch','-p1','--batch','-i',str(ROOT/'patches/full-client/0006-training-toolkit-attack-flags.patch')],cwd=p,check=True,capture_output=True,timeout=5)
+   expanded=dest.read_text()
+   for fixed,source,toolkit in [(False,original,False),(True,patched,False),(True,expanded,True)]:
     declarations=r'''
 #include <cstdint>
 #include <unordered_map>
@@ -59,8 +61,29 @@ int main(){using namespace jrc;Combat combat;
  for(int id:{4101003,4101004}){assert(!SkillData(id).is_attack());combat.apply_move(SpecialMove(id));}
  assert(attack_packets==before_attacks+2);assert(use_packets==before_uses+2);
  assert(!SkillData(9999999).is_attack());assert(!SkillData(3120005).is_attack());
+ // Each added offensive skill must enter target/damage dispatch, while all
+ // toolkit buffs and Teleport stay on the normal skill-use route. These are
+ // the actual compiled SkillData/Combat methods, with only I/O substituted.
+ const int expanded_attacks=attack_packets;
+ for(int id:{3111006,3101005,3111003,2211002,2211003,2221007}){
+   assert(SkillData(id).is_attack()==TOOLKIT);combat.apply_move(SpecialMove(id));
+ }
+ assert(attack_packets==expanded_attacks+(TOOLKIT?6:0));
+ for(int id:{1121008,1121006,1111005,1111003,4121007,4111005,4101005,4001344}){
+   assert(SkillData(id).is_attack());combat.apply_move(SpecialMove(id));
+ }
+ assert(attack_packets==expanded_attacks+(TOOLKIT?6:0)+8);
+ const int final_attacks=attack_packets,final_uses=use_packets;
+ for(int id:{1111002,1101004,1121000,1121002,1101006,1101007,
+             3101004,3121002,3101002,3121000,3121007,
+             2201002,2001002,2211005,2201001,2221000,2001003,
+             4101003,4101004,4121000,4111001}){
+   assert(!SkillData(id).is_attack());combat.apply_move(SpecialMove(id));
+ }
+ assert(attack_packets==final_attacks);assert(use_packets==final_uses+21);
+ assert(bool(SkillData(4101005).flags&SkillData::RANGED)==TOOLKIT);
 }
-'''.replace('FIXED','true' if fixed else 'false')
+'''.replace('FIXED','true' if fixed else 'false').replace('TOOLKIT','true' if toolkit else 'false')
     (p/'test.cpp').write_text(declarations+methods+checks)
     subprocess.run([compiler,'-std=c++17','-Wall','-Wextra','-Werror','-I',str(FIXTURE),str(p/'test.cpp'),'-o',str(p/'test')],check=True,capture_output=True,timeout=20)
     subprocess.run([str(p/'test')],check=True,capture_output=True,timeout=5)
