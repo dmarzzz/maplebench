@@ -397,6 +397,8 @@ def verify_trial_bundle(evidence, artifact_root, artifacts):
         scenario = read_json_artifact(artifact_root, artifacts, "scenario")
         result = read_json_artifact(artifact_root, artifacts, "result")
         require(scenario.get("protocol") == evidence["protocol"], "adaptive: frozen protocol mismatch")
+        require(evidence.get("horizon_seconds",300) == scenario["adaptive_protocol"].get("wall_seconds",300),
+                "adaptive: persistence horizon differs from frozen scenario")
         verified = verify_result(result, artifact_root, protocol=scenario["adaptive_protocol"],
                                  model=result["controller"]["model"])
         require(result["controller"]["id"] == evidence["run_id"]
