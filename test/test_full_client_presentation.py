@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from full_client_presentation import refresh
-from full_client_publication import ASSETS, digest, encoded, file_inventory, verify_package
+from full_client_publication import ASSETS, MAX_ADAPTIVE_VIDEO, XP_PROTOCOL, digest, encoded, file_inventory, verify_package
 
 
 class PresentationTests(unittest.TestCase):
@@ -43,6 +43,17 @@ class PresentationTests(unittest.TestCase):
     def test_output_inside_source_is_refused(self):
         with self.assertRaisesRegex(ValueError,'presentation_paths_overlap'):
             refresh(self.package,self.sha,self.package,ui_root=self.ui)
+    def test_xp_package_preserves_its_existing_larger_video_limit(self):
+        site=self.package/'site';video=site/'recordings'/('a'*32+'.webm')
+        with video.open('r+b') as stream:stream.truncate(33*1024**2)
+        manifest=json.loads((self.package/'package-manifest.json').read_bytes())
+        content=manifest['content'];content['protocol']=XP_PROTOCOL
+        content['files']=file_inventory(site,maximum_video=MAX_ADAPTIVE_VIDEO)
+        sha=digest(encoded(content));manifest['content_sha256']=sha
+        (self.package/'package-manifest.json').write_bytes(encoded(manifest))
+        result=refresh(self.package,sha,self.output,ui_root=self.ui)
+        actual=verify_package(Path(result['package']),result['content_sha256'])
+        self.assertEqual(actual['content']['files']['recordings/'+video.name],content['files']['recordings/'+video.name])
 
 
 if __name__=='__main__':unittest.main()
