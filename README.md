@@ -1,27 +1,33 @@
 # MapleBench
 
-**Status: live full-client trials verified; no model ranking established.**
-The durable adapter restores a frozen offline baseline, runs one real browser
-through ordinary login and bounded API control, then verifies persisted net XP
-after normal logout. The results dashboard shows exact model attribution,
-actions, survival and saved gameplay. Matching frozen inputs did not produce
-equivalent live starting scenes in the first four trials; those attempts do not
-establish a ranking. See the
-[acceptance evidence](docs/FULL_CLIENT_ACCEPTANCE.md),
-[results dashboard](docs/FULL_CLIENT_DASHBOARD.md) and
-[full-client control](docs/FULL_CLIENT.md).
+**Can an agent discover a better training strategy within a fixed time budget?**
+MapleBench evaluates model-authored programs through a rendered MapleStory-like
+client. Agents observe, move, choose skills, manage resources and revise their
+programs while the world continues to run. The benchmark evaluates the complete
+model, prompt, tools and execution setup. See the
+[research framing](docs/RESEARCH_FRAMING.md).
 
-The latest verified success completed with 34 acknowledged Astra actions and
-+9,250 persisted net XP. Fresh populated render frames were verified before the
-API request; its saved recording and publication evidence passed. Watch the
-[public replay](https://maplebench.vercel.app/latest/). The subsequent fresh group
-stopped during its first trial's logout collection and was recovered; a complete
-new four-model group remains outstanding.
+**Public evidence, September 12, 2026:** the [results site](https://maplebench.vercel.app/)
+contains 12 completed five-minute pilots: Astra, Sol, Terra and Luna on Hero,
+Bowmaster and Ice/Lightning Arch Mage. All have matching recordings and verified
+saved net XP. The limited Bowmaster and Mage fixtures produced zero saved XP;
+these results do not establish canonical class behavior or a model ranking.
+Night Lord has no completed public model cohort. The earlier failed group is
+closed and will not be resumed.
 
-The [current goal, roadmap and burn-down](docs/ROADMAP.md) separates the next
-four-model showcase from repeatable operations and a broader class/task suite.
-It tracks live acceptance and public delivery, alongside existing source work.
-Class/task coverage is described in the [benchmark design](docs/CLASS_BENCHMARK_DESIGN.md).
+The adapter restores a frozen offline baseline, uses ordinary login and logout,
+and checks model identity, input receipts, recording bytes and signed persisted
+XP. Frozen saved inputs alone do not guarantee identical live scenes or combat
+RNG. Historical pilots retain their original protocols and scores.
+
+The next version adds expanded class kits, explicit 30-minute runs and native
+15-second XP-window evidence. These features are implemented as opt-in source
+candidates; they still require qualification on the actual game runtime before
+new comparisons. The new kits map ten skills each for Hero, Bowmaster and
+Ice/Lightning, and eight for Night Lord. Unsupported port mechanics remain
+explicitly excluded. See [skill toolkits](docs/FULL_CLIENT_SKILL_TOOLKITS.md),
+[native score delivery](docs/FULL_CLIENT_NATIVE_XP_DELIVERY.md), and the
+[roadmap and release burn-down](docs/ROADMAP.md).
 
 Moving to another computer? See [the laptop handoff](docs/LAPTOP_HANDOFF.md) to
 reuse the existing runner without transferring its assets or credentials.
@@ -49,9 +55,17 @@ These are proposed directions, not completed full-client protocols. The
 [current roadmap](docs/ROADMAP.md) gates longer tasks on repeatable operation and
 the native scoring evidence each metric requires.
 
-1. **Maximize XP** — give an agent a standardized character and 10 minutes; score total server-authoritative XP gained.
-2. **Maximize XP rate** — score peak sustained XP/min over a rolling 60-second window.
-3. **Multi-agent party quests** — multiple agents coordinate to complete Kerning PQ under controlled communication topologies.
+1. **Training strategy discovery:** a 30-minute wall-clock budget including
+   inference; score the best normalized XP/min in a complete fixed 15-second
+   native window and preserve signed total net XP separately.
+2. **Class and task coverage:** freeze useful class toolkits and hunting,
+   navigation or objective fixtures, then collect balanced repetitions and
+   uncertainty before computing an overall score.
+3. **Party quests:** study multiple agents under controlled communication rules
+   after the required native mechanics and task evidence are implemented.
+
+The older TypeScript total-XP and rolling-window tasks remain separate scaffold
+protocols. They do not define the next full-client research score.
 
 Every benchmark run should also produce a gameplay recording suitable for inspection and demos.
 
