@@ -301,7 +301,7 @@ class NativeXpRuntime(CosmicRuntime):
             acceptance.collect_passive_coverage(first, observe, append,
                 monotonic_ns=self.monotonic_ns, sleep=self.coverage_sleep)
         raw = self.read_stable(path, 256 * 1024)
-        acceptance.verify_coverage(raw, self.identity(), self.state['window'])
+        acceptance.verify_coverage(raw, self.identity(), self.state['window'], native_contract=self.native)
         self.state['artifacts']['coverage'] = {'path': path.name, 'sha256': hashlib.sha256(raw).hexdigest()}
         self.state['coverage_verified'] = True
         self.persist()

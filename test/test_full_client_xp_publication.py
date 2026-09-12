@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import full_client_xp_publication as publication
@@ -19,6 +19,7 @@ from full_client_score import EvidenceError
 from docker_binding_fixture import local_binding
 from test_full_client_adaptive import Harness
 import test_full_client_xp_windows as native_fixtures
+import test_full_client_runtime as runtime_fixtures
 from test_full_client_xp_windows import Ledger, IDENTITY, NORM
 
 
@@ -172,7 +173,7 @@ class NativePublicationTests(unittest.TestCase):
             'events': [{'sequence': 0, 'kind': 'created'}, {'sequence': 1, 'kind': 'evidence_verified'}], 'score': score,
             'receipts': {'collect_final': {'artifacts': self.refs}, 'cleanup': {'attempt_id': self.ident, 'clean': True},
                          'status': {k: k != 'ownership_conflict' for k in publication.STATUS_FIELDS}}}
-        self.backend = {'attempt_id': self.ident, 'clean': True, 'ordinary_logout': {'confirmed': True},
+        self.backend = {**self.produced_logout(), 'clean': True,
                         'xp_header': {'sha256': hashlib.sha256(self.ledger.rows[0]).hexdigest()}}
         self.context = {'schema_version': 1, 'protocol': publication.PROTOCOL, 'run_id': self.ident, 'request': request,
             'adapter_fingerprint': '9' * 64, 'runtime_manifest_sha256': self.refs['runtime_manifest']['sha256'],
@@ -187,6 +188,20 @@ class NativePublicationTests(unittest.TestCase):
             extent = recording['duration_ms'] - 117.265
             self.probe.update(duration_ms=extent, presentation_span_ms=extent - 1,
                 presentation_extent_ms=extent, last_packet_duration_ms=1, frames=9001)
+
+    def produced_logout(self):
+        """Produce the actual durable receipt through the ordinary runtime path."""
+        f=runtime_fixtures.RuntimeTests();f.setUp();self.addCleanup(f.tearDown)
+        backend=f.backend;session=self.read('session')
+        backend.config['mysql'].update({k:self.manifest[k] for k in ('character_id','account_id')})
+        backend.owned_server=MagicMock();backend.account_state=MagicMock(return_value=0)
+        native=f.root/'native';native.mkdir();backend.state['native_directory']=str(native)
+        (native/'save.jsonl').write_bytes((self.root/self.refs['save']['path']).read_bytes())
+        f.host.now.side_effect=[session['disconnect_requested_at_ms'],session['logged_out_at_ms']]
+        backend.request_ordinary_disconnect()
+        self.assertNotIn('confirmed',backend.state['ordinary_logout'])
+        return {k:backend.state[k] for k in ('attempt_id','server_instance_id','ordinary_logout',
+            'session','committed_at_ms','intents')}
 
     def repin(self):
         self.context['journal'] = self.h.save('journal.json', self.journal)
@@ -296,6 +311,14 @@ class NativePublicationTests(unittest.TestCase):
                              (self.journal, 'charged_usage', {'api_requests': 0, 'total_tokens': 0})):
             old = copy.deepcopy(obj[key]); obj[key] = bad; self.repin(); self.assertUnknown()
             obj[key] = old; self.repin()
+
+    def test_actual_logout_receipt_identity_timestamps_and_single_intent_are_bound(self):
+        self.project(strict=True)
+        for key in ('run_id','server_instance_id','save_committed_at_ms','logged_out_at_ms','disconnect_requested_at_ms'):
+            old=self.backend['ordinary_logout'][key]
+            self.backend['ordinary_logout'][key]='f'*32 if isinstance(old,str) else old+1
+            self.repin();self.assertUnknown();self.backend['ordinary_logout'][key]=old
+        self.backend['intents'].append('disconnect');self.repin();self.assertUnknown()
 
     def test_explicit_postrender_policy_uses_frame_endpoints_with_native_windows(self):
         self.make(frame_policy=True)

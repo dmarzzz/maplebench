@@ -78,7 +78,7 @@ def _verify_attempt(root, context):
             and journal.get('status') == 'completed' and journal.get('api_outcome') == 'confirmed'
             and journal.get('phase') == 'status' and journal.get('phase_status') == 'returned'
             and journal.get('pending') is None and backend.get('pending') is None
-            and backend.get('clean') is True and backend.get('ordinary_logout', {}).get('confirmed') is True,
+            and backend.get('clean') is True and isinstance(backend.get('ordinary_logout'),dict),
             'completed_native_attempt_required')
     events = journal.get('events')
     require(isinstance(events, list) and 1 <= len(events) <= 10000
@@ -127,6 +127,17 @@ def _verify_attempt(root, context):
     initial = read_json_artifact(root, refs, 'initial_db')
     final = read_json_artifact(root, refs, 'final_db')
     session = read_json_artifact(root, refs, 'session')
+    expected_logout={'schema_version':1,'source':'cosmic_ordinary_disconnect',
+        **{k:manifest[k] for k in windows.IDENTITY},
+        'disconnect_requested_at_ms':session['disconnect_requested_at_ms'],
+        'logged_out_at_ms':session['logged_out_at_ms'],
+        'save_committed_at_ms':session['save']['committed_at_ms']}
+    require(same_json(backend['ordinary_logout'],expected_logout)
+            and backend.get('server_instance_id')==manifest['server_instance_id']
+            and backend.get('committed_at_ms')==session['save']['committed_at_ms']
+            and isinstance(backend.get('intents'),list) and backend['intents'].count('disconnect')==1
+            and all(backend.get('session',{}).get(k)==session[k] for k in
+                ('disconnect_requested_at_ms','logged_out_at_ms')),'ordinary_logout_receipt_mismatch')
     raw = read_artifact_bytes(root, refs['xp_ledger'], 'xp_ledger', maximum=windows.MAX_LEDGER_BYTES)
     require(backend.get('xp_header', {}).get('sha256') == hashlib.sha256(raw.splitlines(keepends=True)[0]).hexdigest(),
             'native_startup_header_mismatch')

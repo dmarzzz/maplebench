@@ -202,6 +202,22 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(self.host.admin.call_count, 1)
         self.assertNotIn('coverage_verified', self.backend.state)
 
+    def test_sixty_second_toolkit_window_uses_its_exact_native_contract(self):
+        from full_client_skill_toolkit import NATIVE_PROTOCOL
+        self.window_fixture()
+        self.backend.native=native.contract('hero',self.backend.config['baseline']['sha256'],protocol=NATIVE_PROTOCOL)
+        def sample(sequence,**kwargs):
+            return self.row(sequence)|{'controller_idle':sequence==0 or sequence>=60}
+        self.backend.sample.side_effect=sample
+        self.backend.native_window()
+        self.assertTrue(self.backend.state['coverage_verified'])
+        self.assertEqual(self.backend.state['window']['deadline_at_ms'],1300000)
+        self.assertEqual(self.host.admin.call_count,1)
+        self.assertEqual(self.host.admin.call_args.args[1]['native_acceptance'],self.backend.native)
+        ref=self.backend.state['artifacts']['coverage']
+        rows=[json.loads(line) for line in (self.backend.directory/ref['path']).read_bytes().splitlines()]
+        self.assertFalse(rows[40]['controller_idle']);self.assertTrue(rows[60]['controller_idle'])
+
     def test_insufficient_window_time_refuses_before_native_intent_or_submission(self):
         self.window_fixture()
         self.host.remaining.return_value = 344.99
