@@ -116,3 +116,43 @@ hash verification, with video decoding and the separate visual-review boundary
 explicitly mocked. Native gate tests independently verify the real evidence
 structure. These tests prove source behavior only. This change neither builds
 nor activates a JAR, changes a baseline, runs a model, or deploys a site.
+
+## Explicit thirty-minute successor
+
+An 1800-second model fixture must declare `horizon_seconds: 1800` in its finite
+experiment fixture and schema-3 request. Its validated adaptive scenario must
+select `final-program-slot-1800-v1`, the separate
+`post-render-encoded-frame-1800-v1` capture policy, and a native window contract
+with `wall_seconds: 1800`. All three durations must agree. Increasing only a
+budget or stretching a saved timeline cannot opt in. The original 300-second
+contracts, cap values and manifests keep their old shape.
+
+The successor records 120 complete signed windows. The native ledger and
+ordinary logout must cover the whole interval. Publication probes the original
+video with the exact long policy: at most 1,835 seconds and 600 MiB per clip.
+The immutable package additionally declares `horizon_seconds: 1800`; catalog
+validation binds every accepted row to it. Timing and capture limits are never
+chosen because an existing recording failed the short contract.
+
+The deployment driver accepts a larger video only with a verified native XP
+primary package declaring that long horizon. Total public payload remains
+512 MiB, checked before upload. Exceeding it returns an explicit capacity error;
+no partial copy, trimming, model replay or silent result omission is used to fit
+sixteen long videos. A storage/deployment policy decision may therefore still
+be needed before publishing a complete long matrix.
+
+Native JAR qualification remains a separate 300-second zero-API ledger check.
+The exact `scripted-native-toolkit-acceptance-v1` contract permits a 60-second
+script and 75-second native recording; historical native contracts retain
+30/45-second bounds. The executor derives the control/idle deadline from the
+validated contract, preserves the five-second start allowance, and requires
+the short recording saved by that contract's deadline. It never extends the
+ledger horizon or its outer cleanup reserve.
+
+Toolkit qualification must bind the exact canonical toolkit hash in both native
+and model evidence. The native visual review also includes one `skill_<slot>`
+interval for every declared skill, each attesting its actual native effect.
+Successful input acknowledgements, an overall positive XP event, or an older
+four-slot review cannot certify an expanded toolkit. Missing skill evidence
+keeps publication ineligible. Ordinary resource consumption and restored
+baseline checks remain independent required runtime evidence.

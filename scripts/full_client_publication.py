@@ -27,6 +27,7 @@ from full_client_research import summarize, CLASSES, TASKS
 ASSETS = ('index.html', 'dashboard.js', 'style.css')
 MAX_VIDEO = 32 * 1024**2
 MAX_ADAPTIVE_VIDEO = 96 * 1024**2
+MAX_LONG_VIDEO = 600 * 1024**2
 ADAPTIVE_PROTOCOL = 'full-client-adaptive-pilot-v1'
 XP_PROTOCOL = 'full-client-xp-windows-v1'
 VERIFIED = 'runner_verified_receipts_rechecked'
@@ -168,7 +169,7 @@ def project_member(entry, fixture, attempt_root, recordings):
 
 
 def file_inventory(site,*,maximum_video=MAX_VIDEO):
-    require(maximum_video in (MAX_VIDEO,MAX_ADAPTIVE_VIDEO),'invalid_public_video_limit')
+    require(maximum_video in (MAX_VIDEO,MAX_ADAPTIVE_VIDEO,MAX_LONG_VIDEO),'invalid_public_video_limit')
     names=set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}
     found=set()
     for count,p in enumerate(site.iterdir(),1):
@@ -192,7 +193,9 @@ def verify_package(package, expected):
             'package_manifest_mismatch')
     content=manifest['content'];site=directory(package/'site')
     require(content.get('protocol') in (None,'legacy-full-client-v1',ADAPTIVE_PROTOCOL,XP_PROTOCOL),'invalid_package_protocol')
-    maximum=MAX_ADAPTIVE_VIDEO if content.get('protocol') in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) else MAX_VIDEO
+    require('horizon_seconds' not in content or (content.get('protocol')==XP_PROTOCOL
+            and type(content['horizon_seconds']) is int and content['horizon_seconds']==1800),'invalid_package_horizon')
+    maximum=MAX_LONG_VIDEO if content.get('horizon_seconds')==1800 else MAX_ADAPTIVE_VIDEO if content.get('protocol') in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) else MAX_VIDEO
     require(content.get('files')==file_inventory(site,maximum_video=maximum),'package_content_changed')
     return manifest
 
@@ -227,7 +230,7 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
         from full_client_xp_cohort import checked_inputs, project_member as xp_member, VERIFIED as verified
         profile,scenario=checked_inputs(plan,adaptive_scenario,research_profile,xp_evidence)
         project=lambda entry,fixture,root,videos:xp_member(entry,fixture,root,videos,scenario,xp_evidence)
-        maximum_video=MAX_ADAPTIVE_VIDEO
+        maximum_video=MAX_LONG_VIDEO if scenario['adaptive_protocol']['wall_seconds']==1800 else MAX_ADAPTIVE_VIDEO
     elif adaptive_scenario is not None:
         from full_client_adaptive_publication import checked_profile, project_member as adaptive_member, VERIFIED as verified
         profile,scenario=checked_profile(plan,adaptive_scenario,research_profile)
@@ -276,6 +279,7 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
         content={'schema_version':1,'plan_sha256':plan_sha256,'archive_replacement':replace_archive,
                  'target_path':'/' if replace_archive else '/cohorts/'+plan_sha256[:16]+'/',
                  'protocol':profile['protocol_id'],'files':file_inventory(site,maximum_video=maximum_video)}
+        if maximum_video==MAX_LONG_VIDEO:content['horizon_seconds']=1800
         content_sha=digest(encoded(content));package=output_root/content_sha
         write_new(staging/'package-manifest.json',encoded({'schema_version':1,'content_sha256':content_sha,'content':content}))
         sync_directory(recordings);sync_directory(site);sync_directory(staging)

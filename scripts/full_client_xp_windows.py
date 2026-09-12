@@ -41,7 +41,7 @@ def multiplier(value):
 def validate_contract(value):
     require(isinstance(value,dict) and set(value)=={'id','window_ms','wall_seconds','experience_table_sha256','normalization'}
             and value['id']==PROTOCOL and type(value['window_ms']) is int and value['window_ms']==WINDOW_MS
-            and type(value['wall_seconds']) is int and value['wall_seconds']==300
+            and type(value['wall_seconds']) is int and value['wall_seconds'] in (300,1800)
             and isinstance(value['experience_table_sha256'],str)
             and re.fullmatch('[a-f0-9]{64}',value['experience_table_sha256']) is not None,'invalid_frozen_window_contract')
     norm=value['normalization']
@@ -168,11 +168,7 @@ def score_ledger(raw, *, identity, initial, final, window, normalization, commit
 
 
 def verify_bundle(manifest, root):
-    """Check native bytes and a full 300-second adaptive control interval.
-
-    Longer controller protocols need their own accepted adapter. Arithmetic above
-    supports their windows; this entry point will not assume such runs occurred.
-    """
+    """Check native bytes and an explicitly frozen 300- or 1800-second interval."""
     fields={'schema_version','protocol',*IDENTITY,'window','normalization','artifacts','baseline_sha256','scenario_fingerprint',
             'experience_table_sha256'}
     require(isinstance(manifest,dict) and set(manifest)==fields and manifest['schema_version']==1
@@ -206,14 +202,20 @@ def verify_bundle(manifest, root):
             and session.get('disconnect_kind')=='normal' and session.get('world_lock_held_throughout') is True
             and session.get('queue_lock_held_throughout') is True,'ordinary_owned_session_required')
     from full_client_adaptive_evidence import verify_result
-    from full_client_adaptive import PROTOCOL as ADAPTIVE
+    from full_client_adaptive import PROTOCOL as ADAPTIVE, validate_protocol, LONG_FINAL_SLOT_POLICY
+    protocol=validate_protocol(scenario.get('adaptive_protocol'))
+    contract=validate_contract(scenario.get('xp_window_protocol'))
+    horizon=contract['wall_seconds']
+    require(protocol['wall_seconds']==horizon
+            and (horizon!=1800 or same_json(protocol.get('horizon_policy'),LONG_FINAL_SLOT_POLICY)),
+            'unfrozen_or_incomplete_control_window')
     require(scenario.get('protocol')==controller.get('protocol')==ADAPTIVE,'unsupported_controller_protocol')
     require(all(controller.get('initial',{}).get('character',{}).get(k)==initial['character'].get(k)
                 for k in ('level','exp')),'controller_baseline_mismatch')
     t=controller['adaptive']['timing'];window=manifest['window']
-    require(t['wall_elapsed_ms']==300000 and controller['controller']['id']==identity['run_id']
+    require(t['wall_elapsed_ms']==horizon*1000 and controller['controller']['id']==identity['run_id']
             and same_json(window,{'start_at_ms':t['wall_started_at_ms'],'deadline_at_ms':t['wall_deadline_at_ms'],'window_ms':WINDOW_MS})
-            and same_json(scenario.get('xp_window_protocol'),{'id':PROTOCOL,'window_ms':WINDOW_MS,'wall_seconds':300,
+            and same_json(scenario.get('xp_window_protocol'),{'id':PROTOCOL,'window_ms':WINDOW_MS,'wall_seconds':horizon,
                 'normalization':manifest['normalization'],'experience_table_sha256':manifest['experience_table_sha256']}),
             'unfrozen_or_incomplete_control_window')
     require(session.get('controller_started_at_ms')==window['start_at_ms']
@@ -268,7 +270,7 @@ def verify_bundle(manifest, root):
             'committed_at_ms':committed,'ledger':arts['xp_ledger']}
     verified=verify_result(controller,root,protocol=scenario['adaptive_protocol'],
         model=controller['controller']['model'],native_progression=progression)
-    require(verified['wall_elapsed_ms']==300000,'unfrozen_or_incomplete_control_window')
+    require(verified['wall_elapsed_ms']==horizon*1000,'unfrozen_or_incomplete_control_window')
     return score|{'artifacts_verified':True,'baseline_reset_verified':True,
         'scenario_fingerprint':manifest['scenario_fingerprint'],'baseline_sha256':manifest['baseline_sha256'],
         'publication_blocker':'new_native_runtime_and_baseline_acceptance_required'}

@@ -12,7 +12,7 @@ import hashlib
 from pathlib import Path
 import re
 
-from full_client_adaptive import PROTOCOL as ADAPTIVE, FULL_HORIZON_POLICY, FINAL_SLOT_POLICY
+from full_client_adaptive import PROTOCOL as ADAPTIVE, FULL_HORIZON_POLICY, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY
 from full_client_adaptive_evidence import verify_result
 from full_client_adaptive_publication import public_cycles, playback_cue
 from full_client_score import (EvidenceError, read_artifact_bytes,
@@ -71,6 +71,7 @@ def _verify_attempt(root, context):
     journal = read_json_artifact(root, context, 'journal')
     backend = read_json_artifact(root, context, 'backend')
     request, ident = context['request'], context['run_id']
+    horizon=request.get('horizon_seconds',300)
     require(journal.get('attempt_id') == backend.get('attempt_id') == ident
             and same_json(journal.get('request'), request)
             and journal.get('adapter_fingerprint') == context['adapter_fingerprint']
@@ -93,14 +94,14 @@ def _verify_attempt(root, context):
     manifest = read_json_artifact(root, refs, 'xp_manifest')
     score = windows.verify_trial_bundle(manifest, root, refs)
     require(same_json(score, journal.get('score')) and same_json(score, read_json_artifact(root, refs, 'score'))
-            and score['run_id'] == ident and score['complete_windows'] == 20 and score['incomplete_tail_ms'] == 0
+            and score['run_id'] == ident and score['complete_windows'] == horizon*1000//windows.WINDOW_MS and score['incomplete_tail_ms'] == 0
             and score['scenario_fingerprint'] == request['scenario_fingerprint']
             and score['baseline_sha256'] == request['baseline_sha256'], 'native_score_receipts_mismatch')
     scenario = read_json_artifact(root, refs, 'scenario')
     result = read_json_artifact(root, refs, 'result')
     runtime = read_json_artifact(root, refs, 'runtime_manifest')
     protocol = scenario['adaptive_protocol']
-    require(any(same_json(protocol.get('horizon_policy'), p) for p in (FULL_HORIZON_POLICY, FINAL_SLOT_POLICY))
+    require(any(same_json(protocol.get('horizon_policy'), p) for p in (FULL_HORIZON_POLICY, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY))
             and same_json(scenario.get('trial_budgets'), request['budgets'])
             and refs['runtime_manifest']['sha256'] == context['runtime_manifest_sha256']
             and runtime.get('schema_version') == 2 and type(runtime['schema_version']) is int
@@ -108,7 +109,7 @@ def _verify_attempt(root, context):
             and isinstance(runtime['server_jar'].get('sha256'), str)
             and SHA.fullmatch(runtime['server_jar']['sha256']), 'frozen_native_fixture_required')
     limits = request['budgets']
-    require(limits['controller_seconds'] == protocol['wall_seconds'] == 300
+    require(limits['controller_seconds'] == protocol['wall_seconds'] == horizon
             and limits['max_actions'] == protocol['max_actions']
             and limits['max_api_requests'] == protocol['max_api_requests']
             and limits['max_total_tokens'] == protocol['max_total_tokens']
@@ -154,8 +155,11 @@ def _verify_attempt(root, context):
             and Path(refs['video']['path']).suffix == '.webm', 'original_capture_required')
     measured = verify_capture_bundle(enclosing | {'video': recording}, root)
     _verify_settlement_policy(enclosing | {'video': recording}, root, evidence, scenario)
-    video_path = verified_artifact(root, refs['video'], 'video', maximum=MAX_VIDEO)
-    probe = _probe_video(video_path, refs['video']['sha256'], maximum_ms=335000)
+    video_ms,video_bytes,_=capture_contract.capture_limits(protocol.get('capture_duration_policy'))
+    video_path = verified_artifact(root, refs['video'], 'video', maximum=video_bytes if horizon==1800 else MAX_VIDEO)
+    options={'maximum_ms':video_ms}
+    if horizon==1800:options['duration_policy']=protocol['capture_duration_policy']
+    probe = _probe_video(video_path, refs['video']['sha256'], **options)
     capture_contract.verify_video_duration(probe, recording, protocol.get('capture_duration_policy'))
     capture = read_json_artifact(root, refs, 'capture')
     require(capture['first_frame_wall_ms'] + measured['clock_offset_ms']['upper'] <= manifest['window']['start_at_ms'] + 100
@@ -170,12 +174,12 @@ def _verify_attempt(root, context):
     rows = [{'index': w['index'], 'start_ms': w['start_at_ms'] - start, 'end_ms': w['end_at_ms'] - start,
              'net_xp': w['net_xp'], 'normalized_xp_per_minute': w['normalized_xp_per_minute'],
              'best_so_far': w['best_so_far']} for w in score['windows']]
-    return {'schema_version': 1, 'protocol': PROTOCOL, 'trial_protocol': windows.PROTOCOL,
+    row={'schema_version': 1, 'protocol': PROTOCOL, 'trial_protocol': windows.PROTOCOL,
             'run_id': ident, 'requested_model': request['model'], 'returned_model': request['model'],
             'status': 'verified_native_windows', 'verification': VERIFIED,
             'authoritative_peak_xp_per_minute': score['peak_normalized_xp_per_minute'],
             'persisted_net_xp': score['persisted_net_xp'], 'control_window_net_xp': score['control_window_net_xp'],
-            'window_ms': windows.WINDOW_MS, 'wall_budget_ms': 300000, 'complete_windows': 20,
+            'window_ms': windows.WINDOW_MS, 'wall_budget_ms': horizon*1000, 'complete_windows': horizon*1000//windows.WINDOW_MS,
             'incomplete_tail_ms': 0, 'windows': rows, 'normalization': score['normalization'],
             'initial_level': initial['character']['level'], 'final_level': final['character']['level'],
             'adaptive': adaptive,
@@ -194,6 +198,10 @@ def _verify_attempt(root, context):
                     ('xp_manifest', 'xp_ledger', 'save', 'native_log', 'initial_db', 'final_db', 'session',
                      'scenario', 'baseline', 'runtime_manifest', 'result', 'capture', 'recording', 'video')}},
             'ranked': False, 'publication_eligible': False, 'publication_blocker': BLOCKER}
+    if 'skill_toolkit' in protocol:
+        from full_client_skill_toolkit import validate_toolkit, fingerprint
+        row['provenance']['skill_toolkit_sha256']=fingerprint(validate_toolkit(protocol['skill_toolkit'],protocol['profile']))
+    return row
 
 
 def _acceptance(row, root, context, native_acceptance, recording_review):

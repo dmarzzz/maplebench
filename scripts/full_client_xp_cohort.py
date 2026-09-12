@@ -38,9 +38,10 @@ def checked_public(row):
         and row.get('status') == 'completed' and row.get('mode') == 'api'
         and row.get('attribution') == 'exact' and row.get('returned_model') == row.get('requested_model')
         and row.get('protocol_id') == PROTOCOL
-        and native['window_ms'] == 15000 and native['wall_budget_ms'] == 300000
-        and native['complete_windows'] == 20 and native['incomplete_tail_ms'] == 0
-        and isinstance(native['windows'], list) and len(native['windows']) == 20,
+        and type(native['wall_budget_ms']) is int and native['wall_budget_ms'] in (300000,1800000)
+        and native['window_ms'] == 15000
+        and native['complete_windows'] == native['wall_budget_ms']//15000 and native['incomplete_tail_ms'] == 0
+        and isinstance(native['windows'], list) and len(native['windows']) == native['complete_windows'],
         'catalog_native_window_contract')
     require(all(isinstance(native[k], str) and xp.SHA.fullmatch(native[k]) for k in
         ('evidence_sha256', 'recording_review_sha256', 'native_runtime_acceptance')),
@@ -76,14 +77,17 @@ def checked_public(row):
 
 
 def checked_inputs(plan, scenario_path, profile, evidence):
-    from full_client_adaptive import PROTOCOL as ADAPTIVE, validate_protocol, FULL_HORIZON_POLICY, FINAL_SLOT_POLICY
+    from full_client_adaptive import PROTOCOL as ADAPTIVE, validate_protocol, FULL_HORIZON_POLICY, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY
     fixture = plan['fixtures'][0]
     path = Path(scenario_path)
     scenario = Reader().json(directory(path.parent), path.name, fixture['scenario']['sha256'])
     require(scenario.get('protocol') == ADAPTIVE, 'xp_adaptive_scenario_required')
     protocol = validate_protocol(scenario.get('adaptive_protocol'))
-    windows.validate_contract(scenario.get('xp_window_protocol'))
-    require(protocol.get('horizon_policy') in (FULL_HORIZON_POLICY, FINAL_SLOT_POLICY)
+    window_contract=windows.validate_contract(scenario.get('xp_window_protocol'))
+    require(window_contract['wall_seconds']==protocol['wall_seconds']
+            and all(e['spec'].get('horizon_seconds',300)==protocol['wall_seconds'] for e in plan['entries']),
+            'xp_horizon_mismatch')
+    require(protocol.get('horizon_policy') in (FULL_HORIZON_POLICY, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY)
             and same_json(scenario.get('trial_budgets'), fixture['budgets'])
             and all(e['spec'].get('schema_version') == 3 and e['spec'].get('protocol') == PROTOCOL
                     for e in plan['entries']), 'xp_specs_required')
@@ -160,7 +164,9 @@ def project_member(entry, fixture, attempt_root, recordings, scenario, evidence)
         counters = checked['adaptive']['counters']
         artifact_refs = journal['receipts']['collect_final']['artifacts']
         require(artifact_refs['scenario']['sha256'] == fixture['scenario']['sha256'], 'xp_scenario_mismatch')
-        copy_recording(folder, artifact_refs['video'], target, {}, maximum=xp.MAX_VIDEO)
+        from full_client_capture import capture_limits
+        video_limit=capture_limits(scenario['adaptive_protocol'].get('capture_duration_policy'))[1]
+        copy_recording(folder, artifact_refs['video'], target, {}, maximum=video_limit if checked['wall_budget_ms']==1800000 else xp.MAX_VIDEO)
         require(target.stat().st_size == checked['recording']['bytes'], 'xp_video_size_changed')
         recording = {'url': './recordings/' + ident + '.webm', 'sha256': checked['recording']['sha256'], 'reviewed': True}
         if checked['recording']['playback'] is not None:

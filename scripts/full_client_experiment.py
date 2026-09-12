@@ -215,6 +215,10 @@ def validated_spec(model, fixture):
         versions = {"full-client-adaptive-pilot-v1": 2, "full-client-xp-windows-v1": 3}
         require(fixture["protocol"] in versions, "invalid_trial_protocol")
         spec.update(schema_version=versions[fixture["protocol"]], protocol=fixture["protocol"])
+    if "horizon_seconds" in fixture:
+        require(type(fixture["horizon_seconds"]) is int and fixture["horizon_seconds"] == 1800
+                and spec.get("schema_version") in (2,3), "invalid_trial_horizon")
+        spec["horizon_seconds"] = 1800
     try:
         trial.validate_spec(spec)
     except trial.TrialError as error:
@@ -237,6 +241,9 @@ def fixture_inputs(fixture, runner):
             protocol = validate_protocol(scenario.get("adaptive_protocol"))
         except (ValueError, TypeError, KeyError) as error:
             raise ExperimentError("invalid_trial_protocol") from error
+        require(fixture.get("horizon_seconds",300)==protocol["wall_seconds"]
+                and ("horizon_seconds" not in fixture or protocol["wall_seconds"]==1800),
+                "invalid_trial_horizon")
         budgets = fixture["budgets"]
         require(budgets.get("controller_seconds") == protocol["wall_seconds"]
                 and budgets.get("max_api_requests") == protocol["max_api_requests"]
@@ -246,13 +253,14 @@ def fixture_inputs(fixture, runner):
         require("progression_policy" not in protocol or windows, "invalid_trial_protocol")
     if windows:
         from full_client_xp_windows import validate_contract
-        from full_client_adaptive import FULL_HORIZON_POLICY, FINAL_SLOT_POLICY
+        from full_client_adaptive import FULL_HORIZON_POLICY, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY
         try:
-            validate_contract(scenario["xp_window_protocol"])
+            window_contract = validate_contract(scenario["xp_window_protocol"])
+            require(window_contract["wall_seconds"] == protocol["wall_seconds"], "invalid_trial_protocol")
         except (ValueError, TypeError, KeyError) as error:
             raise ExperimentError("invalid_trial_protocol") from error
         require(any(scoring.same_json(protocol.get("horizon_policy"), p) for p in
-                    (FULL_HORIZON_POLICY, FINAL_SLOT_POLICY)), "invalid_trial_protocol")
+                    (FULL_HORIZON_POLICY, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY)), "invalid_trial_protocol")
     if controller_protocol == "full-client-adaptive-pilot-v1":
         required = {str(Path(__file__).resolve().parent / name) for name in
                     ("full_client_adaptive.py", "full_client_adaptive_evidence.py", "maple_agent.py")}
@@ -334,7 +342,8 @@ def validate_plan(plan):
     ids = []
     for fixture in fixtures:
         require(isinstance(fixture, dict) and set(fixture) == {"id", "scenario", "baseline", "runtime_manifest",
-                "budgets", "adapter_config", "adapter_fingerprint"} | ({"protocol"} if "protocol" in fixture else set()), "invalid_fixture")
+                "budgets", "adapter_config", "adapter_fingerprint"} | ({"protocol"} if "protocol" in fixture else set())
+                | ({"horizon_seconds"} if "horizon_seconds" in fixture else set()), "invalid_fixture")
         require(isinstance(fixture["id"], str) and SLUG.fullmatch(fixture["id"]), "invalid_fixture_id")
         ids.append(fixture["id"])
         for key in ("scenario", "baseline", "runtime_manifest", "adapter_config"):
@@ -368,7 +377,9 @@ def validate_plan(plan):
         sums["wall_seconds"] += LAUNCH_GRACE_SECONDS
     limits = plan["aggregate_limits"]
     require(isinstance(limits, dict) and set(limits) == set(sums), "invalid_aggregate_limits")
-    caps = {"api_requests": MAX_ENTRIES, "total_tokens": MAX_ENTRIES * 1000000, "wall_seconds": 604800}
+    long = any(e["spec"].get("horizon_seconds") == 1800 for e in entries)
+    caps = {"api_requests": MAX_ENTRIES * (72 if long else 1),
+            "total_tokens": MAX_ENTRIES * (1440000 if long else 1000000), "wall_seconds": 604800}
     require(all(integer(limits[name], sums[name], caps[name]) for name in sums), "aggregate_budget_insufficient")
     require(scoring.same_json(plan["policy"], POLICY), "unsupported_resume_policy")
     require(scoring.same_json(plan["balance"], balance(models, reps, fixtures)), "balance_claim_mismatch")
@@ -383,7 +394,8 @@ def build_plan(config, *, id_factory=lambda: uuid.uuid4().hex):
     require(isinstance(plan["fixtures"], list) and 1 <= len(plan["fixtures"]) <= 16, "plan_size_limit")
     for fixture in plan["fixtures"]:
         require(isinstance(fixture, dict) and set(fixture) == {"id", "scenario", "baseline", "runtime_manifest",
-                "budgets", "adapter_config"} | ({"protocol"} if "protocol" in fixture else set()), "invalid_fixture")
+                "budgets", "adapter_config"} | ({"protocol"} if "protocol" in fixture else set())
+                | ({"horizon_seconds"} if "horizon_seconds" in fixture else set()), "invalid_fixture")
         scenario = decode(read_ref(fixture["scenario"]))
         if scenario.get("protocol") == "full-client-adaptive-pilot-v1":
             if "xp_window_protocol" in scenario:

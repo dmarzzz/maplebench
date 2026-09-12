@@ -75,6 +75,30 @@ class WindowExperimentTests(unittest.TestCase):
         with self.assertRaisesRegex(experiment.ExperimentError, 'invalid_trial_protocol'):
             experiment.build_plan(config)
 
+    def test_long_native_plan_requires_explicit_horizon_and_matching_scenario(self):
+        config = self.configuration(); fixture = config['fixtures'][0]
+        scenario = json.loads(Path(fixture['scenario']['path']).read_text())
+        scenario['adaptive_protocol'] = adaptive.long_horizon_protocol(scenario['adaptive_protocol']['profile'])
+        scenario['xp_window_protocol']['wall_seconds'] = 1800
+        fixture['horizon_seconds'] = 1800
+        fixture['budgets'].update(total_seconds=2400, operation_seconds=1835, controller_seconds=1800,
+            max_actions=14400, max_api_requests=72, max_output_tokens=216000, max_total_tokens=1440000)
+        scenario['trial_budgets'] = fixture['budgets']
+        config['aggregate_limits'] = {'api_requests': 288, 'total_tokens': 5760000, 'wall_seconds': 9620}
+        fixture['scenario'] = self.fixture.write('fixture0-scenario.json', scenario)
+        backend = json.loads((self.fixture.root / 'fixture0-backend.json').read_text())
+        backend['scenario'] = fixture['scenario']; self.fixture.write('fixture0-backend.json', backend)
+        plan = experiment.build_plan(config); experiment.verify_inputs(plan)
+        self.assertEqual([entry['spec']['horizon_seconds'] for entry in plan['entries']], [1800] * 4)
+        self.assertEqual(plan['aggregate_limits']['api_requests'], 288)
+        del fixture['horizon_seconds']
+        with self.assertRaisesRegex(experiment.ExperimentError, 'invalid_trial_horizon'):
+            experiment.build_plan(config)
+        fixture['horizon_seconds'] = 1800; scenario['xp_window_protocol']['wall_seconds'] = 300
+        fixture['scenario'] = self.fixture.write('fixture0-scenario.json', scenario)
+        with self.assertRaisesRegex(experiment.ExperimentError, 'invalid_trial_protocol'):
+            experiment.build_plan(config)
+
     def test_backend_scoring_opt_in_must_match(self):
         config = self.configuration()
         path = self.fixture.root/'fixture0-backend.json'

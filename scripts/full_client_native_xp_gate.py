@@ -21,7 +21,7 @@ NATIVE_REVIEW = 'native-xp-runtime-visual-review-v1'
 MODEL_REVIEW = 'native-xp-model-visual-review-v1'
 SHA = re.compile(r'[a-f0-9]{64}\Z')
 RUN = re.compile(r'[a-f0-9]{32}\Z')
-CLASS_JOBS = {'hero': 112, 'bowmaster': 312, 'ice_lightning_arch_mage': 222}
+CLASS_JOBS = {'hero': 112, 'bowmaster': 312, 'ice_lightning_arch_mage': 222, 'night_lord': 412}
 ARTIFACTS = frozenset(('baseline', 'baseline_snapshot', 'scenario', 'runtime_manifest',
     'initial_db', 'reset', 'native_result', 'native_program', 'controller', 'capture',
     'capture_ready', 'capture_clock', 'capture_terminal', 'recording', 'video',
@@ -155,6 +155,13 @@ def verify_native(context, *, model_root, model_context, model_projection):
             and same_json(manifest['normalization'], model_projection['normalization'])
             and manifest['experience_table_sha256'] == model_projection['provenance']['experience_table_sha256'],
             'native_model_fixture_mismatch')
+    if 'skill_toolkit' in native:
+        from full_client_skill_toolkit import validate_toolkit, fingerprint
+        toolkit=validate_toolkit(native['skill_toolkit'],native['profile'])
+        require(model_projection['provenance'].get('skill_toolkit_sha256')==fingerprint(toolkit),
+                'native_model_toolkit_mismatch')
+    else:
+        require('skill_toolkit_sha256' not in model_projection['provenance'],'native_model_toolkit_mismatch')
     require(restored.get('schema_version') == 1 and type(restored['schema_version']) is int
             and restored.get('source') == 'cosmic_persisted_character' and restored.get('run_id') == ident
             and type(restored.get('account_logged_in')) is int and restored['account_logged_in'] == 0
@@ -172,9 +179,10 @@ def verify_native(context, *, model_root, model_context, model_projection):
             and recording.get('sha256') == arts['video']['sha256'], 'native_script_recording_required')
     video = verified_artifact(root, arts['video'], 'video', maximum=96 * 1024**2)
     probe = _probe_video(video, arts['video']['sha256'])
-    require(native['capture_max_ms'] == 45000 and all(
-        type(probe.get(k)) in (int, float) and 0 < probe[k] <= 45000
-        for k in ('duration_ms', 'presentation_span_ms', 'presentation_extent_ms')), 'native_video_45s_bound')
+    require(all(
+        type(probe.get(k)) in (int, float) and 0 < probe[k] <= native['capture_max_ms']
+        for k in ('duration_ms', 'presentation_span_ms', 'presentation_extent_ms')),
+        'native_video_75s_bound' if 'skill_toolkit' in native else 'native_video_45s_bound')
     verify_video_duration(probe, recording, native['capture_duration_policy'])
     verify_capture_bundle({'result': result, 'video': recording, 'artifacts': arts}, root)
     binding = {'run_id': ident, 'model': None, 'complete_sha256': context['complete']['sha256'],
@@ -182,9 +190,12 @@ def verify_native(context, *, model_root, model_context, model_projection):
         'native_manifest_sha256': arts['native_xp_manifest']['sha256'], 'video_sha256': arts['video']['sha256'],
         'capture_sha256': arts['capture']['sha256'], 'recording_sha256': arts['recording']['sha256'],
         'class_profile_sha256': digest(native['profile'])}
+    labels=('vertical_jump', 'monster_contact', 'native_class_hud', 'script_overlay')
+    if 'skill_toolkit' in native:
+        binding['skill_toolkit_sha256']=fingerprint(toolkit)
+        labels+=tuple('skill_'+skill['slot'] for skill in toolkit['skills'])
     visual_review(root, context['visual_review'], protocol=NATIVE_REVIEW, binding=binding,
-        duration_ms=probe['duration_ms'], after_ms=restored['captured_at_ms'],
-        labels=('vertical_jump', 'monster_contact', 'native_class_hud', 'script_overlay'))
+        duration_ms=probe['duration_ms'], after_ms=restored['captured_at_ms'],labels=labels)
     for key, original in (('complete', complete), ('backend', backend), ('runtime_manifest', runtime)):
         require(same_json(original, read_json_artifact(root, context, key)), 'native_acceptance_changed')
     proof = {'protocol': PROTOCOL, 'native_run_id': ident, 'native_manifest_sha256': arts['native_xp_manifest']['sha256'],
@@ -194,6 +205,7 @@ def verify_native(context, *, model_root, model_context, model_projection):
         'video_sha256': arts['video']['sha256'], 'visual_review_sha256': context['visual_review']['sha256'],
         'class_id': native['class_id'], 'baseline_sha256': manifest['baseline_sha256'],
         'experience_table_sha256': manifest['experience_table_sha256'], 'normalization': manifest['normalization']}
+    if 'skill_toolkit' in native:proof['skill_toolkit_sha256']=fingerprint(toolkit)
     return {'status': 'native_runtime_evidence_rechecked', 'sha256': digest(proof), **proof,
             'trust_boundary': 'explicit_operator_pins_and_artifact_bound_visual_attestation'}
 
