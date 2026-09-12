@@ -181,7 +181,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       : held.size || physical.size ? 'Manual controls · no active model' : 'Idle · no active model';
     let state = !relayConnected ? 'Relay disconnected · inputs released'
       : !available ? 'Waiting for fresh client state'
-      : run.status === 'running' && run.adaptivePhase === 'waiting_for_deadline' ? `Waiting for deadline · game remains live · ${run.actions || 0} actions${run.adaptiveStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.adaptiveStartedAtMs)/1000))} / 300s` : ''}`
+      : run.status === 'running' && run.adaptivePhase === 'waiting_for_deadline' ? `Waiting for deadline · game remains live · ${run.actions || 0} actions${run.adaptiveStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.adaptiveStartedAtMs)/1000))} / ${run.adaptiveProtocol?.wall_seconds || 300}s` : ''}`
       : run.status === 'requesting' ? (run.adaptiveProtocol ? `Planning cycle ${(run.cycleNumber || 0)+1} · game remains live` : run.mode === 'api' ? 'Awaiting API program · game remains live' : 'Preparing SDK program')
       : run.status === 'running' ? `Program running · ${run.actions || 0} actions${run.programStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.programStartedAtMs)/1000))} / ${run.programSeconds || 22}s` : ''}`
       : run.id ? `Last ${model || 'scripted SDK'} run: ${run.status}${run.actions != null ? ` · ${run.actions} actions` : ''}${run.reason ? ` · ${run.reason}` : ''}`
@@ -222,7 +222,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       const response = await fetch('/demo-recording', {method:'POST',
         headers:{'Content-Type':'video/webm','X-MapleBench-Client':clientId,
           ...(item.runId ? {'X-MapleBench-Run':item.runId,'X-MapleBench-Capture':btoa(JSON.stringify(item.metadata))} : {})},
-        body:item.blob, signal:AbortSignal.timeout(65000)});
+        body:item.blob, signal:AbortSignal.timeout(item.metadata?.capture_duration_policy?.id==='post-render-encoded-frame-1800-v1'?185000:65000)});
       if (!response.ok) throw Error('Upload rejected');
       const receipt = await response.json();
       if (receipt.status !== 'saved' || receipt.runId !== item.runId) throw Error('Upload receipt mismatch');
@@ -240,7 +240,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   const retainCaptureFailure = (item, code) => {
     if(!item?.encodedMode || item.autoRunId!==run.id || !/^[a-f0-9]{32}$/.test(item.autoRunId) || captureFailure?.run_id===item.autoRunId) return;
     const recorder=item.encodedRecorder, start=recorder?.startedAt ?? item.startedAt;
-    const offset=at=>Number.isFinite(at)&&Number.isFinite(start)?Math.max(0,Math.min(350000,Math.round(at-start))):null;
+    const offset=at=>Number.isFinite(at)&&Number.isFinite(start)?Math.max(0,Math.min(item.durationPolicy?.id==='post-render-encoded-frame-1800-v1'?1850000:350000,Math.round(at-start))):null;
     const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=(item.durationPolicy?.max_frames||20000)?value:0;
     captureFailure={schema_version:1,run_id:item.autoRunId,policy_id:item.durationPolicy?.id||'post-render-encoded-frame-v1',
       code:captureFailureCodes.has(code)?code:'encoder_failure_unknown',

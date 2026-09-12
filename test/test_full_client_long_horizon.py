@@ -44,3 +44,53 @@ class LongHorizonTests(unittest.TestCase):
   verify_video_duration(probe,recording,LONG_ENCODED_FRAME_POLICY)
   with self.assertRaises(ValueError):verify_video_duration(probe,recording|{'capture_duration_policy':ENCODED_FRAME_POLICY},ENCODED_FRAME_POLICY)
   with self.assertRaises(ValueError):verify_video_duration(probe|{'duration_ms':1800004},recording,LONG_ENCODED_FRAME_POLICY)
+ def test_trial_requires_explicit_long_discriminator_and_cleanup_reserve(self):
+  from full_client_trial import validate_spec,TrialError
+  p=a.long_horizon_protocol(a.DEFAULT_PROTOCOL['profile'])
+  spec={'schema_version':2,'protocol':a.PROTOCOL,'horizon_seconds':1800,'model':MODEL,
+    'scenario_fingerprint':'a'*64,'baseline_sha256':'b'*64,'budgets':{'total_seconds':2400,
+    'operation_seconds':2100,'controller_seconds':1800,'max_actions':14400,'max_api_requests':72,
+    'max_output_tokens':216000,'max_total_tokens':1440000}}
+  self.assertEqual(validate_spec(spec),spec)
+  old=dict(spec);old.pop('horizon_seconds')
+  with self.assertRaises(TrialError):validate_spec(old)
+  with self.assertRaises(TrialError):validate_spec(spec|{'budgets':spec['budgets']|{'total_seconds':1800}})
+ def test_video_probe_long_policy_binding_preserves_legacy_bounds(self):
+  from full_client_publish import _measure_video_probe
+  probe={'streams':[{'width':32,'height':24,'nb_read_frames':1801}],
+    'format':{},'packets':[{'pts_time':str(i),'duration_time':'0.001' if i==1800 else '1', 'flags':'K_'} for i in range(1801)]}
+  result=_measure_video_probe(probe,maximum_ms=1835000,duration_policy=LONG_ENCODED_FRAME_POLICY)
+  self.assertEqual(result['duration_ms'],1800001)
+  for kw in ({},{'maximum_ms':1835000},{'maximum_ms':335000,'duration_policy':LONG_ENCODED_FRAME_POLICY}):
+   with self.assertRaises(EvidenceError):_measure_video_probe(probe,**kw)
+ def test_upload_limit_comes_from_validated_run_not_browser_metadata(self):
+  from full_client_bridge import FullClientBridge
+  from unittest.mock import Mock
+  with tempfile.TemporaryDirectory() as d:
+   b=FullClientBridge(d);b.recording_owner=Mock();b.run={'id':'a'*32,'adaptiveProtocol':a.long_horizon_protocol(a.DEFAULT_PROTOCOL['profile'])}
+   self.assertEqual(b.recording_upload_limits('a'*32,'owner'),(600*1024*1024,180))
+   self.assertEqual(b.recording_upload_limits('b'*32,'owner'),(100*1024*1024,60))
+   b.run['adaptiveProtocol']['wall_seconds']=1801
+   with self.assertRaises(a.AdaptiveError):b.recording_upload_limits('a'*32,'owner')
+ def test_runtime_loads_exact_long_scenario_and_rejects_old_settlement(self):
+  import hashlib
+  from test_full_client_runtime import RuntimeTests
+  import full_client_runtime as r
+  fixture=RuntimeTests();fixture.setUp()
+  try:
+   p=a.long_horizon_protocol(a.DEFAULT_PROTOCOL['profile'])
+   scenario={'id':'long-fixture','protocol':a.PROTOCOL,'adaptive_protocol':p,'program_seconds':1800,
+    'reasoning':{'effort':'low'},'instructions_sha256':hashlib.sha256(a.prompt(p).encode()).hexdigest(),
+    'trial_budgets':{'max_api_requests':72,'max_actions':14400,'max_output_tokens':216000,
+      'max_total_tokens':1440000,'controller_seconds':1800,'operation_seconds':2100},
+    'budgets':{'api_requests':72,'output_tokens':216000,'total_tokens':1440000,'program_ms':1800000,
+      'run_ms':1835000,'actions':14400,'sdk_requests':60000},
+    'settlement_policy':dict(r.LONG_SETTLEMENT_POLICY),'readiness_policy':fixture.policy()}
+   fixture.ref('baseline_snapshot',{'account_logged_in':0,'character':{'character_id':10,'account_id':20,'map_id':1,'level':p['profile']['level']}})
+   fixture.ref('runtime_manifest',{'schema_version':2,'docker_binding':fixture.binding,
+     'working_directory':str(fixture.root),'wz_path':str(fixture.root/'wz')})
+   fixture.ref('scenario',scenario);fixture.backend.load_pins()
+   self.assertEqual(fixture.backend.settlement_policy()['upload_after_program_ms'],180000)
+   fixture.ref('scenario',scenario|{'settlement_policy':r.SETTLEMENT_POLICY})
+   with self.assertRaisesRegex(r.RuntimeErrorCode,'invalid_settlement_policy'):fixture.backend.load_pins()
+  finally:fixture.tearDown()
