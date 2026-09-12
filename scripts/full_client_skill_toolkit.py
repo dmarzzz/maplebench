@@ -156,6 +156,16 @@ def sdk_scenario(protocol):
 def prompt_reference(value):
     value = validate_toolkit(value)
     lines = ['Frozen expanded skill toolkit (new training fixture; native qualification is a separate gate):']
+    resources = value['resources']
+    lines.append(f"Starting resources: HP {resources['hp']}/{resources['max_hp']}, MP {resources['mp']}/{resources['max_mp']}; "
+                 f"{resources['potion']['quantity']} shared Power Elixirs.")
+    ammo = resources['ammunition']
+    if ammo:
+        lines.append(f"Starting ammunition: {ammo['stacks']} stacks of {ammo['quantity_per_stack']} "
+                     f"{'Ilbi throwing stars' if value['class_id']=='night_lord' else 'ordinary bow arrows'} "
+                     f"({ammo['stacks'] * ammo['quantity_per_stack']} total).")
+    else:
+        lines.append('This fixture has no ammunition supply or ammunition requirement.')
     for skill in value['skills']:
         lines.append(f"  {skill['slot']} ({skill['code'][3:]}): {skill['name']} level {skill['level']} — {skill['description']}")
     lines += ['Both HP_POTION and MP_POTION consume the same finite Power Elixir supply.',

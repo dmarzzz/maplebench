@@ -59,6 +59,10 @@ class ToolkitTests(unittest.TestCase):
             self.assertEqual(adaptive.validate_protocol(protocol),protocol)
             self.assertEqual(sdk_scenario(protocol)['skill_toolkit'],p)
             text=adaptive.prompt(protocol)
+            self.assertIn(f"HP 12000/12000, MP {p['resources']['mp']}/{p['resources']['max_mp']}",text)
+            self.assertIn('100 shared Power Elixirs',text)
+            if p['resources']['ammunition']:
+                ammo=p['resources']['ammunition'];self.assertIn(f"{ammo['stacks']} stacks of {ammo['quantity_per_stack']}",text)
             for s in p['skills']:self.assertIn(s['description'],text)
             self.assertIn('same finite Power Elixir',text)
             for slot in SLOTS:
