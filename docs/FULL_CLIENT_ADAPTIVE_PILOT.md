@@ -131,3 +131,21 @@ unverified peak score and no ranked eligibility. Public curation is a separate
 adapter. Legacy trial schema 1 and ranked publication schema 2 retain their
 single-response evidence requirements. Synthetic tests do not establish live
 runtime acceptance or a successful five-minute API run.
+
+An expired keyboard request now creates one private `input-timeout.json` receipt
+before the relay clears its pending command, under the same condition lock. Its
+schema 1 records the owned run/command, validated keys and hold, request budget,
+dispatch time, request/dispatch/latest poll freshness and any matching ACK seen
+before that timeout snapshot. The bounded receipt is at most 4096 bytes and
+contains no raw observations, model text or arbitrary browser diagnostics.
+`dispatched: true` means selected for the browser response; it does not prove
+delivery or key-down. A missing matching ACK remains unknown, including any ACK
+arriving after the pending command has already cleared.
+
+This create-once diagnostic preserves `outcome: uncertain`, the original
+`endpoint_timeout`, and all existing admission, hold and ACK deadlines. It cannot
+accept an input, waive a capture failure or authorize a retry. Later timeouts
+never overwrite the first receipt. If storage fails, the original timeout still
+propagates and the controller records `inputTimeoutDiagnosticStatus: write_failed`.
+Private failure backups should retain this file alongside `input-failure.json`
+and `capture-failure.json`; it is not a public score or recording artifact.

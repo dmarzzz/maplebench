@@ -17,7 +17,7 @@ from pathlib import Path
 
 from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, validate_rpc
 from full_client_capture import capture_receipt
-from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, validate_contract as validate_native, program as native_program
+from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL, NATIVE_V4_PROTOCOL, validate_contract as validate_native, program as native_program
 from full_client_docker import DockerBindingError, validate_binding
 from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
 from full_client_adaptive import AdaptiveError, PROTOCOL as ADAPTIVE_PROTOCOL, run_adaptive, validate_protocol
@@ -245,6 +245,7 @@ class FullClientBridge:
         self.lock = threading.Condition()
         self.client = None
         self.last_seen = 0
+        self.last_input_poll = None
         self.fresh_until = 0
         self.observation = {'ready': False}
         self.pending = None
@@ -558,7 +559,85 @@ class FullClientBridge:
         try:os.fsync(directory)
         finally:os.close(directory)
 
-    def frame(self, body):
+    def _input_timeout(self, pending, now):
+        """Snapshot server facts before releasing the pending command; never an ACK."""
+        ident=pending.get('runId')
+        if (not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident)
+                or self.run.get('id')!=ident or self.run.get('client')!=pending.get('client')
+                or self.client!=pending.get('client') or not (self.output/ident).is_dir()):return 'owner_mismatch'
+        path=self.output/ident/'input-timeout.json'
+        if os.path.lexists(path):return 'existing'
+        bounded_ms=lambda value:round(value*1000) if math.isfinite(value) and -350<=value<=350 else None
+        relative=lambda value:bounded_ms(value-pending['requestedAt']) if value is not None else None
+        age_ms=lambda value:round(value,3) if type(value) in (int,float) and math.isfinite(value) and 0<=value<=350000 else None
+        def poll_value(poll):
+            return None if poll is None else {
+                'received_at_ms':poll['receivedAtMs'],'request_elapsed_ms':relative(poll['receivedAt']),
+                'elapsed_before_timeout_ms':bounded_ms(now-poll['receivedAt']),
+                'valid_frame':poll['validFrame'],'age_ms':age_ms(poll['ageMs']),
+                'render_age_ms':age_ms(poll['renderAgeMs'])}
+        ack=pending.get('lastMatchingAck')
+        value={'schema_version':1,'source':'bridge_input_timeout_diagnostic_unscored',
+            'outcome':'uncertain','dispatch_semantics':'selected_for_browser_response',
+            'run_id':ident,'command_id':pending['id'],'requested_at_ms':pending['requestedAtMs'],
+            'observed_at_ms':round(time.time()*1000),'keys':list(pending['keys']),
+            'duration_ms':pending['durationMs'],'dispatched':pending.get('sent') is True,
+            'request_budget_ms':relative(pending['deadline']),'elapsed_request_ms':relative(now),
+            'dispatch_elapsed_ms':relative(pending.get('sentAt')),
+            'remaining_ms':bounded_ms(pending['deadline']-now),
+            'request_poll':poll_value(pending.get('requestPoll')),
+            'dispatch_poll':poll_value(pending.get('dispatchPoll')),
+            'last_poll':poll_value(pending.get('lastPoll')),
+            'matching_ack':None if ack is None else {
+                'received_at_ms':ack['receivedAtMs'],'request_elapsed_ms':relative(ack['receivedAt']),
+                'ok':ack['ok'],'valid_frame':ack['validFrame'],
+                'enough_hold_time':ack['enoughTime'],'before_deadline':ack['beforeDeadline']}}
+        raw=(json.dumps(value,sort_keys=True,allow_nan=False)+'\n').encode()
+        if len(raw)>4096:raise ControlError('input_timeout_diagnostic_oversized')
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+        directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:os.fsync(directory)
+        finally:os.close(directory)
+        return 'saved'
+
+    def _acknowledge_only(self, body, obs, age, render_age, ack):
+        # A concurrent ordinary poll may carry an older frame. Never feed this
+        # expedited receipt into global observation/readiness/capture state.
+        with self.lock:
+            pending=self.pending;client=body['client']
+            if (ack is None or not pending or body.get('ackRunId')!=pending.get('runId')
+                    or self.run.get('id')!=pending.get('runId') or self.run.get('client')!=client
+                    or self.client!=client or client!=pending.get('client') or ack['id']!=pending['id']):
+                raise ControlError('input_ack_owner_mismatch')
+            self._check_cancelled(pending['runId'])
+            now=time.monotonic();received_ms=round(time.time()*1000)
+            valid=obs['ready'] and max(age,render_age)<1500
+            if self.run.get('readinessPolicy'):
+                clock=self.capture_clock;sent=body.get('clientSentAtMs')
+                proof=(clock is not None and self.run.get('captureClockAccepted')==clock['id']
+                    and body.get('captureClockAck')==clock['id']
+                    and body.get('captureClockReceivedAtMs')==self.capture_clock_received_ms
+                    and _number(self.capture_clock_received_ms) and _number(sent)
+                    and sent>=self.capture_clock_received_ms)
+                transit=received_ms-(sent+clock['server_sent_ms']-self.capture_clock_received_ms) if proof else -1
+                valid=valid and 0<=transit<=5000
+                if valid:age+=transit;render_age+=transit
+                valid=valid and max(age,render_age)<1500
+            if pending.get('sent') and 'ack' not in pending:
+                enough=now-pending['sentAt']>=pending['durationMs']/1000-0.001
+                pending['lastMatchingAck']={'receivedAt':now,'receivedAtMs':received_ms,
+                    'ok':ack['ok'],'validFrame':valid,'enoughTime':enough,
+                    'beforeDeadline':now<pending['deadline'],'clientTiming':ack.get('timing'),'transport':'urgent'}
+                self._input_failure(ack,valid,enough,now,received_ms,client)
+                if now<pending['deadline']:
+                    pending['ack']={'id':ack['id'],'ok':ack['ok'] and valid and enough}
+                    pending['ackObservation']=json.loads(json.dumps(obs)) | {'ageMs':age,'renderAgeMs':render_age}
+                    pending['ackObservedAt']=now
+                    self.lock.notify_all()
+            return {'command':None}
+
+    def frame(self, body, *, acknowledgement_only=False):
         if not isinstance(body, dict):
             raise ValueError('Invalid client frame')
         client = body.get('client')
@@ -574,9 +653,21 @@ class FullClientBridge:
                 or not isinstance(ack.get('id'), str) or not re.fullmatch('[a-f0-9]{32}', ack['id'])
                 or type(ack.get('ok')) is not bool):
             raise ControlError('invalid_input_acknowledgement')
+        if ack is not None and 'timing' in ack:
+            timing=ack['timing']
+            if (not isinstance(timing,dict) or set(timing)!={'schema_version','handler_started_monotonic_ms','keydown_after_ms','finished_after_ms','urgent_post_after_ms'}
+                    or timing['schema_version']!=1 or type(timing['schema_version']) is not int
+                    or type(timing['handler_started_monotonic_ms']) is not int or not 0<=timing['handler_started_monotonic_ms']<=2**53-1
+                    or any(type(timing[k]) is not int or not 0<=timing[k]<=350000 for k in ('finished_after_ms','urgent_post_after_ms'))
+                    or timing['finished_after_ms']>timing['urgent_post_after_ms']
+                    or timing['keydown_after_ms'] is not None and (type(timing['keydown_after_ms']) is not int
+                        or not 0<=timing['keydown_after_ms']<=timing['finished_after_ms'])):
+                raise ControlError('invalid_input_timing')
         if ack is not None and 'failure' in ack:
             if ack['ok']:raise ControlError('invalid_input_failure')
             input_failure(ack['failure'])
+        if acknowledgement_only:
+            return self._acknowledge_only(body,obs,age,render_age,ack)
         with self.lock:
             now = time.monotonic()
             server_received_ms=round(time.time()*1000)
@@ -658,15 +749,27 @@ class FullClientBridge:
                 self.frame_transit=None
             else:
                 self._record_readiness_frame(capture,server_received_ms,now)
+            # Only bounded scalar transport facts enter timeout evidence. The
+            # observation, character, HUD, and arbitrary ACK fields never do.
+            self.last_input_poll={'client':client,'runId':run_id,'receivedAt':now,
+                'receivedAtMs':server_received_ms,'validFrame':valid_frame,
+                'ageMs':age,'renderAgeMs':render_age}
+            if (self.pending and self.pending.get('runId')==run_id
+                    and self.run.get('client')==client):
+                self.pending['lastPoll']=dict(self.last_input_poll)
             if (not settled_history and self.run.get('id') and (self.output/self.run['id']).is_dir()
                     and self.run['status'] in ('completed','failed') and not self.run.get('captureTerminal')):
                 self.run['captureTerminal']={'id':uuid.uuid4().hex,'serverIssuedAtMs':server_received_ms}
                 write_json(self.output/self.run['id']/'capture-terminal.json',self.run['captureTerminal'])
             if (self.pending and ack is not None and ack['id'] == self.pending['id']
-                    and self.pending.get('sent')):
+                    and self.pending.get('sent') and 'ack' not in self.pending):
                 enough_time = now-self.pending['sentAt'] >= self.pending['durationMs']/1000 - 0.001
+                self.pending['lastMatchingAck']={'receivedAt':now,'receivedAtMs':server_received_ms,
+                    'ok':ack['ok'],'validFrame':valid_frame,'enoughTime':enough_time,
+                    'beforeDeadline':now<self.pending['deadline'],'clientTiming':ack.get('timing'),
+                    'transport':'urgent' if acknowledgement_only else 'poll'}
                 self._input_failure(ack,valid_frame,enough_time,now,server_received_ms,client)
-                if now < self.pending['deadline']:
+                if now < self.pending['deadline'] and 'ack' not in self.pending:
                     self.pending['ack'] = {'id':ack['id'], 'ok':ack['ok'] and valid_frame and enough_time}
                     self.lock.notify_all()
             if body.get('releaseAck') == self.run.get('id') and self._cancelled(self.run.get('id')):
@@ -677,11 +780,12 @@ class FullClientBridge:
                     write_json(self.output/self.run['id']/'controller.json',self.run)
             command = None
             dispatch_now = time.monotonic()
-            if (valid_frame and self.pending and not self._cancelled(self.pending.get('runId'))
+            if (not acknowledgement_only and valid_frame and self.pending and not self._cancelled(self.pending.get('runId'))
                     and not self.pending.get('sent')
                     and self.pending['deadline']-dispatch_now >= self.pending['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS):
                 self.pending['sent'] = True
                 self.pending['sentAt'] = dispatch_now
+                self.pending['dispatchPoll']=dict(self.pending['lastPoll']) if self.pending.get('lastPoll') else None
                 command = {k: self.pending[k] for k in ('id', 'keys', 'durationMs')}
                 command['runId'] = self.run.get('id')
                 # The browser subtracts the full request round trip, requiring
@@ -702,26 +806,45 @@ class FullClientBridge:
             if not url.endswith('/v1/action') or not isinstance(payload, dict) or payload.get('type') != 'press_keys':
                 raise ValueError('Only full-client keyboard actions are supported')
             _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},
-                SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL) else {}))
+                SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) else {}))
             if self.pending:
                 raise ValueError('Another input is in flight')
+            requested=time.monotonic()
             pending = {'id': uuid.uuid4().hex, 'keys': action['keys'], 'durationMs': action['durationMs'],
-                       'runId':run_id,
-                       'deadline': time.monotonic() + min(timeout, 3)}
+                       'runId':run_id,'client':self.run.get('client'),
+                       'requestedAt':requested,'requestedAtMs':round(time.time()*1000),
+                       'deadline': requested + min(timeout, 3)}
+            if (self.last_input_poll and self.last_input_poll['runId']==run_id
+                    and self.last_input_poll['client']==pending['client']):
+                pending['lastPoll']=dict(self.last_input_poll)
+                pending['requestPoll']=dict(self.last_input_poll)
             if input_deadline is not None:
                 pending['deadline']=min(pending['deadline'],input_deadline)
             self.pending = pending
             try:
                 while 'ack' not in pending:
                     self._check_cancelled(run_id)
-                    left = pending['deadline'] - time.monotonic()
+                    now=time.monotonic()
+                    left = pending['deadline'] - now
                     if left <= 0:
+                        try:diagnostic=self._input_timeout(pending,now)
+                        except (OSError,ValueError):diagnostic='write_failed'
+                        if self.run.get('id')==run_id:self.run['inputTimeoutDiagnosticStatus']=diagnostic
                         raise TimeoutError('Client did not acknowledge keyboard input')
                     self.lock.wait(left)
                 ack = pending['ack']
                 self._check_cancelled(run_id)
-                accepted = ack['ok'] and self.fresh()
-                return {'accepted': accepted, 'observation': self._snapshot() if self.fresh() else {'ready':False},
+                timing=pending.get('lastMatchingAck')
+                if 'ackObservation' in pending:
+                    elapsed=max(0,(time.monotonic()-pending['ackObservedAt'])*1000)
+                    observation=pending['ackObservation'] | {
+                        'ageMs':pending['ackObservation']['ageMs']+elapsed,
+                        'renderAgeMs':pending['ackObservation']['renderAgeMs']+elapsed}
+                    fresh=observation['ready'] and max(observation['ageMs'],observation['renderAgeMs'])<1500
+                else:
+                    fresh=self.fresh();observation=self._snapshot() if fresh else {'ready':False}
+                accepted = ack['ok'] and fresh
+                return {**({'inputTiming':timing} if timing and timing.get('clientTiming') else {}), 'accepted': accepted, 'observation': observation if fresh else {'ready':False},
                         'error': None if accepted else 'Client input was interrupted'}
             finally:
                 self.pending = None

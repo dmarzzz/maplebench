@@ -66,6 +66,18 @@ class FullClientServerTests(unittest.TestCase):
             'Origin':'http://localhost:9999','Content-Type':'application/json'})
         self.assertEqual(status,403)
 
+    def test_urgent_ack_route_validates_session_and_never_advances_session(self):
+        body=self.frame() | {'ackRunId':'b'*32,'ack':{'id':'a'*32,'ok':True}}
+        session=mock.Mock();self.module.SESSION=session
+        with mock.patch.object(self.module.BRIDGE,'frame',return_value={'command':None}) as frame:
+            status,raw=self.request('POST','/control/ack',json.dumps(body),{'Content-Type':'application/json'})
+            self.assertEqual(status,200)
+            frame.assert_called_once_with(body,acknowledgement_only=True)
+            session.validate_frame.assert_called_once_with(body)
+            session.frame.assert_not_called()
+        self.assertEqual(self.request('POST','/control/ack',json.dumps(body),
+            {'Content-Type':'application/json','Origin':'https://attacker.example'})[0],403)
+
     def test_controller_loads_encoder_module_from_same_origin(self):
         status,body=self.request('GET','/web/index.html')
         self.assertEqual(status,200)

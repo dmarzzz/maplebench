@@ -184,7 +184,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self.trusted_request():
             return
-        if self.path in {'/control/frame', '/control/start'}:
+        if self.path in {'/control/frame', '/control/ack', '/control/start'}:
             try:
                 if self.headers.get_content_type() != 'application/json':
                     self.send_error(415); return
@@ -196,11 +196,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if not isinstance(body, dict): raise ValueError('Invalid request')
                 if self.path == '/control/start' and self.headers.get('Origin') and not body.get('client'):
                     raise ValueError('Missing renderer owner')
-                if self.path == '/control/frame':
+                if self.path in {'/control/frame','/control/ack'}:
                     with BRIDGE.lock:
                         if SESSION is not None: SESSION.validate_frame(body)
-                        value = BRIDGE.frame(body)
-                        if SESSION is not None: value.update(SESSION.frame(body))
+                        value = BRIDGE.frame(body, acknowledgement_only=True) if self.path == '/control/ack' else BRIDGE.frame(body)
+                        if SESSION is not None and self.path == '/control/frame': value.update(SESSION.frame(body))
                 else:
                     value = BRIDGE.start(body.get('mode'),body.get('model'),body.get('durationSeconds',22),client=body.get('client'))
                 self.json_response(value)
