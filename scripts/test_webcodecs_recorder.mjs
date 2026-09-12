@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {PostRenderRecorder,muxWebM,LIMITS} from '../ui/full-client/webcodecs-recorder.js';
+import {PostRenderRecorder,muxWebM,LIMITS,LONG_ENCODED_FRAME_POLICY} from '../ui/full-client/webcodecs-recorder.js';
 
 function harness(behavior={}){
   let time=1000,wallDelta=0;const calls=[],instances=[],frames=[],readbacks=[];
@@ -222,4 +222,15 @@ test('muxer refuses gaps, nonzero origin, nonintegral ticks and missing first ke
   for(const frames of [[{...first,timestamp:1000},first],[first,{...first,timestamp:2000}],
     [{...first,duration:1500},first],[{...first,key:false},{...first,timestamp:1000}]])
     assert.throws(()=>muxWebM({width:32,height:24,frames,ledgerBytes:new Uint8Array()}),/invalid_mux_frame/);
+});
+
+test('explicit1800 policy supports finite full-duration mux while legacy refuses',()=>{
+  const canvas={width:32,height:24};
+  assert.throws(()=>new PostRenderRecorder(canvas,{maxDurationMs:1835000}),/invalid_capture_limit/);
+  assert.doesNotThrow(()=>new PostRenderRecorder(canvas,{policy:LONG_ENCODED_FRAME_POLICY,maxDurationMs:1835000}));
+  assert.throws(()=>new PostRenderRecorder(canvas,{policy:{...LONG_ENCODED_FRAME_POLICY,max_frames:120001}}),/invalid_capture_policy/);
+  const frames=Array.from({length:1800},(_,i)=>({timestamp:i*1000000,duration:1000000,key:true,data:new Uint8Array([16,0,0])}));
+  assert.throws(()=>muxWebM({width:32,height:24,frames,ledgerBytes:new Uint8Array()}),/capture_byte_or_duration_limit/);
+  const blob=muxWebM({width:32,height:24,frames,ledgerBytes:new Uint8Array(),policy:LONG_ENCODED_FRAME_POLICY});
+  assert.ok(blob.size>0&&blob.size<LONG_ENCODED_FRAME_POLICY.max_webm_bytes);
 });
