@@ -1038,7 +1038,7 @@ class RuntimeTests(unittest.TestCase):
     def web_fixture(self):
         script = self.root / "repo/scripts/serve-full-client.py"
         client = self.root / "client"
-        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
+        required = [script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_skill_toolkit.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
                     *(self.root / "repo/ui/full-client" / name for name in ("controller.js", "webcodecs-recorder.js", "waiting.html")),
                     *(client / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))]
         for path in required:
@@ -1093,6 +1093,21 @@ class RuntimeTests(unittest.TestCase):
                                               if not ref['path'].endswith('/webcodecs-recorder.js')]
         with self.assertRaisesRegex(runtime.RuntimeErrorCode,'serving_sources_not_frozen'):
             self.backend.web_identity({'MainPID':'123','User':'synthetic'})
+
+    def test_skill_module_is_frozen_for_legacy_serving_and_requires_process_restart(self):
+        self.web_fixture()
+        path=Path(self.backend.config['web_script']).parent/'full_client_skill_toolkit.py'
+        # The dependency is imported even without an opt-in toolkit scenario.
+        self.backend.manifest['extra_files']=[ref for ref in self.backend.manifest['extra_files']
+                                             if Path(ref['path'])!=path]
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode,'serving_sources_not_frozen'):
+            self.backend.web_identity({'MainPID':'123','User':'synthetic'})
+        self.host.proc.assert_not_called()
+        self.backend.manifest['extra_files'].append({'path':str(path),'sha256':'1'*64})
+        future=runtime.time.time()+20;os.utime(path,(future,future))
+        with patch.object(runtime.pwd,'getpwnam',return_value=MagicMock(pw_uid=1234)):
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode,'web_process_predates_frozen_sources'):
+                self.backend.web_identity({'MainPID':'123','User':'synthetic'})
 
     def test_container_dispatcher_cannot_be_omitted_from_frozen_runtime(self):
         self.web_fixture()

@@ -30,7 +30,7 @@ CONTROL_FILES = {'native_result': 'result.json', 'native_program': 'program.js',
     'recording': 'recording.json'}
 CLASS_JOBS = {'hero': 112, 'bowmaster': 312, 'ice_lightning_arch_mage': 222, 'night_lord': 412}
 FROZEN_MODULES = ('full_client_native_xp_runtime', 'full_client_native_xp_acceptance',
-    'full_client_xp_windows', 'full_client_native', 'full_client_runtime', 'full_client_publish',
+    'full_client_xp_windows', 'full_client_native', 'full_client_skill_toolkit', 'full_client_runtime', 'full_client_publish',
     'full_client_capture', 'full_client_score', 'full_client_collect', 'full_client_freeze',
     'full_client_docker', 'full_client_readiness', 'full_client_trial')
 FAILURE_CODES = frozenset('''native_xp_baseline_mismatch native_xp_candidate_manifest_required
@@ -111,7 +111,7 @@ class NativeXpRuntime(CosmicRuntime):
                 and all(candidate[k] == self.manifest['server_jar'][k] for k in candidate),
                 'native_xp_candidate_manifest_required')
         refs = {ref['path']: ref for ref in self.manifest.get('extra_files', [])}
-        for name in FROZEN_MODULES + (('full_client_skill_toolkit', 'full_client_native_xp_inventory',
+        for name in FROZEN_MODULES + (('full_client_native_xp_inventory',
                 'full_client_toolkit_fixture') if 'skill_toolkit' in self.native else ()):
             path = str(Path(importlib.import_module(name).__file__).resolve())
             require(path in refs, 'native_xp_executor_sources_not_frozen')

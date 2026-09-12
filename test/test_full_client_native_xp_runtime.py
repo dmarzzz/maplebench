@@ -146,6 +146,16 @@ class ExecutorTests(unittest.TestCase):
             self.backend.load_pins()
         self.host.admin.assert_not_called()
 
+    def test_legacy_native_owner_still_requires_unconditionally_imported_skill_source(self):
+        manifest=self.pin_fixture()
+        self.assertNotIn('skill_toolkit',self.backend.native)
+        manifest['extra_files']=[ref for ref in manifest['extra_files']
+                                 if Path(ref['path']).name!='full_client_skill_toolkit.py']
+        self.fixture.ref('runtime_manifest',manifest)
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode,'executor_sources_not_frozen'):
+            self.backend.load_pins()
+        self.host.admin.assert_not_called()
+
     def test_start_and_login_keep_the_cleanup_deadline_reserved(self):
         end = self.host.deadline
         for method, name, maximum in ((self.backend.login, 'login', 60),
