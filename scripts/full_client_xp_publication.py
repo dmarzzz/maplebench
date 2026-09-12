@@ -12,7 +12,7 @@ import hashlib
 from pathlib import Path
 import re
 
-from full_client_adaptive import PROTOCOL as ADAPTIVE, FULL_HORIZON_POLICY
+from full_client_adaptive import PROTOCOL as ADAPTIVE, FULL_HORIZON_POLICY, FINAL_SLOT_POLICY
 from full_client_adaptive_evidence import verify_result
 from full_client_adaptive_publication import public_cycles, playback_cue
 from full_client_score import (EvidenceError, read_artifact_bytes,
@@ -100,7 +100,7 @@ def _verify_attempt(root, context):
     result = read_json_artifact(root, refs, 'result')
     runtime = read_json_artifact(root, refs, 'runtime_manifest')
     protocol = scenario['adaptive_protocol']
-    require(same_json(protocol.get('horizon_policy'), FULL_HORIZON_POLICY)
+    require(any(same_json(protocol.get('horizon_policy'), p) for p in (FULL_HORIZON_POLICY, FINAL_SLOT_POLICY))
             and same_json(scenario.get('trial_budgets'), request['budgets'])
             and refs['runtime_manifest']['sha256'] == context['runtime_manifest_sha256']
             and runtime.get('schema_version') == 2 and type(runtime['schema_version']) is int

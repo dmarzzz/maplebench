@@ -17,9 +17,10 @@ import tempfile
 
 from full_client_dashboard import Reader, RUN, SHA, model, number, project_attempt
 from full_client_gallery import copy_recording, directory
-from full_client_publication import (ADAPTIVE_PROTOCOL, ASSETS, MAX_ADAPTIVE_VIDEO,
+from full_client_publication import (ADAPTIVE_PROTOCOL, XP_PROTOCOL, ASSETS, MAX_ADAPTIVE_VIDEO,
     digest, encoded, require, stable_bytes, stable_fingerprint, verify_package, write_new)
 from full_client_adaptive_publication import VERIFIED
+from full_client_xp_cohort import VERIFIED as XP_VERIFIED, checked_public as checked_native_public
 from full_client_research import summarize, TASKS
 from full_client_score import same_json
 from full_client_trial import publish_attempt
@@ -28,7 +29,8 @@ from maple_agent import MODELS
 
 CLASSES={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage','night_lord':'Night Lord'}
 ROW_FIELDS=set(project_attempt(Reader(),'0'*32,None,None,{},None,0,'/recordings/'))|{
-    'controller_status','live','renderer_fresh','protocol_id','adaptive','sdk_calls','research','recording_publication'}
+    'controller_status','live','renderer_fresh','protocol_id','adaptive','sdk_calls','research','recording_publication',
+    'authoritative_peak_xp_per_minute','native_xp'}
 SNAPSHOT_FIELDS={'schema_version','generated_at_ms','source','verification','live_status_available','ranked',
     'recording_prefix','truncated','attempts','comparisons','featured_run_id','cohort','research_matrix'}
 
@@ -65,7 +67,8 @@ def public_snapshot(snapshot,*,adaptive):
     rows=snapshot['attempts'];ids=[]
     for row in rows:
         require(isinstance(row,dict) and set(row)<=ROW_FIELDS and RUN.fullmatch(str(row.get('id','')))
-            and row.get('ranked') is False and row.get('publication_eligible') is False,'catalog_public_row')
+            and row.get('ranked') is False and (row.get('publication_eligible') is False
+                or (row.get('protocol_id')==XP_PROTOCOL and row.get('publication_eligible') is True)), 'catalog_public_row')
         safe_public(row);ids.append(row['id'])
         if adaptive:
             require(row.get('kind')=='trial' and row.get('mode')=='api'
@@ -83,6 +86,8 @@ def public_snapshot(snapshot,*,adaptive):
 
 
 def verified(row):
+    if row.get('protocol_id')==XP_PROTOCOL:
+        return checked_native_public(row)
     return (row.get('status')=='completed' and row.get('score_verification')==VERIFIED
         and row.get('attribution')=='exact' and row.get('returned_model')==row.get('requested_model')
         and number(row.get('persisted_xp'),-2**53+1)
@@ -97,23 +102,26 @@ def cohort(package,expected):
     content=manifest['content'];site=directory(Path(package)/'site')
     require(set(content)=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
         and type(content['schema_version']) is int and content['schema_version']==1
-        and content['protocol']==ADAPTIVE_PROTOCOL and content['archive_replacement'] is False
+        and content['protocol'] in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) and content['archive_replacement'] is False
         and SHA.fullmatch(str(content['plan_sha256']))
         and content['target_path']=='/cohorts/'+content['plan_sha256'][:16]+'/','catalog_nested_adaptive_package_required')
+    protocol=content['protocol'];verifier=XP_VERIFIED if protocol==XP_PROTOCOL else VERIFIED
     snapshot=Reader().json(site,'results.json');rows=public_snapshot(snapshot,adaptive=True)
-    require(snapshot.get('source')=='full_client_private_receipt_projection' and snapshot.get('verification')==VERIFIED
+    require(snapshot.get('source')=='full_client_private_receipt_projection' and snapshot.get('verification')==verifier
         and len(rows)==4 and {r['requested_model'] for r in rows}==set(MODELS),'catalog_all_four_models_required')
     metadata=[r.get('research') for r in rows]
     require(all(isinstance(m,dict) and set(m)=={'protocol_id','class_id','task_id','fixture_fingerprint','planned'}
-        and m['protocol_id']==ADAPTIVE_PROTOCOL and m['class_id'] in CLASSES and m['task_id'] in TASKS
+        and m['protocol_id']==protocol and m['class_id'] in CLASSES and m['task_id'] in TASKS
         and SHA.fullmatch(str(m['fixture_fingerprint'])) and m['planned'] is True for m in metadata)
         and all(same_json(metadata[0],m) for m in metadata),'catalog_fixture_separation_required')
     for row in rows:
-        if row.get('score_verification')==VERIFIED:
-            require(verified(row) and row.get('protocol_id')==ADAPTIVE_PROTOCOL
+        if row.get('score_verification')==verifier:
+            require(verified(row) and row.get('protocol_id')==protocol
                 and row['adaptive'].get('class_profile',{}).get('class_name')==CLASSES[metadata[0]['class_id']]
                 and SHA.fullmatch(str(row.get('comparison_group'))),'catalog_verified_row_inconsistent')
-        else:require(row.get('persisted_xp') is None and row.get('comparison_group') is None,'catalog_unverified_score')
+        else:require(row.get('persisted_xp') is None and row.get('comparison_group') is None
+            and row.get('authoritative_peak_xp_per_minute') is None
+            and row.get('publication_eligible') is False,'catalog_unverified_score')
     videos=Reader().json(site,'recording-manifest.json')
     require(set(videos)=={'schema_version','entries'} and type(videos['schema_version']) is int and videos['schema_version']==1
         and isinstance(videos['entries'],list),'catalog_recording_manifest')

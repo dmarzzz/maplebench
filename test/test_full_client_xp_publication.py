@@ -39,9 +39,9 @@ class NativePublicationTests(unittest.TestCase):
         ref = self.h.raw(name + suffix, content); self.refs[name] = ref
         return ref
 
-    def make(self, *, progression=False, final_level=180, final_exp=4500, initial_exp=0, normalization=None, transitions=None, frame_policy=False):
+    def make(self, *, progression=False, final_level=180, final_exp=4500, initial_exp=0, normalization=None, transitions=None, frame_policy=False, horizon=None):
         self.h = Harness(self.root, calls=12)
-        self.h.p['horizon_policy'] = copy.deepcopy(adaptive.FULL_HORIZON_POLICY)
+        self.h.p['horizon_policy'] = copy.deepcopy(horizon or adaptive.FULL_HORIZON_POLICY)
         if frame_policy:
             self.h.p['capture_duration_policy'] = copy.deepcopy(CAPTURE_DURATION_POLICY)
         ordinary_observation = self.h.observation
@@ -188,6 +188,14 @@ class NativePublicationTests(unittest.TestCase):
         self.assertEqual(value['persisted_net_xp'], 1000000000)
         self.assertEqual(value['authoritative_peak_xp_per_minute'], 4000000000)
         with self.assertRaises(ValueError): verified_adaptive_score(Reader(), self.root, self.journal)
+
+    def test_final_slot_keeps_twenty_native_windows_and_exact_controller_receipts(self):
+        self.make(horizon=adaptive.FINAL_SLOT_POLICY)
+        value = self.project(strict=True)
+        self.assertEqual(value['complete_windows'], 20)
+        self.assertEqual(value['authoritative_peak_xp_per_minute'], 18000)
+        self.assertEqual(value['adaptive']['horizon_policy'], adaptive.FINAL_SLOT_POLICY)
+        self.assertFalse(value['publication_eligible'])
 
     def test_zero_is_only_published_with_complete_evidence(self):
         self.make(final_exp=0, transitions=[])
