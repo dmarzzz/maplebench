@@ -114,21 +114,24 @@ ability, party coordination, or broad intelligence. Those require separate tasks
 
 ## Implementation and documentation follow-through
 
-The current full-client evidence path verifies initial/final persisted net XP;
-it cannot reconstruct authoritative 15-second peaks. Historical short trials and
-one-response programs do not establish the proposed 30-minute adaptive protocol.
+The published full-client pilots verify initial/final persisted net XP; those
+saved endpoints cannot reconstruct authoritative 15-second peaks. Historical
+short trials and five-minute adaptive pilots do not establish the proposed
+30-minute protocol. Opt-in native ledger, window scoring, longer controller and
+publication implementations now exist in source; actual runtime qualification
+remains necessary. See [native score delivery](FULL_CLIENT_NATIVE_XP_DELIVERY.md)
+and [long-horizon control](FULL_CLIENT_LONG_HORIZON.md).
 See [class benchmark design](CLASS_BENCHMARK_DESIGN.md) and
 [full-client experiments](FULL_CLIENT_EXPERIMENTS.md) for existing constraints.
 
-Before publishing this protocol, implement and validate timestamped XP accounting,
+Before publishing this protocol, validate timestamped XP accounting on the actual runtime,
 level transitions, window scoring, the full wall-clock deadline, and repeated
 observation/action cycles. Freeze the scenario suite and failure rules. Preserve
 historical results under their original protocol labels.
 
-The later README and design-document revision should adopt this central question,
-replace conflicting prospective scoring proposals, and clearly separate intended
-design from implemented and verified capabilities. This framing document alone
-does not claim those implementation steps are complete.
+The README now adopts this central question and distinguishes historical scores,
+source implementation and live acceptance. This framing document alone does not
+claim that runtime qualification or repeated comparisons are complete.
 
 ## RuneBench sources
 

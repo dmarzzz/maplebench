@@ -21,6 +21,7 @@ from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, 
 from full_client_docker import DockerBindingError, validate_binding
 from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
 from full_client_adaptive import AdaptiveError, PROTOCOL as ADAPTIVE_PROTOCOL, run_adaptive, validate_protocol
+from full_client_skill_toolkit import sdk_scenario
 
 
 class ControlError(ValueError):
@@ -131,20 +132,40 @@ def capture_failure(value):
     if (not isinstance(value,dict) or set(value)!=fields or type(value['schema_version']) is not int
             or value['schema_version']!=1 or not isinstance(value['run_id'],str)
             or not re.fullmatch('[a-f0-9]{32}',value['run_id'])
-            or value['policy_id']!='post-render-encoded-frame-v1' or not isinstance(value['code'],str) or value['code'] not in CAPTURE_FAILURE_CODES
+            or value['policy_id'] not in ('post-render-encoded-frame-v1','post-render-encoded-frame-1800-v1') or not isinstance(value['code'],str) or value['code'] not in CAPTURE_FAILURE_CODES
             or value['clock_origin'] not in ('encoder_start','capture_request')):
         raise ControlError('invalid_capture_failure')
-    if not (type(value['elapsed_ms']) is int and 0<=value['elapsed_ms']<=350000):
+    if not (type(value['elapsed_ms']) is int and 0<=value['elapsed_ms']<=(1850000 if value['policy_id']=='post-render-encoded-frame-1800-v1' else 350000)):
         raise ControlError('invalid_capture_failure')
     for key in ('first_frame_offset_ms','last_frame_offset_ms'):
         if value[key] is not None and not (type(value[key]) is int and 0<=value[key]<=value['elapsed_ms']):
             raise ControlError('invalid_capture_failure')
-    if any(type(value[k]) is not int or not 0<=value[k]<=20000
+    if any(type(value[k]) is not int or not 0<=value[k]<=(120000 if value['policy_id']=='post-render-encoded-frame-1800-v1' else 20000)
            for k in ('rendered_frames','submitted_frames','encoded_frames')):
         raise ControlError('invalid_capture_failure')
     if not value['encoded_frames']<=value['submitted_frames']<=value['rendered_frames']:
         raise ControlError('invalid_capture_failure')
     return dict(value)
+
+
+ADAPTIVE_JSON_LIMIT = 16 * 1024 * 1024
+
+
+def adaptive_json_bytes(value):
+    raw = json.dumps(value, allow_nan=False, separators=(',', ':')).encode() + b'\n'
+    if len(raw) > ADAPTIVE_JSON_LIMIT:
+        raise ControlError('adaptive_artifact_byte_limit')
+    return raw
+
+
+def write_adaptive_final(folder, result, publication):
+    # Check both complete envelopes before publishing either success artifact.
+    # SDK steps appear in both the trace and program; their aggregate byte counter
+    # is not a bound on the actual serialized result size.
+    result_raw = adaptive_json_bytes(result)
+    publication_raw = adaptive_json_bytes(publication)
+    write_bytes(folder/'result.json', result_raw)
+    write_bytes(folder/'publication.json', publication_raw)
 
 
 def write_json(path, value):
@@ -517,7 +538,7 @@ class FullClientBridge:
         if value['run_id']!=self.run.get('id'):return
         owner=self.run.get('nativeAcceptance') or self.run.get('adaptiveProtocol') or {}
         if (self.run.get('client')!=client or owner.get('capture_duration_policy',{}).get('id')
-                !='post-render-encoded-frame-v1'):
+                !=value['policy_id']):
             raise ControlError('capture_failure_owner_mismatch')
         path=self.output/value['run_id']/'capture-failure.json'
         if path.is_file():
@@ -601,7 +622,43 @@ class FullClientBridge:
         finally:os.close(directory)
         return 'saved'
 
-    def frame(self, body):
+    def _acknowledge_only(self, body, obs, age, render_age, ack):
+        # A concurrent ordinary poll may carry an older frame. Never feed this
+        # expedited receipt into global observation/readiness/capture state.
+        with self.lock:
+            pending=self.pending;client=body['client']
+            if (ack is None or not pending or body.get('ackRunId')!=pending.get('runId')
+                    or self.run.get('id')!=pending.get('runId') or self.run.get('client')!=client
+                    or self.client!=client or client!=pending.get('client') or ack['id']!=pending['id']):
+                raise ControlError('input_ack_owner_mismatch')
+            self._check_cancelled(pending['runId'])
+            now=time.monotonic();received_ms=round(time.time()*1000)
+            valid=obs['ready'] and max(age,render_age)<1500
+            if self.run.get('readinessPolicy'):
+                clock=self.capture_clock;sent=body.get('clientSentAtMs')
+                proof=(clock is not None and self.run.get('captureClockAccepted')==clock['id']
+                    and body.get('captureClockAck')==clock['id']
+                    and body.get('captureClockReceivedAtMs')==self.capture_clock_received_ms
+                    and _number(self.capture_clock_received_ms) and _number(sent)
+                    and sent>=self.capture_clock_received_ms)
+                transit=received_ms-(sent+clock['server_sent_ms']-self.capture_clock_received_ms) if proof else -1
+                valid=valid and 0<=transit<=5000
+                if valid:age+=transit;render_age+=transit
+                valid=valid and max(age,render_age)<1500
+            if pending.get('sent') and 'ack' not in pending:
+                enough=now-pending['sentAt']>=pending['durationMs']/1000-0.001
+                pending['lastMatchingAck']={'receivedAt':now,'receivedAtMs':received_ms,
+                    'ok':ack['ok'],'validFrame':valid,'enoughTime':enough,
+                    'beforeDeadline':now<pending['deadline'],'clientTiming':ack.get('timing'),'transport':'urgent'}
+                self._input_failure(ack,valid,enough,now,received_ms,client)
+                if now<pending['deadline']:
+                    pending['ack']={'id':ack['id'],'ok':ack['ok'] and valid and enough}
+                    pending['ackObservation']=json.loads(json.dumps(obs)) | {'ageMs':age,'renderAgeMs':render_age}
+                    pending['ackObservedAt']=now
+                    self.lock.notify_all()
+            return {'command':None}
+
+    def frame(self, body, *, acknowledgement_only=False):
         if not isinstance(body, dict):
             raise ValueError('Invalid client frame')
         client = body.get('client')
@@ -617,9 +674,21 @@ class FullClientBridge:
                 or not isinstance(ack.get('id'), str) or not re.fullmatch('[a-f0-9]{32}', ack['id'])
                 or type(ack.get('ok')) is not bool):
             raise ControlError('invalid_input_acknowledgement')
+        if ack is not None and 'timing' in ack:
+            timing=ack['timing']
+            if (not isinstance(timing,dict) or set(timing)!={'schema_version','handler_started_monotonic_ms','keydown_after_ms','finished_after_ms','urgent_post_after_ms'}
+                    or timing['schema_version']!=1 or type(timing['schema_version']) is not int
+                    or type(timing['handler_started_monotonic_ms']) is not int or not 0<=timing['handler_started_monotonic_ms']<=2**53-1
+                    or any(type(timing[k]) is not int or not 0<=timing[k]<=350000 for k in ('finished_after_ms','urgent_post_after_ms'))
+                    or timing['finished_after_ms']>timing['urgent_post_after_ms']
+                    or timing['keydown_after_ms'] is not None and (type(timing['keydown_after_ms']) is not int
+                        or not 0<=timing['keydown_after_ms']<=timing['finished_after_ms'])):
+                raise ControlError('invalid_input_timing')
         if ack is not None and 'failure' in ack:
             if ack['ok']:raise ControlError('invalid_input_failure')
             input_failure(ack['failure'])
+        if acknowledgement_only:
+            return self._acknowledge_only(body,obs,age,render_age,ack)
         with self.lock:
             now = time.monotonic()
             server_received_ms=round(time.time()*1000)
@@ -652,7 +721,7 @@ class FullClientBridge:
             capture=body.get('capture')
             self.run['captureReady']=bool(not settled_history and self.run.get('id') and valid_frame and isinstance(capture,dict)
                 and capture.get('runId')==self.run.get('id') and capture.get('started') is True
-                and type(capture.get('renderedFrames')) is int and 0<capture['renderedFrames']<=100000
+                and type(capture.get('renderedFrames')) is int and 0<capture['renderedFrames']<=(120000 if self.run.get('adaptiveProtocol',{}).get('wall_seconds')==1800 else 100000)
                 and capture.get('interrupted') is False and body.get('captureState')=='recording')
             if self.run['captureReady'] and not self.run.get('captureReadyAtMs'):
                 self.run['captureReadyAtMs']=server_received_ms
@@ -714,13 +783,14 @@ class FullClientBridge:
                 self.run['captureTerminal']={'id':uuid.uuid4().hex,'serverIssuedAtMs':server_received_ms}
                 write_json(self.output/self.run['id']/'capture-terminal.json',self.run['captureTerminal'])
             if (self.pending and ack is not None and ack['id'] == self.pending['id']
-                    and self.pending.get('sent')):
+                    and self.pending.get('sent') and 'ack' not in self.pending):
                 enough_time = now-self.pending['sentAt'] >= self.pending['durationMs']/1000 - 0.001
                 self.pending['lastMatchingAck']={'receivedAt':now,'receivedAtMs':server_received_ms,
                     'ok':ack['ok'],'validFrame':valid_frame,'enoughTime':enough_time,
-                    'beforeDeadline':now<self.pending['deadline']}
+                    'beforeDeadline':now<self.pending['deadline'],'clientTiming':ack.get('timing'),
+                    'transport':'urgent' if acknowledgement_only else 'poll'}
                 self._input_failure(ack,valid_frame,enough_time,now,server_received_ms,client)
-                if now < self.pending['deadline']:
+                if now < self.pending['deadline'] and 'ack' not in self.pending:
                     self.pending['ack'] = {'id':ack['id'], 'ok':ack['ok'] and valid_frame and enough_time}
                     self.lock.notify_all()
             if body.get('releaseAck') == self.run.get('id') and self._cancelled(self.run.get('id')):
@@ -731,7 +801,7 @@ class FullClientBridge:
                     write_json(self.output/self.run['id']/'controller.json',self.run)
             command = None
             dispatch_now = time.monotonic()
-            if (valid_frame and self.pending and not self._cancelled(self.pending.get('runId'))
+            if (not acknowledgement_only and valid_frame and self.pending and not self._cancelled(self.pending.get('runId'))
                     and not self.pending.get('sent')
                     and self.pending['deadline']-dispatch_now >= self.pending['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS):
                 self.pending['sent'] = True
@@ -757,7 +827,10 @@ class FullClientBridge:
             if not url.endswith('/v1/action') or not isinstance(payload, dict) or payload.get('type') != 'press_keys':
                 raise ValueError('Only full-client keyboard actions are supported')
             _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},
-                SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) else {}))
+                SCENARIO | (sdk_scenario(self.run['nativeAcceptance']) if self.run.get('nativeAcceptance')
+                    else sdk_scenario(self.run['adaptiveProtocol']) if self.run.get('adaptiveProtocol')
+                    else sdk_scenario(self.run['previewProtocol']) if self.run.get('previewProtocol')
+                    else {'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) else {}))
             if self.pending:
                 raise ValueError('Another input is in flight')
             requested=time.monotonic()
@@ -785,8 +858,17 @@ class FullClientBridge:
                     self.lock.wait(left)
                 ack = pending['ack']
                 self._check_cancelled(run_id)
-                accepted = ack['ok'] and self.fresh()
-                return {'accepted': accepted, 'observation': self._snapshot() if self.fresh() else {'ready':False},
+                timing=pending.get('lastMatchingAck')
+                if 'ackObservation' in pending:
+                    elapsed=max(0,(time.monotonic()-pending['ackObservedAt'])*1000)
+                    observation=pending['ackObservation'] | {
+                        'ageMs':pending['ackObservation']['ageMs']+elapsed,
+                        'renderAgeMs':pending['ackObservation']['renderAgeMs']+elapsed}
+                    fresh=observation['ready'] and max(observation['ageMs'],observation['renderAgeMs'])<1500
+                else:
+                    fresh=self.fresh();observation=self._snapshot() if fresh else {'ready':False}
+                accepted = ack['ok'] and fresh
+                return {**({'inputTiming':timing} if timing and timing.get('clientTiming') else {}), 'accepted': accepted, 'observation': observation if fresh else {'ready':False},
                         'error': None if accepted else 'Client input was interrupted'}
             finally:
                 self.pending = None
@@ -805,6 +887,15 @@ class FullClientBridge:
                     'fresh':self.fresh(), 'rendererConnected':self.client is not None and time.monotonic()-self.last_seen < 3,
                     'browserReleasePending':self._cancelled(self.run.get('id')) and self.run.get('id') not in self.release_acks,
                     'frameAgeMs':max(0,round((time.monotonic()-self.last_seen)*1000)) if self.client else None}
+
+    def recording_upload_limits(self, run_id, client):
+        with self.lock:
+            owner=self.recording_owner(run_id,client)
+            protocol=owner.get('adaptiveProtocol')
+            if protocol is not None:
+                protocol=validate_protocol(protocol)
+                if protocol['wall_seconds']==1800:return 600*1024*1024,180
+            return 100*1024*1024,60
 
     def recording_owner(self, run_id, client=None):
         if not isinstance(run_id, str) or not re.fullmatch('[a-f0-9]{32}', run_id):
@@ -911,14 +1002,14 @@ class FullClientBridge:
 
     def start(self, mode, model=None, duration_seconds=22, *, client=None, run_id=None, request_id=None,
               total_token_limit=None, trial_context=None, docker_image_id=None, docker_binding=None,
-              readiness_policy=None, adaptive_protocol=None, native_acceptance=None, lease_fds=(), private=False):
+              readiness_policy=None, adaptive_protocol=None, preview_protocol=None, native_acceptance=None, lease_fds=(), private=False):
         if mode not in ('script', 'api') or (mode == 'api' and model not in MODELS):
             raise ValueError('Invalid controller selection')
         if native_acceptance is not None:
             try:native_acceptance=validate_native(native_acceptance)
             except (ValueError,TypeError) as error:raise ControlError('invalid_native_acceptance') from None
-            if (not private or mode!='script' or model is not None or duration_seconds!=30
-                    or adaptive_protocol is not None or trial_context is not None or readiness_policy is not None
+            if (not private or mode!='script' or model is not None or duration_seconds!=native_acceptance['wall_seconds']
+                    or adaptive_protocol is not None or preview_protocol is not None or trial_context is not None or readiness_policy is not None
                     or total_token_limit is not None or run_id is None or run_id!=request_id
                     or docker_binding is None or docker_image_id is None
                     or not isinstance(lease_fds,(tuple,list)) or len(lease_fds)!=2
@@ -927,9 +1018,20 @@ class FullClientBridge:
         if adaptive_protocol is not None:
             try:adaptive_protocol=validate_protocol(adaptive_protocol)
             except AdaptiveError as error:raise ControlError(str(error)) from None
-            if mode!='api' or duration_seconds!=300 or total_token_limit!=adaptive_protocol['max_total_tokens']:
+            if mode!='api' or preview_protocol is not None or duration_seconds!=adaptive_protocol['wall_seconds'] or total_token_limit!=adaptive_protocol['max_total_tokens']:
                 raise ControlError('adaptive_controller_budget_mismatch')
-        if type(duration_seconds) is not int or duration_seconds not in ((30,) if native_acceptance is not None else (300,) if adaptive_protocol is not None else (22, 60)):
+        if preview_protocol is not None:
+            from full_client_skill_preview import validate_protocol as validate_preview
+            try:preview_protocol=validate_preview(preview_protocol)
+            except ValueError:raise ControlError('invalid_skill_preview_protocol') from None
+            if (not private or mode!='api' or native_acceptance is not None or adaptive_protocol is not None
+                    or duration_seconds!=preview_protocol['program_seconds']
+                    or total_token_limit!=preview_protocol['max_total_tokens']
+                    or not isinstance(trial_context,dict) or readiness_policy is None):
+                raise ControlError('skill_preview_private_contract_required')
+            if trial_context.get('baseline_sha256')!=preview_protocol['baseline_sha256']:
+                raise ControlError('skill_preview_baseline_mismatch')
+        if type(duration_seconds) is not int or duration_seconds not in ((native_acceptance['wall_seconds'],) if native_acceptance is not None else (adaptive_protocol['wall_seconds'],) if adaptive_protocol is not None else (22, 60)):
             raise ValueError('Run duration must be 22 or 60 seconds')
         if mode == 'script' and native_acceptance is None and duration_seconds != 22:
             raise ValueError('Scripted smoke runs last at most 22 seconds')
@@ -974,6 +1076,8 @@ class FullClientBridge:
             identity['readinessPolicy'] = readiness_policy
         if adaptive_protocol is not None:
             identity['adaptiveProtocol'] = adaptive_protocol
+        if preview_protocol is not None:
+            identity.update(protocol=preview_protocol['id'],previewProtocol=preview_protocol)
         if native_acceptance is not None:
             identity.update(protocol=native_acceptance['id'],nativeAcceptance=native_acceptance)
         with self.lock:
@@ -1024,11 +1128,15 @@ class FullClientBridge:
                         'workerActive':True,
                         'client':self.client, 'recordingStatus':'pending', 'evidenceStatus':'pending'}
             if native_acceptance is not None:
-                value.update(actionLimit=12,sdkRequestLimit=100,controllerSeconds=30,apiOutcome='not_started',publicationEligible=False)
+                value.update(actionLimit=native_acceptance['max_actions'],sdkRequestLimit=native_acceptance['max_sdk_requests'],
+                    controllerSeconds=native_acceptance['wall_seconds'],apiOutcome='not_started',publicationEligible=False)
             if adaptive_protocol is not None:
                 value.update(actionLimit=adaptive_protocol['max_actions'],sdkRequestLimit=adaptive_protocol['max_sdk_requests'],
                     controllerSeconds=adaptive_protocol['wall_seconds'],cycleProgramSeconds=adaptive_protocol['program_seconds'],
                     protocol=ADAPTIVE_PROTOCOL,cycleNumber=0)
+            if preview_protocol is not None:
+                value.update(actionLimit=preview_protocol['max_actions'],sdkRequestLimit=preview_protocol['max_sdk_requests'],
+                    controllerSeconds=preview_protocol['program_seconds']+2,publicationEligible=False)
             folder = self.output/value['id']
             folder.mkdir(parents=True)
             write_json(folder/'request.json', value)
@@ -1104,8 +1212,12 @@ class FullClientBridge:
             if run['mode'] == 'api':
                 api_started = None
                 key = read_private_file(self.key_file).strip()
-                prompt = PROMPT.format(program_seconds=program_seconds,
-                                       action_limit=action_limit, sdk_request_limit=sdk_request_limit)
+                if run.get('previewProtocol'):
+                    from full_client_skill_preview import prompt as preview_prompt
+                    prompt=preview_prompt(run['previewProtocol'])
+                else:
+                    prompt = PROMPT.format(program_seconds=program_seconds,
+                                           action_limit=action_limit, sdk_request_limit=sdk_request_limit)
                 phase = 'api_request'
                 intent = {'model':run['model'],'status':'preparing',
                     'startedAtMs':round(time.time()*1000),'outputTokenLimit':3000,'timeoutSeconds':50,
@@ -1213,7 +1325,8 @@ class FullClientBridge:
             phase = 'program_execution'
             program_started=time.monotonic()
             input_deadline=program_started+program_seconds
-            result = execute_program(code, SCENARIO | ({'protocol':run['nativeAcceptance']['id']} if run.get('nativeAcceptance') else {}), 'http://127.0.0.1:8840',
+            result = execute_program(code, SCENARIO | (sdk_scenario(run['nativeAcceptance']) if run.get('nativeAcceptance')
+                                     else sdk_scenario(run['previewProtocol']) if run.get('previewProtocol') else {}), 'http://127.0.0.1:8840',
                                      deadline=time.monotonic()+program_seconds+2, program_seconds=program_seconds,
                                      max_actions=action_limit, max_requests=sdk_request_limit,
                                      request_fn=run_request, step_callback=record_progress,cancel_event=cancel_event,
@@ -1246,6 +1359,9 @@ class FullClientBridge:
                                          'trialContext':run.get('trialContext'),
                                          **({'protocol':run['nativeAcceptance']['id'],'nativeAcceptance':run['nativeAcceptance'],'model_api_requests':0,
                                               'publication_eligible':False,'score':None} if run.get('nativeAcceptance') else {}),
+                                         **({'protocol':run['previewProtocol']['id'],'previewProtocol':run['previewProtocol'],
+                                              'source':'full-client-skill-preview; unscored development','model_api_requests':1,
+                                              'publication_eligible':False,'score':None} if run.get('previewProtocol') else {}),
                                          'timing':{'startedAtMs':started_ms, 'endedAtMs':round(time.time()*1000),
                                                    'elapsedMs':round((time.monotonic()-started)*1000),
                                                    'apiLatencyMs':api_ms},
@@ -1267,6 +1383,12 @@ class FullClientBridge:
                 'scenario':{'id':'hero-full-client-skeletons-integration',
                             'fingerprint':None, 'reset_fingerprint':None},
                 'score':None, 'video':None}
+            if run.get('previewProtocol'):
+                publication.update(protocol=run['previewProtocol']['id'],previewProtocol=run['previewProtocol'],
+                    run_kind='skill_preview',publication_eligible=False,
+                    scenario={'id':run['previewProtocol']['skill_toolkit']['fixture_id'],
+                              'fingerprint':run['trialContext']['scenario_fingerprint'],
+                              'reset_fingerprint':run['trialContext']['baseline_sha256']})
             with self.lock:
                 self._check_cancelled(run['id'])
                 if (out/'recording.json').is_file():
@@ -1329,7 +1451,7 @@ class FullClientBridge:
     def _run_adaptive(self, run):
         """Actual adaptive API execution; intentionally separate evidence schema."""
         out=self.output/run['id'];started=time.monotonic()-(time.time()-run['startedAtMs']/1000);final_controller=None
-        readiness=None;trace=None;api_outcome='not_started';input_deadline=None;first_input={};adaptive_started=None
+        readiness=None;trace=None;api_outcome='not_started';input_deadline=None;first_input={};adaptive_started=None;last_trace_ref=None
         def check_cancelled():
             with self.lock:
                 try:self._check_cancelled(run['id'])
@@ -1341,7 +1463,10 @@ class FullClientBridge:
             write_bytes(path,raw)
             return {'path':name,'sha256':hashlib.sha256(raw).hexdigest()}
         def persist_json(name,value):
-            return persist_bytes(name,json.dumps(value,allow_nan=False,separators=(',',':')).encode()+b'\n')
+            nonlocal last_trace_ref
+            ref=persist_bytes(name,adaptive_json_bytes(value))
+            if name=='adaptive.json':last_trace_ref=ref
+            return ref
         def request(url,payload=None,timeout=3):
             sent=time.monotonic()
             value=self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
@@ -1350,7 +1475,7 @@ class FullClientBridge:
             return value
         def phase(**value):
             nonlocal input_deadline,adaptive_started,readiness
-            input_deadline=value['deadline'];adaptive_started=input_deadline-300
+            input_deadline=value['deadline'];adaptive_started=input_deadline-run['adaptiveProtocol']['wall_seconds']
             if value['phase']=='preparing':return
             if value['phase']=='requesting':
                 if run.get('dockerBinding') is not None:validate_binding(run['dockerBinding'])
@@ -1381,7 +1506,7 @@ class FullClientBridge:
             try:return bounded_request(url,body,key,remaining)
             finally:del key
         def execute(code,**kwargs):
-            return execute_program(code,SCENARIO|{'protocol':ADAPTIVE_PROTOCOL},'http://127.0.0.1:8840',request_fn=request,
+            return execute_program(code,SCENARIO|sdk_scenario(run['adaptiveProtocol']),'http://127.0.0.1:8840',request_fn=request,
                 cancel_event=self.cancel_events.get(run['id']),
                 **({'docker_binding':run['dockerBinding']} if run.get('dockerBinding') else {}),
                 **({'docker_image':run['dockerImageId']} if run.get('dockerImageId') else {}),**kwargs)
@@ -1438,7 +1563,7 @@ class FullClientBridge:
                 'result':result,'video':json.loads((out/'recording.json').read_text()) if (out/'recording.json').is_file() else None,
                 'score':None,'publication_eligible':False,'reason':'adaptive_trial_evidence_adapter_required'}
             with self.lock:
-                check_cancelled();persist_json('result.json',result);persist_json('publication.json',publication)
+                check_cancelled();write_adaptive_final(out,result,publication)
                 self.run.update(status=status,reason=reason,actions=counters['actions'],apiOutcome=api_outcome,
                     returnedModel=result['controller']['returnedModel'],evidenceStatus='saved' if status=='completed' else 'failed')
                 final_controller=dict(self.run)
@@ -1448,7 +1573,13 @@ class FullClientBridge:
             with self.lock:
                 self.run.update(status='failed',reason=reason,failurePhase='adaptive_controller',
                     apiOutcome=api_outcome,evidenceStatus='failed');final_controller=dict(self.run)
-            try:write_json(out/'failure.json',{'controller':final_controller,'error':reason,'adaptive':trace,'apiOutcome':api_outcome})
+            failure={'controller':final_controller,'error':reason,'adaptive':trace,'adaptiveTrace':last_trace_ref,'apiOutcome':api_outcome}
+            try:
+                try:raw=adaptive_json_bytes(failure)
+                except ControlError:
+                    raw=adaptive_json_bytes({'controller':final_controller,'error':reason,'adaptive':None,
+                        'adaptiveTrace':last_trace_ref,'trace_retained_separately':True,'apiOutcome':api_outcome})
+                write_bytes(out/'failure.json',raw)
             except OSError:pass
         finally:
             # Match the legacy worker's no-replay cleanup contract. Failed leased

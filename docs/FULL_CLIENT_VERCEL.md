@@ -116,3 +116,17 @@ Command contracts follow the official [deploy](https://vercel.com/docs/cli/deplo
 `test/test_full_client_vercel.py` mocks Vercel and HTTP responses. It makes no
 external deployment or model requests; the first real deployment is an explicit
 operator integration check with a newly prepared package.
+
+Anonymous verification uses at most four concurrent file jobs. Each job streams
+one full file through the existing bounded hash reader, then checks that video's
+16-byte HTTP range before finishing. Receipt rows retain the input inventory
+order regardless of completion order. The publisher does not buffer whole
+videos, alter the exact byte/hash/206/Content-Range checks, or relax same-origin
+redirects. Every job shares the original publication deadline.
+
+On failure, no further files are submitted, queued jobs are cancelled, and active
+streams observe cancellation between bounded chunks. A blocking network read
+still uses its existing socket timeout; verification waits for active workers to
+exit and never writes a success receipt for partial checks. Publication intent
+and uncertain-deployment reconciliation are unchanged. Mock tests establish the
+concurrency bound and overlap; no live deployment speedup is claimed by them.

@@ -73,7 +73,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(snapshot['attempts']),12);self.assertEqual(snapshot['catalog']['planned'],12)
         self.assertEqual(snapshot['catalog']['verified'],3);self.assertEqual(snapshot['catalog']['complete_cohorts'],0)
         self.assertEqual(len(snapshot['research_matrix']['columns']),3)
-        self.assertEqual({c['class_id'] for c in snapshot['research_matrix']['columns']},set(catalog.CLASSES))
+        self.assertEqual({c['class_id'] for c in snapshot['research_matrix']['columns']},{'hero','bowmaster','ice_lightning_arch_mage'})
         for row in snapshot['research_matrix']['models']:
             self.assertEqual([c['planned'] for c in row['cells']],[1,1,1])
         for p in packages:
@@ -87,6 +87,24 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual([r['persisted_xp'] for r in recorded],[-50,-50,-50])
         self.assertFalse(value['deployment_performed']);self.assertEqual(value['api_requests'],0)
         again,_=self.compose(packages);self.assertEqual(again['catalog_sha256'],value['catalog_sha256'])
+
+    def test_four_classes_keep_sixteen_results_and_all_recording_bytes(self):
+        packages=[self.package(self.fixture(name,10+i*10),count=4)
+                  for i,name in enumerate(catalog.CLASSES)]
+        value,snapshot=self.compose(packages)
+        self.assertEqual(snapshot['catalog']['planned'],16)
+        self.assertEqual(snapshot['catalog']['verified'],16)
+        self.assertEqual(snapshot['catalog']['complete_cohorts'],4)
+        self.assertEqual({c['class_id'] for c in snapshot['research_matrix']['columns']},set(catalog.CLASSES))
+        self.assertEqual(len([r for r in snapshot['attempts'] if r['recording']]),16)
+        for row in snapshot['research_matrix']['models']:
+            self.assertEqual([c['planned'] for c in row['cells']],[1,1,1,1])
+        for p in packages:
+            manifest=publication.verify_package(Path(p['package']),p['content_sha256'])
+            checked_payload(Path(value['site']),Path(value['inventory']),value['inventory_sha256'],manifest)
+        request=self.request(packages+[packages[0]])
+        with self.assertRaisesRegex(ValueError,'catalog_request_schema'):
+            catalog.compose(request,self.out)
 
     def test_each_new_run_updates_root_without_hiding_unstarted_models(self):
         f=self.fixture();first=self.package(f);one,a=self.compose([first])
@@ -209,7 +227,7 @@ assert.equal(links().length,1);
 assert.equal(links()[0].href,'./cohorts/aaaaaaaaaaaaaaaa/');
 assert.equal(links()[0].text,'Hero · 1 / 4 verified');
 let scheduled,rendered=0;const setTimeout=(fn,ms)=>{scheduled=ms;return fn};
-const renderResearch=()=>rendered++,renderLive=()=>{},renderComparisons=()=>{},renderHistory=()=>{},freshness=()=>{};
+const renderRedesign=()=>{},renderResearch=()=>rendered++,renderLive=()=>{},renderComparisons=()=>{},renderHistory=()=>{},freshness=()=>{};
 const replay={open:false};
 const next={schema_version:1,attempts:[{id:'a'},{id:'b'},{id:'c'},{id:'d'}],comparisons:[],generated_at_ms:1,
  live_status_available:false,catalog:{schema_version:2,previous_cohorts:[],cohorts:[{url:'./cohorts/aaaaaaaaaaaaaaaa/',class_id:'hero',verified:2}]}};
@@ -230,6 +248,19 @@ if __name__=='__main__':unittest.main()
 class PreviousCohortTests(CatalogTests):
     def request2(self,active,previous,archive=None):
         return self.request(active,archive)|{'schema_version':2,'previous_cohorts':previous}
+    def test_complete_bow_cannot_retire_previous_hero_before_hero_replacement_completes(self):
+        old=self.package(self.fixture('hero',100),count=3)
+        bow=self.package(self.fixture('bowmaster',200),count=4)
+        hero_fixture=self.fixture('hero',300)
+        partial=self.package(hero_fixture,count=1)
+        first=catalog.compose(self.request2([bow,partial],[old]),self.out)
+        self.assertFalse(first['archive_retired'])
+        snapshot=json.loads((Path(first['site'])/'results.json').read_bytes())
+        self.assertEqual(snapshot['catalog']['previous_cohorts'][0]['class_id'],'hero')
+        complete=self.package(hero_fixture,count=4)
+        last=catalog.compose(self.request2([bow,complete],[old]),self.out)
+        self.assertTrue(last['archive_retired'])
+        self.assertEqual(json.loads((Path(last['site'])/'results.json').read_bytes())['catalog']['previous_cohorts'],[])
     def test_previous_different_assets_preserved_separate_from_active_matrix(self):
         prior=self.package(self.fixture('hero',100),2)
         prior=self.mutate(prior,lambda site:(site/'style.css').write_text('/* prior pinned UI */'))
@@ -264,3 +295,73 @@ class PreviousCohortTests(CatalogTests):
         bow=self.mutate(bow,lambda site:(site/'style.css').write_text('/* changed */'))
         with self.assertRaisesRegex(ValueError,'catalog_mixed_assets'):
             catalog.compose(self.request2([active,bow],[]),self.out)
+
+class CatalogAnnotationTests(unittest.TestCase):
+    setUp=CatalogTests.setUp
+    tearDown=CatalogTests.tearDown
+    fixture=CatalogTests.fixture
+    package=CatalogTests.package
+    request=CatalogTests.request
+
+    def selected(self):
+        package=self.package(self.fixture('bowmaster',700),1)
+        manifest=publication.verify_package(Path(package['package']),package['content_sha256'])
+        return package,manifest
+
+    def test_root_note_changes_digest_but_preserves_every_nested_byte_and_score(self):
+        package,manifest=self.selected();request=self.request([package]);plain=catalog.compose(request,self.out)
+        note={'plan_sha256':manifest['content']['plan_sha256'],
+              'text':'Hurricane is discrete & "channel" fidelity is unaccepted.'}
+        request['annotations']=[note];result=catalog.compose(request,self.out);site=Path(result['site'])
+        html=(site/'index.html').read_text();prefix=manifest['content']['target_path'].lstrip('/')
+        self.assertIn('Cohort limitations',html)
+        self.assertIn('discrete &amp; &quot;channel&quot;',html)
+        self.assertIn('href="./'+prefix+'"',html)
+        self.assertLess(html.index('Cohort limitations'),html.index('id="research-title"'))
+        self.assertNotEqual(result['catalog_sha256'],plain['catalog_sha256'])
+        for name,expected in manifest['content']['files'].items():
+            self.assertEqual(publication.stable_fingerprint(site/prefix/name,publication.MAX_ADAPTIVE_VIDEO),expected)
+        before=json.loads((Path(plain['site'])/'results.json').read_text());after=json.loads((site/'results.json').read_text())
+        for key in ['attempts','comparisons','research_matrix']:self.assertEqual(before[key],after[key])
+        content=json.loads((Path(result['directory'])/'catalog-manifest.json').read_text())['content']
+        self.assertEqual(content['annotations'][0]['text'],note['text'])
+        again=catalog.compose(request,self.out);self.assertEqual(again['catalog_sha256'],result['catalog_sha256'])
+        checked_payload(site,Path(result['inventory']),result['inventory_sha256'],manifest)
+
+    def test_rejects_unknown_duplicate_markup_control_and_private_fields(self):
+        package,manifest=self.selected();note={'plan_sha256':manifest['content']['plan_sha256'],'text':'Discrete Hurricane only.'}
+        invalid=[([note|{'plan_sha256':'f'*64}],'unknown_cohort'),([note,note],'duplicate'),
+                 ([note|{'credentials':'secret'}],'schema'),([note|{'text':'<b>unsafe</b>'}],'text'),
+                 ([note|{'text':'line\nline'}],'text'),([note|{'text':'hidden\u202e'}],'text'),
+                 ([note|{'text':'[link](https://example.test)'}],'text'),
+                 ([note|{'text':'/Users/operator/private'}],'text'),
+                 ([note|{'text':'operator@example.test'}],'text'),([note|{'text':'127.0.0.1'}],'text'),
+                 ([note|{'text':'token=private'}],'text'),([note|{'text':'a'*401}],'text'),
+                 ([note]*7,'limit')]
+        for notes,error in invalid:
+            with self.subTest(error=error),self.assertRaisesRegex(ValueError,'catalog_annotation.*'+error):
+                catalog.compose(self.request([package])|{'annotations':notes},self.out)
+
+    def test_retired_previous_cohort_cannot_receive_a_visible_note(self):
+        prior=self.package(self.fixture('bowmaster',700),1);active=self.package(self.fixture('bowmaster',800),4)
+        old=publication.verify_package(Path(prior['package']),prior['content_sha256'])
+        request=self.request([active])|{'schema_version':2,'previous_cohorts':[prior],
+            'annotations':[{'plan_sha256':old['content']['plan_sha256'],'text':'Old limitation.'}]}
+        with self.assertRaisesRegex(ValueError,'catalog_annotation_unknown_cohort'):catalog.compose(request,self.out)
+
+    def test_empty_optional_notes_preserve_legacy_catalog_bytes(self):
+        package,_=self.selected();request=self.request([package]);old=catalog.compose(request,self.out)
+        new=catalog.compose(request|{'annotations':[]},self.out)
+        self.assertEqual(old['catalog_sha256'],new['catalog_sha256'])
+
+    def test_retained_previous_note_is_linked_and_duplicate_text_rejected(self):
+        prior=self.package(self.fixture('bowmaster',700),1);active=self.package(self.fixture('bowmaster',800),1)
+        old=publication.verify_package(Path(prior['package']),prior['content_sha256'])
+        current=publication.verify_package(Path(active['package']),active['content_sha256'])
+        note={'plan_sha256':old['content']['plan_sha256'],'text':'Discrete attacks only.'}
+        request=self.request([active])|{'schema_version':2,'previous_cohorts':[prior],'annotations':[note]}
+        result=catalog.compose(request,self.out)
+        html=(Path(result['site'])/'index.html').read_text()
+        self.assertIn('href=".'+old['content']['target_path']+'"',html)
+        request['annotations'].append(note|{'plan_sha256':current['content']['plan_sha256']})
+        with self.assertRaisesRegex(ValueError,'catalog_annotation_duplicate'):catalog.compose(request,self.out)

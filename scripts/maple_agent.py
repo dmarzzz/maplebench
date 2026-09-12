@@ -159,6 +159,11 @@ def validate_rpc(message, scenario):
                    'COMBO', 'BOOSTER', 'MAPLE_WARRIOR', 'HP_POTION', 'MP_POTION'}
         if scenario.get('protocol') in ('full-client-adaptive-pilot-v1','scripted-native-acceptance-v1','scripted-native-acceptance-v2','scripted-native-acceptance-v3','scripted-native-acceptance-v4'):
             allowed=(allowed-{'BRANDISH','COMBO','BOOSTER','MAPLE_WARRIOR'}) | {'PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2'}
+        if 'skill_toolkit' in scenario:
+            from full_client_skill_toolkit import allowed_keys, NATIVE_PROTOCOL
+            if scenario.get('protocol') not in ('full-client-adaptive-pilot-v1',NATIVE_PROTOCOL,'full-client-skill-preview-v1'):
+                raise ValueError('Skill toolkit requires a supported full-client protocol')
+            allowed=allowed_keys(scenario['skill_toolkit'])
         if (type(keys) is not list or not 1 <= len(keys) <= 3
                 or any(type(key) is not str or key not in allowed for key in keys)
                 or len(set(keys)) != len(keys)

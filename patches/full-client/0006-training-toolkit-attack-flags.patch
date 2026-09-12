@@ -1,0 +1,22 @@
+--- a/src/client/Data/SkillData.cpp
++++ b/src/client/Data/SkillData.cpp
+@@ -141,11 +141,18 @@
+             { 3121004, ATTACK | RANGED }, // Hurricane
+             { 3111004, ATTACK },          // Arrow Rain
+             { 2221006, ATTACK | RANGED }, // Chain Lightning
++            // Opt-in training toolkit: normal attack packets, never buff use.
++            { 3111006, ATTACK | RANGED }, // Strafe
++            { 3101005, ATTACK | RANGED }, // Arrow Bomb
++            { 3111003, ATTACK | RANGED }, // Inferno
++            { 2211002, ATTACK },          // Ice Strike
++            { 2211003, ATTACK | RANGED }, // Thunder Spear
++            { 2221007, ATTACK },          // Blizzard
+             // Rogue
+             { SkillId::DISORDER, ATTACK },
+             { SkillId::LUCKY_SEVEN, ATTACK | RANGED },
+             // Hermit / Night Lord
+-            { SkillId::DRAIN, ATTACK },
++            { SkillId::DRAIN, ATTACK | RANGED },
+             { SkillId::AVENGER, ATTACK | RANGED },
+             { SkillId::TRIPLE_THROW, ATTACK | RANGED },
+             // Chief Bandit / Shadower

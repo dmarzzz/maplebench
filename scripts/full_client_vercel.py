@@ -6,6 +6,8 @@ only deploy call; later invocations reconcile metadata or remain uncertain.
 No model, trial, database, game service or credential-management operations.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from threading import Event
 import fcntl
 import hashlib
 import json
@@ -26,14 +28,15 @@ import uuid
 from full_client_dashboard import Reader, ProjectionError, SHA, write_snapshot
 from full_client_gallery import directory, copy_recording
 from full_client_publication import (claim_publication, encoded, digest, publication_state,
-    record_deployment, require, stable_bytes, stable_fingerprint, verify_package, write_new)
+    record_deployment, require, stable_bytes, stable_fingerprint, verify_package, write_new,
+    XP_PROTOCOL, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO)
 
 META_CONTENT='maplebenchContentSha256'
 META_PAYLOAD='maplebenchPayloadSha256'
 META_NONCE='maplebenchPublicationId'
 MAX_PAYLOAD=512*1024**2
 MAX_OUTPUT=2*1024**2
-PUBLIC_NAME=re.compile(r'(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:index\.html|dashboard\.js|style\.css|results\.json|recording-manifest\.json|vercel\.json|README\.md|recordings/[a-f0-9]{32}\.webm)\Z')
+PUBLIC_NAME=re.compile(r'(?:(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:index\.html|dashboard\.js|style\.css|results\.json|recording-manifest\.json|vercel\.json|README\.md|recordings/[a-f0-9]{32}\.webm)|previews/([a-f0-9]{32})/recordings/\1\.webm)\Z')
 DEPLOYMENT=re.compile(r'dpl_[A-Za-z0-9]{8,80}\Z')
 
 
@@ -56,21 +59,34 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
         require(len(files)==len(raw),'duplicate_payload_path')
     else:files=raw
     require(1<=len(files)<=100,'payload_file_count_limit')
+    content=package_manifest['content']
+    if 'skill_preview_payload_sha256' in content:
+        require(isinstance(content['skill_preview_payload_sha256'],str)
+            and SHA.fullmatch(content['skill_preview_payload_sha256'])
+            and content['skill_preview_payload_sha256']==digest(encoded(files)),
+            'skill_preview_payload_binding_mismatch')
+    video_limits=cohort_video_limits(supplied,files,package_manifest)
     total=0
     for name,expected in files.items():
         require(isinstance(name,str) and PUBLIC_NAME.fullmatch(name) and isinstance(expected,dict)
                 and set(expected)=={'sha256','bytes'} and isinstance(expected['sha256'],str)
                 and SHA.fullmatch(expected['sha256']) and type(expected['bytes']) is int and expected['bytes']>0,
                 'invalid_public_payload_file')
-        maximum=96*1024**2 if name.endswith('.webm') else 4*1024**2
-        require(stable_fingerprint(payload/name,maximum)==expected,'public_payload_changed')
+        maximum=video_limits.get(name,MAX_ADAPTIVE_VIDEO) if name.endswith('.webm') else 4*1024**2
         total+=expected['bytes'];require(total<=MAX_PAYLOAD,'public_payload_size_limit')
+        require(expected['bytes']<=maximum,'public_payload_file_limit')
+        require(stable_fingerprint(payload/name,maximum)==expected,'public_payload_changed')
     actual=set()
     for count,path in enumerate(payload.rglob('*'),1):
         require(count<=150 and not path.is_symlink(),'unexpected_public_payload_file')
         if path.is_file():actual.add(path.relative_to(payload).as_posix())
     require(actual==set(files),'unexpected_public_payload_file')
-    content=package_manifest['content']
+    if 'cohort_manifests' in supplied:
+        # Every byte has been checked against the pinned inventory before public
+        # row semantics can authorize a supplemental long recording.
+        from full_client_catalog import cohort_content
+        for manifest in supplied['cohort_manifests']:
+            cohort_content(manifest,payload/manifest['content']['target_path'].strip('/'))
     require(content.get('target_path')=='/' or (isinstance(content.get('target_path'),str)
             and re.fullmatch(r'/cohorts/[a-f0-9]{16}/',content['target_path'])),'invalid_cohort_target')
     prefix=content['target_path'].lstrip('/')
@@ -78,6 +94,41 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
             'cohort_payload_binding_mismatch')
     require('index.html' in files and 'results.json' in files,'public_root_required')
     return files,digest(encoded(files))
+
+
+def cohort_video_limits(inventory,files,primary):
+    """Only exact mounted package files inherit that package's video policy."""
+    require(all(isinstance(name,str) for name in files),'invalid_public_payload_file')
+    def limit(content):
+        if 'horizon_seconds' in content:
+            require(content.get('protocol')==XP_PROTOCOL and type(content['horizon_seconds']) is int
+                    and content['horizon_seconds']==1800,'invalid_package_horizon')
+            return MAX_LONG_VIDEO
+        return MAX_ADAPTIVE_VIDEO
+    content=primary['content'];prefix=content.get('target_path','').lstrip('/')
+    limits={prefix+name:limit(content) for name in content['files'] if name.endswith('.webm')}
+    if 'cohort_manifests' not in inventory:return limits
+    manifests=inventory['cohort_manifests']
+    require(isinstance(manifests,list) and 1<=len(manifests)<=7,'payload_cohort_manifests_required')
+    mounts=set();primary_found=False
+    for manifest in manifests:
+        require(isinstance(manifest,dict) and set(manifest)=={'schema_version','content_sha256','content'}
+                and type(manifest['schema_version']) is int and manifest['schema_version']==1
+                and isinstance(manifest['content_sha256'],str) and SHA.fullmatch(manifest['content_sha256'])
+                and isinstance(manifest['content'],dict)
+                and digest(encoded(manifest['content']))==manifest['content_sha256'],'payload_cohort_manifest_mismatch')
+        item=manifest['content'];target=item.get('target_path')
+        require(isinstance(target,str) and re.fullmatch(r'/cohorts/[a-f0-9]{16}/',target)
+                and target not in mounts and isinstance(item.get('files'),dict),'payload_cohort_mount_mismatch')
+        mounts.add(target);prefix=target.lstrip('/')
+        require({name[len(prefix):]:ref for name,ref in files.items() if name.startswith(prefix)}==item['files'],
+                'payload_cohort_file_binding_mismatch')
+        if target==content.get('target_path'):
+            require(manifest==primary,'payload_primary_manifest_mismatch');primary_found=True
+        maximum=limit(item)
+        limits.update({prefix+name:maximum for name in item['files'] if name.endswith('.webm')})
+    require(primary_found,'payload_primary_manifest_required')
+    return limits
 
 
 def project_link(path,expected):
@@ -96,9 +147,9 @@ def stage_payload(payload,files,package,link):
         for name,expected in files.items():
             target=stage/name;target.parent.mkdir(parents=True,exist_ok=True)
             if name.endswith('.webm'):
-                copy_recording(payload,{'path':name,'sha256':expected['sha256']},target,{},maximum=96*1024**2)
+                copy_recording(payload,{'path':name,'sha256':expected['sha256']},target,{},maximum=MAX_PAYLOAD)
             else:write_new(target,stable_bytes(payload/name,4*1024**2),0o644)
-            require(stable_fingerprint(target,96*1024**2 if name.endswith('.webm') else 4*1024**2)==expected,
+            require(stable_fingerprint(target,MAX_PAYLOAD if name.endswith('.webm') else 4*1024**2)==expected,
                     'staged_payload_changed')
         (stage/'.vercel').mkdir(mode=0o700)
         write_new(stage/'.vercel/project.json',encoded(link))
@@ -112,7 +163,7 @@ def checked_stage(stage,package,files,link):
     stage=directory(stage)
     require(stage.parent==package and stage.name.startswith('.vercel-payload-'),'invalid_publication_stage')
     for name,expected in files.items():
-        require(stable_fingerprint(stage/name,96*1024**2 if name.endswith('.webm') else 4*1024**2)==expected,
+        require(stable_fingerprint(stage/name,MAX_PAYLOAD if name.endswith('.webm') else 4*1024**2)==expected,
                 'staged_payload_changed')
     linked=Reader().json(stage,'.vercel/project.json')
     require(all(linked.get(k)==v for k,v in link.items()),'staged_project_link_changed')
@@ -160,7 +211,7 @@ class SameOriginRedirect(HTTPRedirectHandler):
         return super().redirect_request(request,fp,code,msg,headers,target)
 
 
-def read_public(url,maximum,headers,deadline):
+def read_public(url,maximum,headers,deadline,*,cancelled=None):
     remaining=deadline-time.monotonic();require(remaining>0,'publication_deadline')
     request=Request(url,headers={'Accept-Encoding':'identity','Cache-Control':'no-cache',**headers})
     try:
@@ -168,6 +219,7 @@ def read_public(url,maximum,headers,deadline):
             result={'status':response.status,'headers':{k.lower():v for k,v in response.headers.items()}}
             hashed=hashlib.sha256();size=0
             while True:
+                require(cancelled is None or not cancelled.is_set(),'public_verification_cancelled')
                 require(time.monotonic()<deadline,'publication_deadline')
                 block=response.read(min(1024**2,maximum+1-size))
                 if not block:break
@@ -178,21 +230,56 @@ def read_public(url,maximum,headers,deadline):
 
 
 def verify_public(base,stage,files,deadline,fetch=read_public):
-    checked=[];ranges=[]
-    for name,expected in files.items():
-        if Path(name).name in ('vercel.json','README.md'):continue
-        result=fetch(base+'/'+name,expected['bytes'],{},deadline)
+    # A job owns one full-file stream followed by its range check. At most four
+    # jobs exist at once; large videos are never collected in memory here.
+    entries=[(name,expected) for name,expected in files.items()
+             if Path(name).name not in ('vercel.json','README.md')]
+    results=[None]*len(entries);cancelled=Event()
+    def request(url,maximum,headers):
+        require(not cancelled.is_set(),'public_verification_cancelled')
+        require(time.monotonic()<deadline,'publication_deadline')
+        if fetch is read_public:
+            value=fetch(url,maximum,headers,deadline,cancelled=cancelled)
+        else:
+            value=fetch(url,maximum,headers,deadline)
+        require(time.monotonic()<deadline,'publication_deadline')
+        require(not cancelled.is_set(),'public_verification_cancelled')
+        return value
+    def verify(entry):
+        name,expected=entry
+        result=request(base+'/'+name,expected['bytes'],{})
         require(result['status']==200 and result['bytes']==expected['bytes'] and result['sha256']==expected['sha256'],
                 'public_content_mismatch')
-        checked.append({'path':name,**expected})
+        video_range=None
         if name.endswith('.webm'):
-            count=min(16,expected['bytes']);response=fetch(base+'/'+name,count,{'Range':f'bytes=0-{count-1}'},deadline)
+            count=min(16,expected['bytes']);response=request(base+'/'+name,count,{'Range':f'bytes=0-{count-1}'})
             with (stage/name).open('rb') as stream:first=stream.read(count)
             require(response['status']==206 and response['bytes']==count
                     and response['headers'].get('content-range')==f'bytes 0-{count-1}/{expected["bytes"]}'
                     and response['sha256']==digest(first),'public_video_range_mismatch')
-            ranges.append({'path':name,'status':206,'bytes':count,'total_bytes':expected['bytes']})
-    return {'files':checked,'video_ranges':ranges,'anonymous_access':True}
+            video_range={'path':name,'status':206,'bytes':count,'total_bytes':expected['bytes']}
+        return {'path':name,**expected},video_range
+    pool=ThreadPoolExecutor(max_workers=4,thread_name_prefix='public-verify')
+    pending={};next_index=0
+    try:
+        while next_index<len(entries) and len(pending)<4:
+            pending[pool.submit(verify,entries[next_index])]=next_index;next_index+=1
+        while pending:
+            remaining=deadline-time.monotonic();require(remaining>0,'publication_deadline')
+            done,_=wait(pending,timeout=remaining,return_when=FIRST_COMPLETED)
+            require(done,'publication_deadline')
+            # Inspect every completed job before scheduling more work, so a
+            # concurrently completed failure cannot enqueue another file.
+            for future in done:
+                results[pending.pop(future)]=future.result()
+            while next_index<len(entries) and len(pending)<4:
+                pending[pool.submit(verify,entries[next_index])]=next_index;next_index+=1
+    finally:
+        cancelled.set()
+        for future in pending:future.cancel()
+        pool.shutdown(wait=True,cancel_futures=True)
+    return {'files':[row[0] for row in results],
+            'video_ranges':[row[1] for row in results if row[1] is not None],'anonymous_access':True}
 
 
 def find_deployment(executable,stage,link,marker,deadline,run_cli):

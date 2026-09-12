@@ -7,6 +7,14 @@ export const LEDGER_TAG = 'MAPLEBENCH_ENCODER_LEDGER_V1';
 export const LIMITS = Object.freeze({maxBytes:95*1024*1024,maxLedgerBytes:8*1024*1024,
   maxPendingFrames:8,maxPendingHashes:16,configurationTimeoutMs:5000,flushTimeoutMs:5000,
   firstFrameTimeoutMs:5000,stopTimeoutMs:15000,maxDurationMs:335000});
+export const LONG_ENCODED_FRAME_POLICY=Object.freeze({...ENCODED_FRAME_POLICY,id:'post-render-encoded-frame-1800-v1',
+  max_frames:120000,max_duration_ms:1835000,max_webm_bytes:600*1024*1024,max_ledger_bytes:32*1024*1024});
+const limitsFor=policy=>{
+  const equal=(a,b)=>Object.keys(a).length===Object.keys(b).length&&Object.keys(b).every(k=>a[k]===b[k]);
+  if(equal(policy,ENCODED_FRAME_POLICY))return LIMITS;
+  if(equal(policy,LONG_ENCODED_FRAME_POLICY))return {...LIMITS,maxBytes:600*1024*1024,maxLedgerBytes:32*1024*1024,maxDurationMs:1835000};
+  throw Error('invalid_capture_policy');
+};
 const utf8 = new TextEncoder();
 const need=(ok,code)=>{if(!ok)throw Error(code);};
 const integer=(n,min=0,max=Number.MAX_SAFE_INTEGER)=>Number.isSafeInteger(n)&&n>=min&&n<=max;
@@ -19,7 +27,7 @@ const id=n=>Uint8Array.from(n.match(/../g),s=>parseInt(s,16));
 const concat=parts=>{const out=new Uint8Array(parts.reduce((n,p)=>n+p.length,0));
   let at=0;for(const p of parts){out.set(p,at);at+=p.length;}return out;};
 const uint=n=>{need(integer(n),'invalid_ebml_uint');const a=[];do{a.unshift(n%256);n=Math.floor(n/256);}while(n);return Uint8Array.from(a);};
-const size=n=>{need(integer(n,0,LIMITS.maxBytes),'invalid_ebml_size');
+const size=n=>{need(integer(n,0,LONG_ENCODED_FRAME_POLICY.max_webm_bytes),'invalid_ebml_size');
   for(let width=1;width<=5;width++)if(n<2**(7*width)-1){const a=new Uint8Array(width);
     for(let i=width-1;i>=0;i--){a[i]=n%256;n=Math.floor(n/256);}a[0]|=1<<(8-width);return a;}
   throw Error('ebml_size_overflow');};
@@ -35,10 +43,11 @@ const signed=n=>{need(Number.isSafeInteger(n)&&n<0&&n>=-335000,'invalid_referenc
   for(let i=width-1;i>=0;i--){raw[i]=value%256;value=Math.floor(value/256);}return raw;};
 
 /** Small single-video-track VP8 WebM writer. Exact 1ms ticks; no inferred tail. */
-export function muxWebM({width,height,frames,ledgerBytes}) {
+export function muxWebM({width,height,frames,ledgerBytes,policy=ENCODED_FRAME_POLICY}) {
+  const limits=limitsFor(policy);
   need(integer(width,2,4096)&&integer(height,2,4096),'invalid_dimensions');
-  need(Array.isArray(frames)&&frames.length>=2&&frames.length<=ENCODED_FRAME_POLICY.max_frames,'invalid_frame_count');
-  need(ledgerBytes instanceof Uint8Array&&ledgerBytes.length<=LIMITS.maxLedgerBytes,'ledger_too_large');
+  need(Array.isArray(frames)&&frames.length>=2&&frames.length<=policy.max_frames,'invalid_frame_count');
+  need(ledgerBytes instanceof Uint8Array&&ledgerBytes.length<=limits.maxLedgerBytes,'ledger_too_large');
   let end=0,previous=0,total=0;
   for(let i=0;i<frames.length;i++){
     const f=frames[i];need(integer(f.timestamp)&&integer(f.duration,1000)&&f.timestamp%1000===0
@@ -46,7 +55,7 @@ export function muxWebM({width,height,frames,ledgerBytes}) {
       &&typeof f.key==='boolean'&&(i>0||f.key),'invalid_mux_frame');
     end=f.timestamp+f.duration;total+=f.data.length;
   }
-  need(end<=LIMITS.maxDurationMs*1000&&total<=LIMITS.maxBytes,'capture_byte_or_duration_limit');
+  need(end<=limits.maxDurationMs*1000&&total<=limits.maxBytes,'capture_byte_or_duration_limit');
   const header=element('1a45dfa3',unsigned('4286',1),unsigned('42f7',1),unsigned('42f2',4),
     unsigned('42f3',8),string('4282','webm'),unsigned('4287',4),unsigned('4285',2));
   const info=element('1549a966',unsigned('2ad7b1',1000000),float64('4489',end/1000),
@@ -74,18 +83,19 @@ export function muxWebM({width,height,frames,ledgerBytes}) {
   parts[0]=seekHead(offset);parts.push(element('1c53bb6b',...cues));
   const segmentBytes=parts.reduce((n,p)=>n+p.length,0);
   const blob=new Blob([header,id('18538067'),size(segmentBytes),...parts],{type:'video/webm'});
-  need(blob.size<=LIMITS.maxBytes,'capture_byte_limit');return blob;
+  need(blob.size<=limits.maxBytes,'capture_byte_limit');return blob;
 }
 
 export class PostRenderRecorder {
   constructor(canvas,options={},dependencies={}) {
+    this._policy=options.policy??ENCODED_FRAME_POLICY;this._limits=limitsFor(this._policy);
     this.canvas=canvas;this.failure=null;this.stopping=false;this.frames=0;this.submittedFrames=0;this.outputFrames=0;
     this._now=dependencies.now||(()=>performance.now());this._wall=dependencies.wall||(()=>Date.now());
     this._VideoFrame=dependencies.VideoFrame||globalThis.VideoFrame;
     this._VideoEncoder=dependencies.VideoEncoder||globalThis.VideoEncoder;
     this._hash=dependencies.hash||hash;this._onFailure=options.onFailure||(()=>{});
-    this._maximum=options.maxDurationMs??LIMITS.maxDurationMs;
-    need(integer(this._maximum,1,LIMITS.maxDurationMs),'invalid_capture_limit');
+    this._maximum=options.maxDurationMs??this._limits.maxDurationMs;
+    need(integer(this._maximum,1,this._limits.maxDurationMs),'invalid_capture_limit');
     need(canvas&&integer(canvas.width,2,4096)&&integer(canvas.height,2,4096),'invalid_canvas');
     this._width=canvas.width;this._height=canvas.height;this._pending=null;this._inputs=[];this._outputs=[];
     this._hashes=[];this._hashPending=0;this._bytes=0;this._maxGap=0;this._lastKeyAt=null;
@@ -98,18 +108,18 @@ export class PostRenderRecorder {
     need(this._snapshotContext&&typeof this._snapshotContext.getImageData==='function','invalid_canvas');
     const config={codec:'vp8',width:this._width,height:this._height,bitrate:2000000,
       framerate:30,latencyMode:'quality',hardwareAcceleration:'prefer-software'};
-    const support=await bounded(this._VideoEncoder.isConfigSupported(config),LIMITS.configurationTimeoutMs,'encoder_configuration_timeout');
+    const support=await bounded(this._VideoEncoder.isConfigSupported(config),this._limits.configurationTimeoutMs,'encoder_configuration_timeout');
     need(support.supported&&Object.entries(config).every(([k,v])=>support.config[k]===v),'vp8_configuration_unsupported');
     this._encoder=new this._VideoEncoder({output:(chunk,meta)=>this._output(chunk,meta),error:()=>this._fail('encoder_error')});
     this._encoder.configure(config);
-    try{await bounded(this._encoder.flush(),LIMITS.configurationTimeoutMs,'encoder_configuration_timeout');this._check();}
+    try{await bounded(this._encoder.flush(),this._limits.configurationTimeoutMs,'encoder_configuration_timeout');this._check();}
     catch(error){this._fail(error.message);throw error;}
     this.configuredAt=this._now();this.configuredWall=this._wall();this._lastAt=this.configuredAt;
     // Configuration completion is readiness, not the beginning of media.
     // Keep the outer duration bound fixed even while the first hook is pending.
     this._timer=setTimeout(()=>this._fail('capture_duration_limit'),this._maximum);
     this._firstFrameTimer=setTimeout(()=>this._fail('capture_first_frame_timeout'),
-      Math.min(LIMITS.firstFrameTimeoutMs,this._maximum));
+      Math.min(this._limits.firstFrameTimeoutMs,this._maximum));
     return this;
   }
   _fail(code){
@@ -127,12 +137,12 @@ export class PostRenderRecorder {
       const now=this._now(),wall=this._wall();
       need(Number.isFinite(now)&&now>=this._lastAt&&now-this.configuredAt<=this._maximum,'capture_clock_or_duration');
       const clockAt=this.frames?this.startedAt:this.configuredAt,clockWall=this.frames?this.startedWall:this.configuredWall;
-      need(Math.abs(wall-clockWall-(now-clockAt))<=ENCODED_FRAME_POLICY.max_wall_drift_ms,'capture_wall_clock_drift');
-      need(this.frames||now-this.configuredAt<=LIMITS.firstFrameTimeoutMs,'capture_first_frame_timeout');
-      need(this.frames<ENCODED_FRAME_POLICY.max_frames,'capture_frame_limit');
+      need(Math.abs(wall-clockWall-(now-clockAt))<=this._policy.max_wall_drift_ms,'capture_wall_clock_drift');
+      need(this.frames||now-this.configuredAt<=this._limits.firstFrameTimeoutMs,'capture_first_frame_timeout');
+      need(this.frames<this._policy.max_frames,'capture_frame_limit');
       need(this.canvas.width===this._width&&this.canvas.height===this._height,'capture_dimensions_changed');
       const gap=this.frames?now-this._lastAt:0;
-      need(gap<=ENCODED_FRAME_POLICY.max_frame_gap_ms,'capture_frame_gap');
+      need(gap<=this._policy.max_frame_gap_ms,'capture_frame_gap');
       this._maxGap=Math.max(this._maxGap,gap);
       const timestamp=this.frames?Math.floor(now-this.firstFrameAt)*1000:0;
       need(!this._pending||timestamp>this._pending.timestamp,'duplicate_quantized_timestamp');
@@ -161,9 +171,9 @@ export class PostRenderRecorder {
   }
   _submit(duration){
     const p=this._pending;need(p&&integer(duration,1000)&&duration%1000===0,'invalid_frame_duration');
-    need(this._encoder.encodeQueueSize<LIMITS.maxPendingFrames
-      &&this.submittedFrames-this.outputFrames<LIMITS.maxPendingFrames
-      &&this._hashPending<LIMITS.maxPendingHashes,'encoder_backpressure');
+    need(this._encoder.encodeQueueSize<this._limits.maxPendingFrames
+      &&this.submittedFrames-this.outputFrames<this._limits.maxPendingFrames
+      &&this._hashPending<this._limits.maxPendingHashes,'encoder_backpressure');
     const key=this._lastKeyAt===null||p.timestamp-this._lastKeyAt>=2000000;
     const timed=new this._VideoFrame(p.frame,{timestamp:p.timestamp,duration});
     this._inputs.push({timestamp:p.timestamp,duration,key});this.submittedFrames++;
@@ -177,8 +187,8 @@ export class PostRenderRecorder {
       need(expected&&chunk.timestamp===expected.timestamp&&chunk.duration===expected.duration,'encoder_output_timing_mismatch');
       need(chunk.type==='key'||chunk.type==='delta','encoder_output_type');
       need(!expected.key||chunk.type==='key','encoder_missing_requested_keyframe');
-      need(integer(chunk.byteLength,3,LIMITS.maxBytes)&&this._bytes+chunk.byteLength<=LIMITS.maxBytes,'capture_byte_limit');
-      need(this._hashPending<LIMITS.maxPendingHashes,'encoder_hash_backpressure');
+      need(integer(chunk.byteLength,3,this._limits.maxBytes)&&this._bytes+chunk.byteLength<=this._limits.maxBytes,'capture_byte_limit');
+      need(this._hashPending<this._limits.maxPendingHashes,'encoder_hash_backpressure');
       const d=metadata?.decoderConfig;
       need(!d||(d.codec==='vp8'&&d.codedWidth===this._width&&d.codedHeight===this._height),'encoder_configuration_changed');
       const data=new Uint8Array(chunk.byteLength);chunk.copyTo(data);
@@ -194,7 +204,7 @@ export class PostRenderRecorder {
   }
   /** Freeze the endpoint before awaiting flush. No data is uploadable on failure. */
   stop(){
-    if(!this._stopPromise)this._stopPromise=bounded(this._finish(),LIMITS.stopTimeoutMs,'encoder_stop_timeout')
+    if(!this._stopPromise)this._stopPromise=bounded(this._finish(),this._limits.stopTimeoutMs,'encoder_stop_timeout')
       .catch(error=>{this._fail(error.message);throw error;});
     return this._stopPromise;
   }
@@ -203,18 +213,18 @@ export class PostRenderRecorder {
     const endAt=this._now(),endWall=this._wall();
     try{
       need(this.frames>=2&&endAt>=this.lastFrameAt&&endAt-this.configuredAt<=this._maximum,'incomplete_capture');
-      need(endAt-this.lastFrameAt<=ENCODED_FRAME_POLICY.max_endpoint_gap_ms,'capture_endpoint_gap');
-      need(Math.abs(endWall-this.startedWall-(endAt-this.startedAt))<=ENCODED_FRAME_POLICY.max_wall_drift_ms,'capture_wall_clock_drift');
+      need(endAt-this.lastFrameAt<=this._policy.max_endpoint_gap_ms,'capture_endpoint_gap');
+      need(Math.abs(endWall-this.startedWall-(endAt-this.startedAt))<=this._policy.max_wall_drift_ms,'capture_wall_clock_drift');
       this._maxGap=Math.max(this._maxGap,endAt-this.lastFrameAt);
       // Use the identical serialized operands the independent verifier receives.
       // A stop in the same 1ms tick still writes one explicit terminal tick.
       const durationMs=endAt-this.startedAt,firstOffsetMs=this.firstFrameAt-this.startedAt;
       const endTimestamp=Math.max(this._pending.timestamp+1000,Math.ceil(durationMs-firstOffsetMs)*1000);
       const finalDuration=endTimestamp-this._pending.timestamp;
-      need(finalDuration<=ENCODED_FRAME_POLICY.max_endpoint_gap_ms*1000,'capture_quantized_endpoint_gap');
+      need(finalDuration<=this._policy.max_endpoint_gap_ms*1000,'capture_quantized_endpoint_gap');
       this._submit(finalDuration);
       let timer;
-      try{await Promise.race([this._encoder.flush(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('encoder_flush_timeout')),LIMITS.flushTimeoutMs);})]);}
+      try{await Promise.race([this._encoder.flush(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('encoder_flush_timeout')),this._limits.flushTimeoutMs);})]);}
       finally{clearTimeout(timer);}
       this._check();need(this.submittedFrames===this.frames&&this.outputFrames===this.frames,'encoder_frame_count_mismatch');
       const hashes=await Promise.all(this._hashes);this._check();
@@ -222,8 +232,8 @@ export class PostRenderRecorder {
       const ledger={schema_version:1,codec:'vp8',timebase_us:1000,
         submitted_timestamps_us:this._inputs.map(f=>f.timestamp),encoded_timestamps_us:this._outputs.map(f=>f.timestamp),
         durations_us:this._inputs.map(f=>f.duration),encoded_sha256:hashes,flushed:true};
-      const ledgerBytes=utf8.encode(JSON.stringify(ledger));need(ledgerBytes.length<=LIMITS.maxLedgerBytes,'ledger_too_large');
-      const blob=muxWebM({width:this._width,height:this._height,frames:this._outputs,ledgerBytes});
+      const ledgerBytes=utf8.encode(JSON.stringify(ledger));need(ledgerBytes.length<=this._limits.maxLedgerBytes,'ledger_too_large');
+      const blob=muxWebM({width:this._width,height:this._height,frames:this._outputs,ledgerBytes,policy:this._policy});
       const encoder_receipt={schema_version:1,codec:'vp8',timebase_us:1000,submitted_frames:this.submittedFrames,
         encoded_frames:this.outputFrames,flushed:true,ledger_sha256:await this._hash(ledgerBytes),ledger_bytes:ledgerBytes.length,
         webm_sha256:await this._hash(await blob.arrayBuffer()),webm_bytes:blob.size};

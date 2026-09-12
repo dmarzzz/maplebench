@@ -25,9 +25,14 @@ from full_client_trial import publish_attempt, sync_directory, validate_spec
 from full_client_research import summarize, CLASSES, TASKS
 
 ASSETS = ('index.html', 'dashboard.js', 'style.css')
+# Self-contained UI may include licensed fonts and original decorative artwork.
+# This matches the existing non-video package verification ceiling.
+MAX_UI_ASSET = 4 * 1024**2
 MAX_VIDEO = 32 * 1024**2
 MAX_ADAPTIVE_VIDEO = 96 * 1024**2
+MAX_LONG_VIDEO = 600 * 1024**2
 ADAPTIVE_PROTOCOL = 'full-client-adaptive-pilot-v1'
+XP_PROTOCOL = 'full-client-xp-windows-v1'
 VERIFIED = 'runner_verified_receipts_rechecked'
 
 
@@ -167,7 +172,7 @@ def project_member(entry, fixture, attempt_root, recordings):
 
 
 def file_inventory(site,*,maximum_video=MAX_VIDEO):
-    require(maximum_video in (MAX_VIDEO,MAX_ADAPTIVE_VIDEO),'invalid_public_video_limit')
+    require(maximum_video in (MAX_VIDEO,MAX_ADAPTIVE_VIDEO,MAX_LONG_VIDEO),'invalid_public_video_limit')
     names=set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}
     found=set()
     for count,p in enumerate(site.iterdir(),1):
@@ -190,8 +195,10 @@ def verify_package(package, expected):
             and isinstance(manifest.get('content'),dict) and digest(encoded(manifest['content']))==expected,
             'package_manifest_mismatch')
     content=manifest['content'];site=directory(package/'site')
-    require(content.get('protocol') in (None,'legacy-full-client-v1',ADAPTIVE_PROTOCOL),'invalid_package_protocol')
-    maximum=MAX_ADAPTIVE_VIDEO if content.get('protocol')==ADAPTIVE_PROTOCOL else MAX_VIDEO
+    require(content.get('protocol') in (None,'legacy-full-client-v1',ADAPTIVE_PROTOCOL,XP_PROTOCOL),'invalid_package_protocol')
+    require('horizon_seconds' not in content or (content.get('protocol')==XP_PROTOCOL
+            and type(content['horizon_seconds']) is int and content['horizon_seconds']==1800),'invalid_package_horizon')
+    maximum=MAX_LONG_VIDEO if content.get('horizon_seconds')==1800 else MAX_ADAPTIVE_VIDEO if content.get('protocol') in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) else MAX_VIDEO
     require(content.get('files')==file_inventory(site,maximum_video=maximum),'package_content_changed')
     return manifest
 
@@ -215,13 +222,19 @@ def publication_state(package, expected):
 
 
 def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replace_archive=False,
-                    research_profile=None, adaptive_scenario=None):
+                    research_profile=None, adaptive_scenario=None, xp_evidence=None):
     plan_path=Path(plan_path);attempt_root=directory(attempt_root);output_root=directory(output_root)
     for private in (attempt_root,directory(plan_path.parent)):
         require(not (output_root==private or output_root.is_relative_to(private) or private.is_relative_to(output_root)),
                 'private_inputs_must_be_outside_publication')
     plan=selected_plan(plan_path,plan_sha256)
-    if adaptive_scenario is not None:
+    if xp_evidence is not None:
+        require(adaptive_scenario is not None, 'xp_frozen_scenario_required')
+        from full_client_xp_cohort import checked_inputs, project_member as xp_member, VERIFIED as verified
+        profile,scenario=checked_inputs(plan,adaptive_scenario,research_profile,xp_evidence)
+        project=lambda entry,fixture,root,videos:xp_member(entry,fixture,root,videos,scenario,xp_evidence)
+        maximum_video=MAX_LONG_VIDEO if scenario['adaptive_protocol']['wall_seconds']==1800 else MAX_ADAPTIVE_VIDEO
+    elif adaptive_scenario is not None:
         from full_client_adaptive_publication import checked_profile, project_member as adaptive_member, VERIFIED as verified
         profile,scenario=checked_profile(plan,adaptive_scenario,research_profile)
         project=lambda entry,fixture,root,videos:adaptive_member(entry,fixture,root,videos,scenario)
@@ -260,7 +273,7 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
                       'archive_replacement':replace_archive,'attempt_ids':[r['id'] for r in rows]}}
         snapshot['research_matrix']=summarize(snapshot)
         ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
-        for name in ASSETS:write_new(site/name,stable_bytes(ui/name,1024**2),0o644)
+        for name in ASSETS:write_new(site/name,stable_bytes(ui/name,MAX_UI_ASSET),0o644)
         videos=[{'path':p.name,**stable_fingerprint(p,maximum_video)}
                 for p in sorted(recordings.iterdir())]
         write_new(site/'results.json',encoded(snapshot),0o644)
@@ -269,6 +282,7 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
         content={'schema_version':1,'plan_sha256':plan_sha256,'archive_replacement':replace_archive,
                  'target_path':'/' if replace_archive else '/cohorts/'+plan_sha256[:16]+'/',
                  'protocol':profile['protocol_id'],'files':file_inventory(site,maximum_video=maximum_video)}
+        if maximum_video==MAX_LONG_VIDEO:content['horizon_seconds']=1800
         content_sha=digest(encoded(content));package=output_root/content_sha
         write_new(staging/'package-manifest.json',encoded({'schema_version':1,'content_sha256':content_sha,'content':content}))
         sync_directory(recordings);sync_directory(site);sync_directory(staging)
@@ -328,6 +342,8 @@ def main(argv=None):
     prepare.add_argument('--research-profile',type=Path);prepare.add_argument('--research-profile-sha256')
     prepare.add_argument('--adaptive-scenario',type=Path,
                          help='Frozen adaptive scenario; its exact SHA256 must match the pinned plan')
+    prepare.add_argument('--xp-evidence',type=Path)
+    prepare.add_argument('--xp-evidence-sha256')
     for name in ('claim','record-deployment'):
         command=commands.add_parser(name);command.add_argument('--package',type=Path,required=True)
         command.add_argument('--content-sha256',required=True)
@@ -339,9 +355,12 @@ def main(argv=None):
             require((args.research_profile is None)==(args.research_profile_sha256 is None),'research_profile_hash_required')
             profile=None if args.research_profile is None else Reader().json(directory(args.research_profile.parent),
                 args.research_profile.name,args.research_profile_sha256)
+            require((args.xp_evidence is None)==(args.xp_evidence_sha256 is None),'xp_evidence_hash_required')
+            xp_evidence=None if args.xp_evidence is None else Reader().json(directory(args.xp_evidence.parent),
+                args.xp_evidence.name,args.xp_evidence_sha256)
             result=prepare_package(args.plan,args.plan_sha256,args.attempt_root,args.output_root,
                                    replace_archive=args.replace_archive,research_profile=profile,
-                                   adaptive_scenario=args.adaptive_scenario)
+                                   adaptive_scenario=args.adaptive_scenario,xp_evidence=xp_evidence)
         elif args.command=='claim':result=claim_publication(args.package,args.content_sha256)
         else:result=record_deployment(args.package,args.content_sha256,args.deployment_id,args.url,args.verified_content_sha256)
         print(json.dumps(result,sort_keys=True));return 0

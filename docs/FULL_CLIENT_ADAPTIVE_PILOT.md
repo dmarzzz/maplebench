@@ -95,6 +95,20 @@ refreeze prompt/source/scenario pins and keep old fixtures separate. Absence of 
 policy preserves the original prompt and early-stop behavior; old traces remain
 valid. Do not reinterpret old short runs as having used the full horizon.
 
+## Native-window progression variant
+
+`NATIVE_PROGRESSION_POLICY` is a separate optional frozen `progression_policy`.
+It permits ordinary level increases from the exact initial profile level through
+200 only with the full-horizon policy and native XP-window runtime/scenario opt-in.
+The prompt changes and requires a new scenario identity. It does not allocate
+points, heal, change native stats, or retrofit old pilot receipts.
+
+`verify_result` refuses that variant unless the native-window verifier supplies
+its hashed native ledger and offline initial/final/session contract. Observed
+levels are checked against actual native transitions. The ordinary adaptive
+publication path cannot substitute a client counter or a caller's verified flag.
+See [native XP windows](FULL_CLIENT_XP_WINDOWS.md) for the full acceptance contract.
+
 ## Evidence and closeout
 
 `result.json` contains an `adaptive` trace and its `adaptiveTrace` reference to

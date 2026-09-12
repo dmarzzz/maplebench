@@ -89,3 +89,13 @@ original three generic packets becoming three attack packets, with target and
 effect dispatch, while fixture buffs remain generic skill-use packets. This is
 source verification, not proof of native animation, server damage or class
 qualification. All earlier native failures remain unchanged.
+
+## Expanded training toolkit candidate
+
+For the explicit new skill-toolkit fixture only, apply
+`0006-training-toolkit-attack-flags.patch` after 0005. It adds the ordinary attack
+classification for Strafe, Arrow Bomb, Inferno, Ice Strike, Thunder Spear and
+Blizzard, and marks Drain ranged. It leaves buffs and unknown skills on their
+existing routes. The compiled-method regression exercises the real dispatcher;
+the expanded kits still require a new WASM build and native qualification. See
+[the exact toolkit and resource contract](../../docs/FULL_CLIENT_SKILL_TOOLKITS.md).

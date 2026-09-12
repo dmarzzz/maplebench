@@ -212,8 +212,13 @@ def validated_spec(model, fixture):
     spec = {"schema_version": 1, "model": model, "scenario_fingerprint": fixture["scenario"]["sha256"],
             "baseline_sha256": fixture["baseline"]["sha256"], "budgets": copy.deepcopy(fixture["budgets"])}
     if fixture.get("protocol") is not None:
-        require(fixture["protocol"] == "full-client-adaptive-pilot-v1", "invalid_trial_protocol")
-        spec.update(schema_version=2, protocol=fixture["protocol"])
+        versions = {"full-client-adaptive-pilot-v1": 2, "full-client-xp-windows-v1": 3}
+        require(fixture["protocol"] in versions, "invalid_trial_protocol")
+        spec.update(schema_version=versions[fixture["protocol"]], protocol=fixture["protocol"])
+    if "horizon_seconds" in fixture:
+        require(type(fixture["horizon_seconds"]) is int and fixture["horizon_seconds"] == 1800
+                and spec.get("schema_version") in (2,3), "invalid_trial_horizon")
+        spec["horizon_seconds"] = 1800
     try:
         trial.validate_spec(spec)
     except trial.TrialError as error:
@@ -224,11 +229,43 @@ def validated_spec(model, fixture):
 def fixture_inputs(fixture, runner):
     """No host commands, services, asset inventory, database or model access."""
     scenario = decode(read_ref(fixture["scenario"]))
+    windows = fixture.get("protocol") == "full-client-xp-windows-v1"
+    controller_protocol = "full-client-adaptive-pilot-v1" if windows else fixture.get("protocol")
     require(scoring.same_json(scenario.get("trial_budgets"), fixture["budgets"])
-            and scenario.get("protocol") == fixture.get("protocol"), "fixture_budget_mismatch")
-    if fixture.get("protocol") == "full-client-adaptive-pilot-v1":
+            and scenario.get("protocol") == controller_protocol, "fixture_budget_mismatch")
+    require(("xp_window_protocol" in scenario) == windows, "invalid_trial_protocol")
+    protocol = None
+    if controller_protocol == "full-client-adaptive-pilot-v1":
+        from full_client_adaptive import validate_protocol
+        try:
+            protocol = validate_protocol(scenario.get("adaptive_protocol"))
+        except (ValueError, TypeError, KeyError) as error:
+            raise ExperimentError("invalid_trial_protocol") from error
+        require(fixture.get("horizon_seconds",300)==protocol["wall_seconds"]
+                and ("horizon_seconds" not in fixture or protocol["wall_seconds"]==1800),
+                "invalid_trial_horizon")
+        budgets = fixture["budgets"]
+        require(budgets.get("controller_seconds") == protocol["wall_seconds"]
+                and budgets.get("max_api_requests") == protocol["max_api_requests"]
+                and budgets.get("max_actions") == protocol["max_actions"]
+                and budgets.get("max_output_tokens") == protocol["max_api_requests"] * protocol["max_output_tokens"]
+                and budgets.get("max_total_tokens") == protocol["max_total_tokens"], "fixture_budget_mismatch")
+        require("progression_policy" not in protocol or windows, "invalid_trial_protocol")
+    if windows:
+        from full_client_xp_windows import validate_contract
+        from full_client_adaptive import FULL_HORIZON_POLICY, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY
+        try:
+            window_contract = validate_contract(scenario["xp_window_protocol"])
+            require(window_contract["wall_seconds"] == protocol["wall_seconds"], "invalid_trial_protocol")
+        except (ValueError, TypeError, KeyError) as error:
+            raise ExperimentError("invalid_trial_protocol") from error
+        require(any(scoring.same_json(protocol.get("horizon_policy"), p) for p in
+                    (FULL_HORIZON_POLICY, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY)), "invalid_trial_protocol")
+    if controller_protocol == "full-client-adaptive-pilot-v1":
         required = {str(Path(__file__).resolve().parent / name) for name in
                     ("full_client_adaptive.py", "full_client_adaptive_evidence.py", "maple_agent.py")}
+        if windows:
+            required.add(str(Path(__file__).resolve().parent / "full_client_xp_windows.py"))
         require(required <= {ref["path"] for ref in runner["dependencies"]}, "runner_dependencies_missing")
     read_ref(fixture["baseline"], maximum=MAX_BASELINE, keep=False)
     runtime = decode(read_ref(fixture["runtime_manifest"], maximum=MAX_MANIFEST), maximum=MAX_MANIFEST)
@@ -244,6 +281,8 @@ def fixture_inputs(fixture, runner):
     argv = adapter["argv"]
     require(isinstance(argv, list) and len(argv) == 4 and argv[2] == "--config", "invalid_backend_argv")
     config = decode(read_file(absolute(argv[3]), private=True)[0])
+    require(config.get("xp_window_protocol") == ("full-client-xp-windows-v1" if windows else None),
+            "backend_fixture_mismatch")
     require(all(scoring.same_json(config.get(key), fixture[key]) for key in ("scenario", "baseline", "runtime_manifest"))
             and config.get("attempt_root") == runner["state_root"]
             and config.get("world_lock") == runner["world_lock"]
@@ -303,7 +342,8 @@ def validate_plan(plan):
     ids = []
     for fixture in fixtures:
         require(isinstance(fixture, dict) and set(fixture) == {"id", "scenario", "baseline", "runtime_manifest",
-                "budgets", "adapter_config", "adapter_fingerprint"} | ({"protocol"} if "protocol" in fixture else set()), "invalid_fixture")
+                "budgets", "adapter_config", "adapter_fingerprint"} | ({"protocol"} if "protocol" in fixture else set())
+                | ({"horizon_seconds"} if "horizon_seconds" in fixture else set()), "invalid_fixture")
         require(isinstance(fixture["id"], str) and SLUG.fullmatch(fixture["id"]), "invalid_fixture_id")
         ids.append(fixture["id"])
         for key in ("scenario", "baseline", "runtime_manifest", "adapter_config"):
@@ -337,7 +377,9 @@ def validate_plan(plan):
         sums["wall_seconds"] += LAUNCH_GRACE_SECONDS
     limits = plan["aggregate_limits"]
     require(isinstance(limits, dict) and set(limits) == set(sums), "invalid_aggregate_limits")
-    caps = {"api_requests": MAX_ENTRIES, "total_tokens": MAX_ENTRIES * 1000000, "wall_seconds": 604800}
+    long = any(e["spec"].get("horizon_seconds") == 1800 for e in entries)
+    caps = {"api_requests": MAX_ENTRIES * (72 if long else 1),
+            "total_tokens": MAX_ENTRIES * (1440000 if long else 1000000), "wall_seconds": 604800}
     require(all(integer(limits[name], sums[name], caps[name]) for name in sums), "aggregate_budget_insufficient")
     require(scoring.same_json(plan["policy"], POLICY), "unsupported_resume_policy")
     require(scoring.same_json(plan["balance"], balance(models, reps, fixtures)), "balance_claim_mismatch")
@@ -352,11 +394,15 @@ def build_plan(config, *, id_factory=lambda: uuid.uuid4().hex):
     require(isinstance(plan["fixtures"], list) and 1 <= len(plan["fixtures"]) <= 16, "plan_size_limit")
     for fixture in plan["fixtures"]:
         require(isinstance(fixture, dict) and set(fixture) == {"id", "scenario", "baseline", "runtime_manifest",
-                "budgets", "adapter_config"} | ({"protocol"} if "protocol" in fixture else set()), "invalid_fixture")
+                "budgets", "adapter_config"} | ({"protocol"} if "protocol" in fixture else set())
+                | ({"horizon_seconds"} if "horizon_seconds" in fixture else set()), "invalid_fixture")
         scenario = decode(read_ref(fixture["scenario"]))
         if scenario.get("protocol") == "full-client-adaptive-pilot-v1":
-            require(fixture.get("protocol", scenario["protocol"]) == scenario["protocol"], "invalid_trial_protocol")
-            fixture["protocol"] = scenario["protocol"]
+            if "xp_window_protocol" in scenario:
+                require(fixture.get("protocol") == "full-client-xp-windows-v1", "invalid_trial_protocol")
+            else:
+                require(fixture.get("protocol", scenario["protocol"]) == scenario["protocol"], "invalid_trial_protocol")
+                fixture["protocol"] = scenario["protocol"]
         fixture["adapter_fingerprint"] = fixture_inputs(fixture, plan["runner"])
     models, reps = plan["models"], plan["repetitions"]
     require(isinstance(models, list) and models and all(isinstance(m, str) and m in MODELS for m in models)

@@ -6,6 +6,7 @@ import unittest
 
 
 SOURCE = (Path(__file__).resolve().parents[1] / 'ui/full-client-dashboard/dashboard.js').read_text()
+PROTOCOL_HELPERS = SOURCE[SOURCE.index('  const adaptiveRow='):SOURCE.index('  const badge=')]
 
 
 def function(name, following):
@@ -54,7 +55,7 @@ function row(model='gpt-6-astra',start=135106){return {
 @unittest.skipUnless(shutil.which('node'), 'Node is required for dashboard UI checks')
 class AdaptiveHoldUITests(unittest.TestCase):
     def run_js(self, functions, checks):
-        code=DOM + ''.join(function(name, following) for name, following in functions) + checks
+        code=DOM + PROTOCOL_HELPERS + ''.join(function(name, following) for name, following in functions) + checks
         result=subprocess.run([shutil.which('node'), '--max-old-space-size=64', '-e', code],
                               capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -72,7 +73,8 @@ assert.match(nav.children[1].textContent,/excluded from the current matrix/);
 assert.equal(nav.children[1].children[1].href,prior.url);
 snapshot.catalog.previous_cohorts=[{...prior,url:'https://untrusted.example/'}];
 renderCatalog();assert.equal(nav.children[1].children.length,1);
-snapshot.catalog.previous_cohorts=Array(4).fill(prior);renderCatalog();assert.equal(nav.hidden,true);
+snapshot.catalog.previous_cohorts=Array(4).fill(prior);renderCatalog();assert.equal(nav.hidden,false);
+snapshot.catalog.previous_cohorts=Array(5).fill(prior);renderCatalog();assert.equal(nav.hidden,true);
 snapshot.catalog={schema_version:1,cohorts:[active]};renderCatalog();assert.equal(nav.hidden,false);assert.equal(nav.children.length,1);
 """)
 

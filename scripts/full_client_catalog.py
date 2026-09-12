@@ -6,6 +6,8 @@ checks those public bytes and their shape; it never re-scores native evidence.
 """
 import argparse
 import copy
+from html import escape
+import unicodedata
 import json
 import os
 from pathlib import Path
@@ -15,18 +17,20 @@ import tempfile
 
 from full_client_dashboard import Reader, RUN, SHA, model, number, project_attempt
 from full_client_gallery import copy_recording, directory
-from full_client_publication import (ADAPTIVE_PROTOCOL, ASSETS, MAX_ADAPTIVE_VIDEO,
+from full_client_publication import (ADAPTIVE_PROTOCOL, XP_PROTOCOL, ASSETS, MAX_UI_ASSET, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO,
     digest, encoded, require, stable_bytes, stable_fingerprint, verify_package, write_new)
 from full_client_adaptive_publication import VERIFIED
+from full_client_xp_cohort import VERIFIED as XP_VERIFIED, checked_public as checked_native_public
 from full_client_research import summarize, TASKS
 from full_client_score import same_json
 from full_client_trial import publish_attempt
 from full_client_vercel import checked_payload, MAX_PAYLOAD, PUBLIC_NAME
 from maple_agent import MODELS
 
-CLASSES={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage'}
+CLASSES={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage','night_lord':'Night Lord'}
 ROW_FIELDS=set(project_attempt(Reader(),'0'*32,None,None,{},None,0,'/recordings/'))|{
-    'controller_status','live','renderer_fresh','protocol_id','adaptive','sdk_calls','research','recording_publication'}
+    'controller_status','live','renderer_fresh','protocol_id','adaptive','sdk_calls','research','recording_publication',
+    'authoritative_peak_xp_per_minute','native_xp'}
 SNAPSHOT_FIELDS={'schema_version','generated_at_ms','source','verification','live_status_available','ranked',
     'recording_prefix','truncated','attempts','comparisons','featured_run_id','cohort','research_matrix'}
 
@@ -46,7 +50,7 @@ def safe_public(value,depth=0,parent=None):
                     'logs','environment','credentials','password','api_key','account_id','character_id'},'catalog_private_field')
             safe_public(item,depth+1,key)
     elif isinstance(value,list):
-        require(len(value)<=100,'catalog_public_shape')
+        require(len(value)<=(120 if parent=='windows' else 100),'catalog_public_shape')
         for item in value:safe_public(item,depth+1,parent)
     elif isinstance(value,str):
         require(len(value)<=512 and not re.search(r'[\x00-\x1f<>\\]',value),'catalog_public_text')
@@ -63,7 +67,8 @@ def public_snapshot(snapshot,*,adaptive):
     rows=snapshot['attempts'];ids=[]
     for row in rows:
         require(isinstance(row,dict) and set(row)<=ROW_FIELDS and RUN.fullmatch(str(row.get('id','')))
-            and row.get('ranked') is False and row.get('publication_eligible') is False,'catalog_public_row')
+            and row.get('ranked') is False and (row.get('publication_eligible') is False
+                or (row.get('protocol_id')==XP_PROTOCOL and row.get('publication_eligible') is True)), 'catalog_public_row')
         safe_public(row);ids.append(row['id'])
         if adaptive:
             require(row.get('kind')=='trial' and row.get('mode')=='api'
@@ -81,6 +86,8 @@ def public_snapshot(snapshot,*,adaptive):
 
 
 def verified(row):
+    if row.get('protocol_id')==XP_PROTOCOL:
+        return checked_native_public(row)
     return (row.get('status')=='completed' and row.get('score_verification')==VERIFIED
         and row.get('attribution')=='exact' and row.get('returned_model')==row.get('requested_model')
         and number(row.get('persisted_xp'),-2**53+1)
@@ -91,28 +98,41 @@ def verified(row):
 def cohort(package,expected):
     require(isinstance(expected,str) and SHA.fullmatch(expected),'catalog_content_hash_required')
     manifest=verify_package(package,expected)
+    return {'package':Path(package),**cohort_content(manifest,directory(Path(package)/'site'))}
+
+
+def cohort_content(manifest,site):
+    """Check public cohort semantics after the caller binds its exact file bytes."""
     require(type(manifest['schema_version']) is int,'catalog_package_schema')
-    content=manifest['content'];site=directory(Path(package)/'site')
-    require(set(content)=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+    content=manifest['content'];site=directory(site)
+    require(set(content)-{'presentation_parent_sha256','horizon_seconds','skill_preview_payload_sha256'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+        and ('skill_preview_payload_sha256' not in content or (isinstance(content['skill_preview_payload_sha256'],str)
+            and SHA.fullmatch(content['skill_preview_payload_sha256'])))
+        and ('presentation_parent_sha256' not in content or (isinstance(content['presentation_parent_sha256'],str)
+            and SHA.fullmatch(content['presentation_parent_sha256'])))
         and type(content['schema_version']) is int and content['schema_version']==1
-        and content['protocol']==ADAPTIVE_PROTOCOL and content['archive_replacement'] is False
+        and content['protocol'] in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) and content['archive_replacement'] is False
         and SHA.fullmatch(str(content['plan_sha256']))
         and content['target_path']=='/cohorts/'+content['plan_sha256'][:16]+'/','catalog_nested_adaptive_package_required')
-    snapshot=Reader().json(site,'results.json');rows=public_snapshot(snapshot,adaptive=True)
-    require(snapshot.get('source')=='full_client_private_receipt_projection' and snapshot.get('verification')==VERIFIED
+    protocol=content['protocol'];verifier=XP_VERIFIED if protocol==XP_PROTOCOL else VERIFIED
+    snapshot=Reader().json(site,'results.json',content['files']['results.json']['sha256']);rows=public_snapshot(snapshot,adaptive=True)
+    require(snapshot.get('source')=='full_client_private_receipt_projection' and snapshot.get('verification')==verifier
         and len(rows)==4 and {r['requested_model'] for r in rows}==set(MODELS),'catalog_all_four_models_required')
     metadata=[r.get('research') for r in rows]
     require(all(isinstance(m,dict) and set(m)=={'protocol_id','class_id','task_id','fixture_fingerprint','planned'}
-        and m['protocol_id']==ADAPTIVE_PROTOCOL and m['class_id'] in CLASSES and m['task_id'] in TASKS
+        and m['protocol_id']==protocol and m['class_id'] in CLASSES and m['task_id'] in TASKS
         and SHA.fullmatch(str(m['fixture_fingerprint'])) and m['planned'] is True for m in metadata)
         and all(same_json(metadata[0],m) for m in metadata),'catalog_fixture_separation_required')
     for row in rows:
-        if row.get('score_verification')==VERIFIED:
-            require(verified(row) and row.get('protocol_id')==ADAPTIVE_PROTOCOL
+        if row.get('score_verification')==verifier:
+            require(verified(row) and row.get('protocol_id')==protocol
                 and row['adaptive'].get('class_profile',{}).get('class_name')==CLASSES[metadata[0]['class_id']]
+                and (protocol!=XP_PROTOCOL or row['native_xp']['wall_budget_ms']==content.get('horizon_seconds',300)*1000)
                 and SHA.fullmatch(str(row.get('comparison_group'))),'catalog_verified_row_inconsistent')
-        else:require(row.get('persisted_xp') is None and row.get('comparison_group') is None,'catalog_unverified_score')
-    videos=Reader().json(site,'recording-manifest.json')
+        else:require(row.get('persisted_xp') is None and row.get('comparison_group') is None
+            and row.get('authoritative_peak_xp_per_minute') is None
+            and row.get('publication_eligible') is False,'catalog_unverified_score')
+    videos=Reader().json(site,'recording-manifest.json',content['files']['recording-manifest.json']['sha256'])
     require(set(videos)=={'schema_version','entries'} and type(videos['schema_version']) is int and videos['schema_version']==1
         and isinstance(videos['entries'],list),'catalog_recording_manifest')
     declared={}
@@ -132,6 +152,7 @@ def cohort(package,expected):
             require(isinstance(recording,dict) and set(recording)<={'url','sha256','reviewed','playback'}
                 and recording.get('url')=='./recordings/'+filename and filename in declared
                 and recording.get('sha256')==declared[filename]['sha256']
+                and declared[filename]['bytes'] <= (MAX_LONG_VIDEO if content.get('horizon_seconds')==1800 else MAX_ADAPTIVE_VIDEO)
                 and verified(row) and row.get('recording_publication')=='verified_bytes','catalog_recording_binding')
             linked.add(filename)
         else:require(row.get('recording_publication')!='verified_bytes','catalog_recording_binding')
@@ -147,25 +168,57 @@ def cohort(package,expected):
     require(same_json(snapshot.get('cohort'),expected_cohort),'catalog_cohort_metadata')
     featured=max([r for r in rows if verified(r)],key=lambda r:r['updated_at_ms'] or 0,default=None)
     require(snapshot.get('featured_run_id')==(featured['id'] if featured else None),'catalog_featured_binding')
-    return {'package':Path(package),'site':site,'manifest':manifest,'snapshot':snapshot,'complete':complete,
+    return {'site':site,'manifest':manifest,'snapshot':snapshot,'complete':complete,
         'class_id':metadata[0]['class_id'],'fixture_fingerprint':metadata[0]['fixture_fingerprint']}
 
 
 def copy_file(source,name,target,expected):
     target.parent.mkdir(parents=True,exist_ok=True)
     if name.endswith('.webm'):
-        copy_recording(source,{'path':name,'sha256':expected['sha256']},target,{},maximum=MAX_ADAPTIVE_VIDEO)
+        copy_recording(source,{'path':name,'sha256':expected['sha256']},target,{},maximum=MAX_LONG_VIDEO)
     else:write_new(target,stable_bytes(source/name,4*1024**2),0o644)
-    require(stable_fingerprint(target,MAX_ADAPTIVE_VIDEO if name.endswith('.webm') else 4*1024**2)==expected,
+    require(stable_fingerprint(target,MAX_LONG_VIDEO if name.endswith('.webm') else 4*1024**2)==expected,
             'catalog_source_changed')
+
+
+def cohort_annotations(value,included):
+    require(isinstance(value,list) and len(value)<=6,'catalog_annotations_limit')
+    known={row['id']:row for row in included};seen=set();seen_text=set();notes=[]
+    for item in value:
+        require(isinstance(item,dict) and set(item)=={'plan_sha256','text'},'catalog_annotation_schema')
+        plan=item['plan_sha256'];text=item['text']
+        require(isinstance(plan,str) and SHA.fullmatch(plan) and plan in known,'catalog_annotation_unknown_cohort')
+        require(plan not in seen,'catalog_annotation_duplicate');seen.add(plan)
+        require(isinstance(text,str) and 1<=len(text)<=400 and text==text.strip()
+                and not any(unicodedata.category(c).startswith('C') for c in text)
+                and not re.search(r'[<>\[\]{}\\`*#]|://|(?:^|\s)/|[\w.+-]+@[\w.-]+|(?:\d{1,3}\.){3}\d{1,3}|(?:token|password|secret|api_key)\s*[:=]',text,re.IGNORECASE),
+                'catalog_annotation_text')
+        require(text not in seen_text,'catalog_annotation_duplicate');seen_text.add(text)
+        notes.append({'plan_sha256':plan,'text':text,'url':known[plan]['url'],
+                      'class_id':known[plan]['class_id']})
+    return sorted(notes,key=lambda row:row['plan_sha256'])
+
+
+def annotated_index(raw,notes):
+    text=raw.decode('utf-8')
+    anchor='<!-- cohort-limitations -->'
+    require(text.count(anchor)==1 or (anchor not in text and text.count('</header>')==1),
+            'catalog_annotation_html_anchor')
+    body=''.join('<article><h3><a href="'+escape(note['url'],quote=True)+'">'
+                 +escape(CLASSES[note['class_id']])+' cohort</a></h3><p>'
+                 +escape(note['text'],quote=True)+'</p></article>' for note in notes)
+    section='<section class="research-intro" aria-label="Operator cohort limitations"><h2>Cohort limitations</h2>'+body+'</section>'
+    if anchor in text:
+        return text.replace(anchor,section,1).encode('utf-8')
+    return text.replace('</header>','</header>'+section,1).encode('utf-8')
 
 
 def compose(request,output_root):
     require(isinstance(request,dict) and type(request.get('schema_version')) is int
-        and ((request['schema_version']==1 and set(request)=={'schema_version','cohorts','primary_content_sha256','archive'})
-             or (request['schema_version']==2 and set(request)=={'schema_version','cohorts','primary_content_sha256','archive','previous_cohorts'}))
+        and ((request['schema_version']==1 and set(request)-{'annotations'}=={'schema_version','cohorts','primary_content_sha256','archive'})
+             or (request['schema_version']==2 and set(request)-{'annotations'}=={'schema_version','cohorts','primary_content_sha256','archive','previous_cohorts'}))
         and isinstance(request['cohorts'],list)
-        and 1<=len(request['cohorts'])<=3,'catalog_request_schema')
+        and 1<=len(request['cohorts'])<=4,'catalog_request_schema')
     packages=[]
     for item in request['cohorts']:
         require(isinstance(item,dict) and set(item)=={'package','content_sha256'},'catalog_package_selection')
@@ -188,7 +241,9 @@ def compose(request,output_root):
     packages.sort(key=lambda p:list(CLASSES).index(p['class_id']))
     assets=[{name:p['manifest']['content']['files'][name] for name in ASSETS} for p in packages]
     require(all(same_json(assets[0],value) for value in assets),'catalog_mixed_assets')
-    archive=request['archive'];old=None;old_files={};retired=bool((archive or previous) and any(p['complete'] for p in packages))
+    primary_complete=next(p['complete'] for p in packages if p['manifest']['content_sha256']==primary)
+    replaced_previous=all(any(p['complete'] and p['class_id']==prior['class_id'] for p in packages) for prior in previous)
+    archive=request['archive'];old=None;old_files={};retired=bool((archive or previous) and primary_complete and replaced_previous)
     retained_previous=[] if retired else previous
     if archive is not None:
         require(isinstance(archive,dict) and set(archive)=={'site','inventory','inventory_sha256'},'catalog_archive_inventory_required')
@@ -250,6 +305,8 @@ def compose(request,output_root):
         'catalog':{'schema_version':request['schema_version'],'planned':len(new_rows),'verified':sum(verified(r) for r in new_rows),
             'complete_cohorts':sum(p['complete'] for p in packages),'cohorts':cohorts,'poll_interval_ms':10000,
             'archive_state':'retired' if retired else 'retained' if old or previous else 'not_supplied'}}
+    notes=cohort_annotations(request.get('annotations',[]),cohorts+previous_metadata)
+    if notes:snapshot['catalog']['annotations']=notes
     if request['schema_version']==2:snapshot['catalog']['previous_cohorts']=previous_metadata
     snapshot['research_matrix']=summarize(snapshot) if request['schema_version']==1 else summarize(snapshot|{'attempts':new_rows,'comparisons':[g for g in comparisons if g.get('scope')!='previous_cohort']})
     root_names=set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}
@@ -258,7 +315,8 @@ def compose(request,output_root):
         content=p['manifest']['content'];prefix=content['target_path'].lstrip('/')
         planned_files.update({prefix+name:value for name,value in content['files'].items()})
     ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
-    root_data={name:stable_bytes(ui/name,1024**2) for name in ASSETS}
+    root_data={name:stable_bytes(ui/name,MAX_UI_ASSET) for name in ASSETS}
+    if notes:root_data['index.html']=annotated_index(root_data['index.html'],notes)
     root_data.update({'results.json':encoded(snapshot),
         'vercel.json':encoded({'framework':None,'buildCommand':None,'outputDirectory':'.'}),
         'recording-manifest.json':encoded({'schema_version':1,'entries':[
@@ -280,16 +338,21 @@ def compose(request,output_root):
             (site/prefix/'recordings').mkdir(parents=True,mode=0o755)
             for name,value in content['files'].items():copy_file(p['site'],name,site/prefix/name,value)
         for name,raw in root_data.items():write_new(site/name,raw,0o644)
-        files={p.relative_to(site).as_posix():stable_fingerprint(p,MAX_ADAPTIVE_VIDEO if p.suffix=='.webm' else 4*1024**2)
+        files={p.relative_to(site).as_posix():stable_fingerprint(p,MAX_LONG_VIDEO if p.suffix=='.webm' else 4*1024**2)
                for p in sorted(site.rglob('*')) if p.is_file()}
         require(same_json(files,planned_files),'catalog_source_changed')
-        inventory=encoded({'schema_version':1,'files':files});write_new(stage/'payload-inventory.json',inventory)
+        inventory_value={'schema_version':1,'files':files}
+        included=packages+retained_previous
+        if any(p['manifest']['content'].get('horizon_seconds')==1800 for p in included):
+            inventory_value['cohort_manifests']=[p['manifest'] for p in included]
+        inventory=encoded(inventory_value);write_new(stage/'payload-inventory.json',inventory)
         primary_package=next(p for p in packages if p['manifest']['content_sha256']==primary)
         checked_payload(site,stage/'payload-inventory.json',digest(inventory),primary_package['manifest'])
         content={'schema_version':1,'source_content_sha256':[p['manifest']['content_sha256'] for p in packages],
             'archive_inventory_sha256':archive['inventory_sha256'] if archive else None,'archive_retired':retired,'files':files}
         if request['schema_version']==2:
             content.update(schema_version=2,previous_content_sha256=[p['manifest']['content_sha256'] for p in previous])
+        if notes:content['annotations']=notes
         ident=digest(encoded(content));write_new(stage/'catalog-manifest.json',encoded({'schema_version':1,'content_sha256':ident,'content':content}))
         destination=output_root/ident
         if os.path.lexists(destination):

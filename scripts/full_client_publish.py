@@ -321,17 +321,17 @@ def _validate_structure(manifest):
     return {"ready": not reasons, "reasons": reasons}
 
 
-def _video_probe_limits():
+def _video_probe_limits(long=False):
     """Bound the independent decoder, including bytes produced before parsing."""
-    for kind, requested in ((resource.RLIMIT_FSIZE, JSON_LIMIT),
+    for kind, requested in ((resource.RLIMIT_FSIZE, 96*1024**2 if long else JSON_LIMIT),
                             (resource.RLIMIT_AS, 768 * 1024**2),
-                            (resource.RLIMIT_CPU, 30)):
+                            (resource.RLIMIT_CPU, 180 if long else 30)):
         _, hard = resource.getrlimit(kind)
         limit = requested if hard == resource.RLIM_INFINITY else min(requested, hard)
         resource.setrlimit(kind, (limit, limit))
 
 
-def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
+def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS, duration_policy=None):
     """Measure actual presentation timestamps; never infer duration from FPS.
 
     MediaRecorder WebM often lacks a finalized Segment duration. The last video
@@ -342,8 +342,10 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
     def require(condition, reason):
         if not condition:
             raise EvidenceError(reason)
-    require(type(maximum_ms) is int and maximum_ms in (VIDEO_MAX_MS, 335000),
+    require(type(maximum_ms) is int and maximum_ms in (VIDEO_MAX_MS, 335000, 1835000),
             "video: unsupported protocol duration limit")
+    from full_client_capture import LONG_ENCODED_FRAME_POLICY
+    require((maximum_ms==1835000)==(duration_policy==LONG_ENCODED_FRAME_POLICY), "video: duration policy mismatch")
     require(isinstance(probe, dict) and isinstance(probe.get("streams"), list)
             and len(probe["streams"]) == 1, "video: require one selected decoded video stream")
     stream = probe["streams"][0]
@@ -351,7 +353,7 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
             "video: invalid stream metadata")
     width, height, frames = (int(stream[key]) for key in ("width", "height", "nb_read_frames"))
     require(0 < width <= 8192 and 0 < height <= 8192 and width * height <= 32 * 1024**2
-            and 0 < frames <= VIDEO_MAX_FRAMES, "video: decoded dimensions or frame count exceed limits")
+            and 0 < frames <= (120000 if maximum_ms==1835000 else VIDEO_MAX_FRAMES), "video: decoded dimensions or frame count exceed limits")
     packets = probe.get("packets")
     # The supported recorder/container encodings carry one decoded video frame
     # per packet. Decoder drops or incomplete packet/frame accounting fail closed.
@@ -404,15 +406,19 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS):
             "packet_timestamps_us":[round(timestamp*1000) for timestamp,_ in presentations]}
 
 
-def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS):
+def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS, duration_policy=None):
     """Inspect the actual video stream under a bounded, read-only subprocess."""
     try:
-        if type(maximum_ms) is not int or maximum_ms not in (VIDEO_MAX_MS, 335000):
+        if type(maximum_ms) is not int or maximum_ms not in (VIDEO_MAX_MS, 335000, 1835000):
             raise EvidenceError("video: unsupported protocol duration limit")
+        from full_client_capture import LONG_ENCODED_FRAME_POLICY
+        long=maximum_ms==1835000
+        if long!=(duration_policy==LONG_ENCODED_FRAME_POLICY):raise EvidenceError("video: duration policy mismatch")
+        json_limit=96*1024**2 if long else JSON_LIMIT
         if os.name != "posix":
             raise EvidenceError("video: safe descriptor-based probing is unavailable on this host")
         reference = {"path": path.name, "sha256": expected_sha256}
-        with open_verified_artifact(path.parent, reference, "video", 1024**3) as stream:
+        with open_verified_artifact(path.parent, reference, "video", 600*1024**2 if long else 1024**3) as stream:
             fd = stream.fileno()
             descriptor_path = ("/proc/self/fd/" if sys.platform.startswith("linux") else "/dev/fd/") + str(fd)
             with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
@@ -422,16 +428,16 @@ def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS):
                          "-select_streams", "v:0", "-count_frames", "-show_packets", "-show_data_hash", "sha256",
                          "-show_entries", "packet=pts_time,duration_time,flags,data_hash:stream=width,height,nb_read_frames,duration:format=duration:format_tags=MAPLEBENCH_ENCODER_LEDGER_V1",
                          "-of", "json", descriptor_path], stdin=subprocess.DEVNULL,
-                        stdout=output, stderr=errors, timeout=30, check=False, pass_fds=(fd,),
-                        preexec_fn=_video_probe_limits,
+                        stdout=output, stderr=errors, timeout=180 if long else 30, check=False, pass_fds=(fd,),
+                        preexec_fn=(lambda:_video_probe_limits(True)) if long else _video_probe_limits,
                         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
                 except (OSError, subprocess.SubprocessError) as error:
                     raise EvidenceError("video: ffprobe unavailable or timed out") from error
-                if process.returncode != 0 or not 0 < output.tell() < JSON_LIMIT or errors.tell() != 0:
+                if process.returncode != 0 or not 0 < output.tell() < json_limit or errors.tell() != 0:
                     raise EvidenceError("video: decoder failed, reported corruption, or exceeded output limits")
                 output.seek(0)
-                probe = parse_json(output.read(JSON_LIMIT + 1))
-            measured = _measure_video_probe(probe, maximum_ms=maximum_ms)
+                probe = parse_json(output.read(json_limit + 1))
+            measured = _measure_video_probe(probe, maximum_ms=maximum_ms,duration_policy=duration_policy)
             if "encoder_ledger_json" in measured:
                 measured.update(webm_sha256=expected_sha256,webm_bytes=os.fstat(fd).st_size)
         return measured
@@ -679,7 +685,7 @@ def _verify_readiness_policy(manifest, artifact_root, evidence, scenario):
             and 0 <= receipt["qualified_run_ms"] - receipt["wait_started_run_ms"] <= policy["timeout_ms"]
             and receipt["qualified_at_ms"] - receipt["wait_started_at_ms"] <= policy["timeout_ms"] + SLACK_MS,
             "qualification must follow capture readiness within the frozen timeout")
-    expected_run_ms = 335000 if scenario.get("protocol") == "full-client-adaptive-pilot-v1" else (scenario["program_seconds"] + 63) * 1000
+    expected_run_ms = (scenario["adaptive_protocol"].get("wall_seconds",300)+35)*1000 if scenario.get("protocol") == "full-client-adaptive-pilot-v1" else (scenario["program_seconds"] + 63) * 1000
     require(manifest["budgets"].get("run_ms") == expected_run_ms,
             "future run budget must include only the frozen ten-second readiness allowance")
     for wall, elapsed in (("wait_started_at_ms", "wait_started_run_ms"), ("qualified_at_ms", "qualified_run_ms")):
@@ -799,8 +805,10 @@ def verify_capture_bundle(manifest, artifact_root):
             and _text(terminal["id"]) and _number(terminal["serverIssuedAtMs"]),
             "capture: invalid terminal server receipt")
     require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
-    from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL, NATIVE_V4_PROTOCOL
-    native = result.get("protocol") in (NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL)
+    from full_client_native import (PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL,
+                                    NATIVE_V4_PROTOCOL, TOOLKIT_NATIVE_PROTOCOL)
+    native = result.get("protocol") in (NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,
+                                        NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL)
     owner = {"id": run_id, "client": result["controller"]["client"], "startedAtMs": started,
              "protocol": result.get("protocol"), "adaptiveProtocol":result.get('adaptive',{}).get('limits',{})}
     if native:
@@ -845,7 +853,12 @@ def _verify_settlement_policy(manifest, artifact_root, evidence, scenario):
     def require(condition, reason):
         if not condition:
             raise EvidenceError(reason)
-    require(same_json(scenario.get("settlement_policy"), SETTLEMENT_POLICY),
+    policy = SETTLEMENT_POLICY
+    if scenario.get("adaptive_protocol",{}).get("wall_seconds")==1800:
+        from full_client_adaptive import validate_protocol
+        validate_protocol(scenario["adaptive_protocol"])
+        policy = {**SETTLEMENT_POLICY,"upload_after_program_ms":180000,"disconnect_after_program_ms":180000}
+    require(same_json(scenario.get("settlement_policy"), policy),
             "settlement: require the supported policy frozen before the trial")
     artifacts, session = manifest["artifacts"], evidence["session"]
     result = manifest["result"]
@@ -874,13 +887,13 @@ def _verify_settlement_policy(manifest, artifact_root, evidence, scenario):
     program_end = result["timing"]["startedAtMs"] + result["timeline"]["program_ended_ms"]
     disconnect, logout = session["disconnect_requested_at_ms"], session["logged_out_at_ms"]
     require(program_end <= observed <= disconnect
-            and observed - program_end <= SETTLEMENT_POLICY["upload_after_program_ms"]
-            and disconnect - program_end <= SETTLEMENT_POLICY["disconnect_after_program_ms"]
-            and disconnect <= logout <= disconnect + SETTLEMENT_POLICY["logout_after_disconnect_ms"],
+            and observed - program_end <= policy["upload_after_program_ms"]
+            and disconnect - program_end <= policy["disconnect_after_program_ms"]
+            and disconnect <= logout <= disconnect + policy["logout_after_disconnect_ms"],
             "settlement: upload/disconnect/logout exceeded the frozen post-program cutoff")
     capture = read_json_artifact(artifact_root, artifacts, "capture")
     require(capture["end_wall_ms"] + manifest["video"]["clock_offset_ms"]["upper"]
-            <= program_end + SETTLEMENT_POLICY["capture_tail_ms"],
+            <= program_end + policy["capture_tail_ms"],
             "settlement: capture extended beyond the frozen post-program tail")
 
 

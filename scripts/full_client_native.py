@@ -4,6 +4,7 @@ import json
 import re
 
 from full_client_capture import CAPTURE_DURATION_POLICY, ENCODED_FRAME_POLICY, validate_duration_policy
+from full_client_skill_toolkit import NATIVE_PROTOCOL as TOOLKIT_NATIVE_PROTOCOL, toolkit, profile as toolkit_profile
 
 PROTOCOL = 'scripted-native-acceptance-v1'
 NATIVE_V2_PROTOCOL = 'scripted-native-acceptance-v2'
@@ -16,11 +17,22 @@ PROFILES = {
                   'skill_keys':{'PRIMARY_SKILL':'Hurricane','SECONDARY_SKILL':'Arrow Rain','BUFF_1':'Soul Arrow : Bow','BUFF_2':'Sharp Eyes'}},
     'ice_lightning_arch_mage': {'id':'ice-lightning-v1','class_name':'Ice/Lightning Arch Mage','level':180,
                               'skill_keys':{'PRIMARY_SKILL':'Chain Lightning','SECONDARY_SKILL':'Teleport','BUFF_1':'Magic Guard','BUFF_2':'Spell Booster'}},
+    'night_lord': {'id':'night-lord-v1','class_name':'Night Lord','level':180,
+                   'skill_keys':{'PRIMARY_SKILL':'Triple Throw','SECONDARY_SKILL':'Avenger','BUFF_1':'Claw Booster','BUFF_2':'Haste'}},
 }
 
 def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL):
-    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
+    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
         raise ValueError('invalid_native_fixture')
+    if protocol==TOOLKIT_NATIVE_PROTOCOL:
+        policy=toolkit(class_id)
+        return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
+            'baseline_sha256':baseline_sha256,'wall_seconds':60,'max_actions':32,'max_sdk_requests':180,
+            'capture_max_ms':75000,'capture_duration_policy':dict(ENCODED_FRAME_POLICY)}
+    # This new, scoped fixture has no historical v1/v2/v3 recipe. An explicit
+    # v4 request binds its profile and source without changing prior fixtures.
+    if class_id=='night_lord' and protocol!=NATIVE_V4_PROTOCOL:
+        raise ValueError('night_lord_requires_native_v4')
     return {'id':protocol,'class_id':class_id,'profile':json.loads(json.dumps(PROFILES[class_id])),
             'baseline_sha256':baseline_sha256,'wall_seconds':30,'max_actions':12,'max_sdk_requests':100,
             'capture_max_ms':45000,'capture_duration_policy':dict(CAPTURE_DURATION_POLICY if protocol==PROTOCOL else ENCODED_FRAME_POLICY)}
@@ -56,6 +68,7 @@ if(nearby.length){const dx=nearby[0].x-first.character.x;
 
 def program(value):
     value=validate_contract(value);class_id=value['class_id']
+    if value['id']==TOOLKIT_NATIVE_PROTOCOL:return _toolkit_program(value)
     if value['id']==PROTOCOL:return _legacy_program(value)
     if value['id']==NATIVE_V3_PROTOCOL and class_id!='hero':return _targeted_program(value)
     if value['id']==NATIVE_V4_PROTOCOL and class_id!='hero':return _targeted_program(value,horizontal_limit=300)
@@ -158,3 +171,64 @@ await sdk.pressKeys([direction,'SECONDARY_SKILL'],300);
 
 def fingerprint(value):
     return hashlib.sha256((json.dumps(validate_contract(value),sort_keys=True,separators=(',',':'))+'\n').encode()).hexdigest()
+
+
+def _toolkit_program(value):
+    """Finite evidence recipe: no successful effect is inferred from a key ACK."""
+    policy=value['skill_toolkit']
+    code="// New toolkit native qualification candidate; no model or score.\n"
+    if value['class_id']=='ice_lightning_arch_mage':
+        # Isolate the movement skill before attack animations, buffs or combat.
+        # Thirty milliseconds limits ordinary walking; paired observations and
+        # the recording still need review for contact, collision and MP use.
+        code+="""const teleportStart=await sdk.observe();
+const teleportNearby=teleportStart.monsters.filter(m=>Math.abs(m.y-teleportStart.character.y)<=50)
+  .sort((a,b)=>Math.abs(a.x-teleportStart.character.x)-Math.abs(b.x-teleportStart.character.x));
+const teleportDirection=teleportNearby.length&&teleportNearby[0].x>=teleportStart.character.x?'LEFT':'RIGHT';
+for(const direction of [teleportDirection,teleportDirection==='LEFT'?'RIGHT':'LEFT']){
+  await sdk.observe();
+  await sdk.pressKeys([direction,'SECONDARY_SKILL'],30);
+  await sdk.observe();
+  await sdk.wait(1100);
+  await sdk.observe();
+}
+"""
+    code+="""
+await sdk.observe();
+await sdk.pressKeys(['JUMP'],300);
+await sdk.observe();
+await sdk.wait(1100);
+await sdk.observe();
+"""
+    # Include Combo before sword attacks and Soul Arrow before any bow attack.
+    for skill in policy['skills']:
+        if skill['route']=='buff':
+            code+=f"await sdk.pressKeys(['{skill['slot']}'],300);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    code+="""let scene=await sdk.observe();
+for(let i=0;i<4;i++){
+  const near=scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=50)
+    .sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x));
+  if(!near.length)break;
+  const dx=near[0].x-scene.character.x;
+  await sdk.pressKeys([dx<0?'LEFT':'RIGHT'],Math.abs(dx)>180?400:60);
+  scene=await sdk.observe();
+  if(Math.abs(dx)<=180)break;
+}
+"""
+    # Three primary casts give Hero ordinary contact opportunities to build
+    # orbs; this does not assert that contact or an orb increase occurred.
+    for _ in range(3):
+        code+="await sdk.pressKeys(['PRIMARY_SKILL'],600);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    code+="await sdk.pressKeys(['ATTACK'],600);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    for skill in sorted(policy['skills'],key=lambda skill:skill['route']=='movement'):
+        if skill['slot']=='PRIMARY_SKILL' or skill['route']=='buff':continue
+        if value['class_id']=='ice_lightning_arch_mage' and skill['route']=='movement':continue
+        if skill['skill_id']==1111003:
+            # Coma spent the previous orbs; give ordinary Brandish contact new
+            # opportunities before Panic. Still require observed native orbs.
+            for _ in range(3):
+                code+="await sdk.pressKeys(['PRIMARY_SKILL'],600);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+        keys=['RIGHT',skill['slot']] if skill['route']=='movement' else [skill['slot']]
+        code+=f"await sdk.pressKeys({json.dumps(keys)},300);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    code+="await sdk.pressKeys(['MP_POTION'],100);\nawait sdk.wait(1500);\nawait sdk.observe();\n"
+    return code
