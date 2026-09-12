@@ -13,6 +13,11 @@ PROTOCOLS = {
     'full-client-adaptive-pilot-v1': {'label':'Five-minute adaptive pilot','clock':'300 seconds of wall time, including inference',
         'metric':'Persisted net XP across all cycles','score_key':'persisted_xp','verifier':'adaptive_runner_verified_receipts_rechecked',
         'status':'Adaptive pilot; peak-rate score unavailable'},
+    'full-client-xp-windows-v1': {'label':'Training v2 qualification',
+        'clock':'300 seconds of wall time, including inference',
+        'metric':'Highest normalized XP/min in a complete native 15-second window',
+        'score_key':'authoritative_peak_xp_per_minute','verifier':'native_window_runner_receipts_rechecked',
+        'status':'Native XP evidence and separate recording reviews required; unranked'},
     'unknown': {'label':'Protocol undeclared','clock':'Unknown','metric':'No comparable score',
         'score_key':None,'verifier':None,'status':'Metadata incomplete'},
 }
@@ -64,9 +69,12 @@ def summarize(snapshot):
                 valid=(status=='completed' and row.get('kind')=='trial' and row.get('mode')=='api'
                        and protocol['verifier'] is not None
                        and row.get('score_verification')==protocol['verifier'] and row.get('attribution')=='exact'
-                       and (column['protocol_id']!='full-client-adaptive-pilot-v1'
+                       and (column['protocol_id'] not in ('full-client-adaptive-pilot-v1','full-client-xp-windows-v1')
                             or (isinstance(row.get('adaptive'),dict)
                                 and row['adaptive'].get('verification')=='all_cycle_receipts_rechecked'))
+                       and (column['protocol_id']!='full-client-xp-windows-v1'
+                            or (row.get('publication_eligible') is True and isinstance(row.get('native_xp'),dict)
+                                and row['native_xp'].get('publication_eligible') is True))
                        and column['fixture_fingerprint']!='undeclared' and finite(value))
                 if valid:
                     samples.append(value)

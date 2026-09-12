@@ -246,12 +246,13 @@ def fixture_inputs(fixture, runner):
         require("progression_policy" not in protocol or windows, "invalid_trial_protocol")
     if windows:
         from full_client_xp_windows import validate_contract
-        from full_client_adaptive import FULL_HORIZON_POLICY
+        from full_client_adaptive import FULL_HORIZON_POLICY, FINAL_SLOT_POLICY
         try:
             validate_contract(scenario["xp_window_protocol"])
         except (ValueError, TypeError, KeyError) as error:
             raise ExperimentError("invalid_trial_protocol") from error
-        require(scoring.same_json(protocol.get("horizon_policy"), FULL_HORIZON_POLICY), "invalid_trial_protocol")
+        require(any(scoring.same_json(protocol.get("horizon_policy"), p) for p in
+                    (FULL_HORIZON_POLICY, FINAL_SLOT_POLICY)), "invalid_trial_protocol")
     if controller_protocol == "full-client-adaptive-pilot-v1":
         required = {str(Path(__file__).resolve().parent / name) for name in
                     ("full_client_adaptive.py", "full_client_adaptive_evidence.py", "maple_agent.py")}
