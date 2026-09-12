@@ -28,7 +28,8 @@ import uuid
 from full_client_dashboard import Reader, ProjectionError, SHA, write_snapshot
 from full_client_gallery import directory, copy_recording
 from full_client_publication import (claim_publication, encoded, digest, publication_state,
-    record_deployment, require, stable_bytes, stable_fingerprint, verify_package, write_new)
+    record_deployment, require, stable_bytes, stable_fingerprint, verify_package, write_new,
+    XP_PROTOCOL, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO)
 
 META_CONTENT='maplebenchContentSha256'
 META_PAYLOAD='maplebenchPayloadSha256'
@@ -59,15 +60,14 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
     else:files=raw
     require(1<=len(files)<=100,'payload_file_count_limit')
     content=package_manifest['content']
-    long=content.get('protocol')=='full-client-xp-windows-v1' and type(content.get('horizon_seconds')) is int and content['horizon_seconds']==1800
-    maximum_video=600*1024**2 if long else 96*1024**2
+    video_limits=cohort_video_limits(supplied,files,package_manifest)
     total=0
     for name,expected in files.items():
         require(isinstance(name,str) and PUBLIC_NAME.fullmatch(name) and isinstance(expected,dict)
                 and set(expected)=={'sha256','bytes'} and isinstance(expected['sha256'],str)
                 and SHA.fullmatch(expected['sha256']) and type(expected['bytes']) is int and expected['bytes']>0,
                 'invalid_public_payload_file')
-        maximum=maximum_video if name.endswith('.webm') else 4*1024**2
+        maximum=video_limits.get(name,MAX_ADAPTIVE_VIDEO) if name.endswith('.webm') else 4*1024**2
         total+=expected['bytes'];require(total<=MAX_PAYLOAD,'public_payload_size_limit')
         require(expected['bytes']<=maximum,'public_payload_file_limit')
         require(stable_fingerprint(payload/name,maximum)==expected,'public_payload_changed')
@@ -76,6 +76,12 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
         require(count<=150 and not path.is_symlink(),'unexpected_public_payload_file')
         if path.is_file():actual.add(path.relative_to(payload).as_posix())
     require(actual==set(files),'unexpected_public_payload_file')
+    if 'cohort_manifests' in supplied:
+        # Every byte has been checked against the pinned inventory before public
+        # row semantics can authorize a supplemental long recording.
+        from full_client_catalog import cohort_content
+        for manifest in supplied['cohort_manifests']:
+            cohort_content(manifest,payload/manifest['content']['target_path'].strip('/'))
     require(content.get('target_path')=='/' or (isinstance(content.get('target_path'),str)
             and re.fullmatch(r'/cohorts/[a-f0-9]{16}/',content['target_path'])),'invalid_cohort_target')
     prefix=content['target_path'].lstrip('/')
@@ -83,6 +89,41 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
             'cohort_payload_binding_mismatch')
     require('index.html' in files and 'results.json' in files,'public_root_required')
     return files,digest(encoded(files))
+
+
+def cohort_video_limits(inventory,files,primary):
+    """Only exact mounted package files inherit that package's video policy."""
+    require(all(isinstance(name,str) for name in files),'invalid_public_payload_file')
+    def limit(content):
+        if 'horizon_seconds' in content:
+            require(content.get('protocol')==XP_PROTOCOL and type(content['horizon_seconds']) is int
+                    and content['horizon_seconds']==1800,'invalid_package_horizon')
+            return MAX_LONG_VIDEO
+        return MAX_ADAPTIVE_VIDEO
+    content=primary['content'];prefix=content.get('target_path','').lstrip('/')
+    limits={prefix+name:limit(content) for name in content['files'] if name.endswith('.webm')}
+    if 'cohort_manifests' not in inventory:return limits
+    manifests=inventory['cohort_manifests']
+    require(isinstance(manifests,list) and 1<=len(manifests)<=7,'payload_cohort_manifests_required')
+    mounts=set();primary_found=False
+    for manifest in manifests:
+        require(isinstance(manifest,dict) and set(manifest)=={'schema_version','content_sha256','content'}
+                and type(manifest['schema_version']) is int and manifest['schema_version']==1
+                and isinstance(manifest['content_sha256'],str) and SHA.fullmatch(manifest['content_sha256'])
+                and isinstance(manifest['content'],dict)
+                and digest(encoded(manifest['content']))==manifest['content_sha256'],'payload_cohort_manifest_mismatch')
+        item=manifest['content'];target=item.get('target_path')
+        require(isinstance(target,str) and re.fullmatch(r'/cohorts/[a-f0-9]{16}/',target)
+                and target not in mounts and isinstance(item.get('files'),dict),'payload_cohort_mount_mismatch')
+        mounts.add(target);prefix=target.lstrip('/')
+        require({name[len(prefix):]:ref for name,ref in files.items() if name.startswith(prefix)}==item['files'],
+                'payload_cohort_file_binding_mismatch')
+        if target==content.get('target_path'):
+            require(manifest==primary,'payload_primary_manifest_mismatch');primary_found=True
+        maximum=limit(item)
+        limits.update({prefix+name:maximum for name in item['files'] if name.endswith('.webm')})
+    require(primary_found,'payload_primary_manifest_required')
+    return limits
 
 
 def project_link(path,expected):

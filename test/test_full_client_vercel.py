@@ -144,6 +144,17 @@ class VercelPublicationTests(unittest.TestCase):
         self.assertEqual(self.publish()['status'],'published')
         self.assertEqual(sum(c[0]=='deploy' for c in self.calls),1)
 
+    def test_long_primary_does_not_extend_unbound_supplemental_video(self):
+        # The supplemental size is synthetic; refusal must precede its hash I/O.
+        manifest=publication.verify_package(self.package,self.content)
+        manifest['content'].update(protocol=publication.XP_PROTOCOL,horizon_seconds=1800)
+        name='recordings/'+'f'*32+'.webm'
+        self.files[name]={'sha256':'0'*64,'bytes':97*1024**2}
+        self.inventory.write_text(json.dumps({'files':self.files}))
+        self.inventory_sha=driver.digest(self.inventory.read_bytes())
+        with self.assertRaisesRegex(ValueError,'public_payload_file_limit'):
+            driver.checked_payload(self.payload,self.inventory,self.inventory_sha,manifest)
+
     def test_uncertain_outcome_can_be_reconciled_later_never_redeployed(self):
         self.lose_reply=True;self.visible=False
         first=self.publish();self.assertEqual(first['status'],'uncertain')

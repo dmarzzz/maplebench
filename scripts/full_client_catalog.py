@@ -98,8 +98,13 @@ def verified(row):
 def cohort(package,expected):
     require(isinstance(expected,str) and SHA.fullmatch(expected),'catalog_content_hash_required')
     manifest=verify_package(package,expected)
+    return {'package':Path(package),**cohort_content(manifest,directory(Path(package)/'site'))}
+
+
+def cohort_content(manifest,site):
+    """Check public cohort semantics after the caller binds its exact file bytes."""
     require(type(manifest['schema_version']) is int,'catalog_package_schema')
-    content=manifest['content'];site=directory(Path(package)/'site')
+    content=manifest['content'];site=directory(site)
     require(set(content)-{'presentation_parent_sha256','horizon_seconds'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
         and ('presentation_parent_sha256' not in content or (isinstance(content['presentation_parent_sha256'],str)
             and SHA.fullmatch(content['presentation_parent_sha256'])))
@@ -108,7 +113,7 @@ def cohort(package,expected):
         and SHA.fullmatch(str(content['plan_sha256']))
         and content['target_path']=='/cohorts/'+content['plan_sha256'][:16]+'/','catalog_nested_adaptive_package_required')
     protocol=content['protocol'];verifier=XP_VERIFIED if protocol==XP_PROTOCOL else VERIFIED
-    snapshot=Reader().json(site,'results.json');rows=public_snapshot(snapshot,adaptive=True)
+    snapshot=Reader().json(site,'results.json',content['files']['results.json']['sha256']);rows=public_snapshot(snapshot,adaptive=True)
     require(snapshot.get('source')=='full_client_private_receipt_projection' and snapshot.get('verification')==verifier
         and len(rows)==4 and {r['requested_model'] for r in rows}==set(MODELS),'catalog_all_four_models_required')
     metadata=[r.get('research') for r in rows]
@@ -125,7 +130,7 @@ def cohort(package,expected):
         else:require(row.get('persisted_xp') is None and row.get('comparison_group') is None
             and row.get('authoritative_peak_xp_per_minute') is None
             and row.get('publication_eligible') is False,'catalog_unverified_score')
-    videos=Reader().json(site,'recording-manifest.json')
+    videos=Reader().json(site,'recording-manifest.json',content['files']['recording-manifest.json']['sha256'])
     require(set(videos)=={'schema_version','entries'} and type(videos['schema_version']) is int and videos['schema_version']==1
         and isinstance(videos['entries'],list),'catalog_recording_manifest')
     declared={}
@@ -161,7 +166,7 @@ def cohort(package,expected):
     require(same_json(snapshot.get('cohort'),expected_cohort),'catalog_cohort_metadata')
     featured=max([r for r in rows if verified(r)],key=lambda r:r['updated_at_ms'] or 0,default=None)
     require(snapshot.get('featured_run_id')==(featured['id'] if featured else None),'catalog_featured_binding')
-    return {'package':Path(package),'site':site,'manifest':manifest,'snapshot':snapshot,'complete':complete,
+    return {'site':site,'manifest':manifest,'snapshot':snapshot,'complete':complete,
         'class_id':metadata[0]['class_id'],'fixture_fingerprint':metadata[0]['fixture_fingerprint']}
 
 
@@ -329,7 +334,11 @@ def compose(request,output_root):
         files={p.relative_to(site).as_posix():stable_fingerprint(p,MAX_LONG_VIDEO if p.suffix=='.webm' else 4*1024**2)
                for p in sorted(site.rglob('*')) if p.is_file()}
         require(same_json(files,planned_files),'catalog_source_changed')
-        inventory=encoded({'schema_version':1,'files':files});write_new(stage/'payload-inventory.json',inventory)
+        inventory_value={'schema_version':1,'files':files}
+        included=packages+retained_previous
+        if any(p['manifest']['content'].get('horizon_seconds')==1800 for p in included):
+            inventory_value['cohort_manifests']=[p['manifest'] for p in included]
+        inventory=encoded(inventory_value);write_new(stage/'payload-inventory.json',inventory)
         primary_package=next(p for p in packages if p['manifest']['content_sha256']==primary)
         checked_payload(site,stage/'payload-inventory.json',digest(inventory),primary_package['manifest'])
         content={'schema_version':1,'source_content_sha256':[p['manifest']['content_sha256'] for p in packages],
