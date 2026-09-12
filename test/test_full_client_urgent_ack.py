@@ -125,6 +125,7 @@ class UrgentAckTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'),'Node required')
     def test_real_poll_inflight_does_not_delay_urgent_ack_and_no_retry(self):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
+        mappings=source[source.index('  const keyNames = '):source.index('  const held = ')]
         code=source[source.index('  const commandDeadline = '):source.index('  const startRun=async')]
         fixture=r'''
 const assert=require('node:assert/strict');
@@ -132,7 +133,7 @@ let activeCommand=null,acknowledgement=null,closed=false,pollAbort,pollTimer,dis
 let relayConnected=true,captureFailure=null,saving=false,pendingUpload=null,sessionAck=null,releaseAck=null;
 const clientId='test',run={id:'b'.repeat(32)},held=new Map(),cancelledRuns=new Set();
 const capture={recorderStarted:true,frames:1,autoRunId:run.id,stopping:false};
-const document={hidden:false},game={focus(){}},keyNames={LEFT:'ArrowLeft'},skillKeyNames={};
+const document={hidden:false},game={focus(){}};
 const observe=()=>({ready:true,capturedAt:Date.now()}),fresh=()=>true;
 const Module={get MapleBenchRenderedAt(){return Date.now()},MapleBenchHud:null};
 const renderHeader=()=>{},releaseAll=()=>{},key=()=>{},release=code=>{clearTimeout(held.get(code));held.delete(code);};
@@ -162,5 +163,5 @@ const fetch=(url,options)=>{
  closed=true;process.exit(0);
 })().catch(e=>{console.error(e);process.exit(1);});
 '''
-        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+code+checks],capture_output=True,text=True,timeout=4)
+        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+mappings+code+checks],capture_output=True,text=True,timeout=4)
         self.assertEqual(result.returncode,0,result.stderr)
