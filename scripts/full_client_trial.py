@@ -243,7 +243,8 @@ def read_private_json(path, *, expected_sha256=None):
 def validate_spec(spec):
     require(isinstance(spec, dict), "invalid_spec")
     adaptive = spec.get("schema_version") in (2, 3)
-    fields = {"schema_version", "model", "scenario_fingerprint", "baseline_sha256", "budgets"}
+    long = adaptive and spec.get("horizon_seconds") == 1800 and type(spec.get("horizon_seconds")) is int
+    fields = {"schema_version", "model", "scenario_fingerprint", "baseline_sha256", "budgets"} | ({"horizon_seconds"} if long else set())
     require(set(spec) == fields | ({"protocol"} if adaptive else set()), "invalid_spec_fields")
     require(type(spec["schema_version"]) is int and spec["schema_version"] in (1, 2, 3), "unsupported_schema")
     if adaptive:
@@ -256,6 +257,7 @@ def validate_spec(spec):
               "controller_seconds": (1, 300), "max_actions": (1, 10000),
               "max_api_requests": (1, 16) if adaptive else (1, 1), "max_output_tokens": (1, 48000) if adaptive else (1, 32000),
               "max_total_tokens": (1, 1000000)}
+    if long:bounds.update(total_seconds=(2400,2400),operation_seconds=(1835,2100),controller_seconds=(1800,1800),max_actions=(1,14400),max_api_requests=(1,72),max_output_tokens=(1,216000),max_total_tokens=(1,1440000))
     budgets = spec["budgets"]
     require(isinstance(budgets, dict) and set(budgets) == set(bounds), "invalid_budgets")
     for name, (low, high) in bounds.items():
@@ -264,7 +266,7 @@ def validate_spec(spec):
     require(budgets["controller_seconds"] <= budgets["total_seconds"]
             and budgets["max_output_tokens"] <= budgets["max_total_tokens"], "inconsistent_budgets")
     if adaptive:
-        require(budgets["controller_seconds"] == 300 and budgets["total_seconds"] >= 600, "inconsistent_adaptive_budgets")
+        require(budgets["controller_seconds"] == (1800 if long else 300) and budgets["total_seconds"] >= (2100 if long else 600), "inconsistent_adaptive_budgets")
     return copy.deepcopy(spec)
 
 
@@ -340,7 +342,7 @@ class CommandAdapter:
         return hashlib.sha256(encode({"argv": self.argv, "files": files})).hexdigest()
 
     def perform(self, operation, context, *, timeout_seconds):
-        require(type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= 1800,
+        require(type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= (2100 if context.get("request",{}).get("horizon_seconds")==1800 else 1800),
                 "invalid_operation_timeout")
         require(self._fingerprint() == self.fingerprint, "adapter_source_changed")
         context = copy.deepcopy(context)
@@ -784,7 +786,7 @@ def adapter_guard(argv):
         request = decode(sys.stdin.buffer.read(MAX_JSON + 1))
         require(isinstance(request, dict) and isinstance(request.get("context"), dict), "invalid_guard_request")
         timeout = request.get("timeout_seconds")
-        require(type(timeout) in (int, float) and 0 < timeout <= 1800, "invalid_guard_timeout")
+        require(type(timeout) in (int, float) and 0 < timeout <= (2100 if request["context"].get("request",{}).get("horizon_seconds")==1800 else 1800), "invalid_guard_timeout")
         request["context"].update(guard_pid=os.getpid(), guard_parent_pid=parent)
         request["context"]["lock_fds"] = dict(zip(("world", "queue"), lock_fds))
         deadline = time.monotonic() + timeout

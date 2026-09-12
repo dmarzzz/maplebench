@@ -131,15 +131,15 @@ def capture_failure(value):
     if (not isinstance(value,dict) or set(value)!=fields or type(value['schema_version']) is not int
             or value['schema_version']!=1 or not isinstance(value['run_id'],str)
             or not re.fullmatch('[a-f0-9]{32}',value['run_id'])
-            or value['policy_id']!='post-render-encoded-frame-v1' or not isinstance(value['code'],str) or value['code'] not in CAPTURE_FAILURE_CODES
+            or value['policy_id'] not in ('post-render-encoded-frame-v1','post-render-encoded-frame-1800-v1') or not isinstance(value['code'],str) or value['code'] not in CAPTURE_FAILURE_CODES
             or value['clock_origin'] not in ('encoder_start','capture_request')):
         raise ControlError('invalid_capture_failure')
-    if not (type(value['elapsed_ms']) is int and 0<=value['elapsed_ms']<=350000):
+    if not (type(value['elapsed_ms']) is int and 0<=value['elapsed_ms']<=(1850000 if value['policy_id']=='post-render-encoded-frame-1800-v1' else 350000)):
         raise ControlError('invalid_capture_failure')
     for key in ('first_frame_offset_ms','last_frame_offset_ms'):
         if value[key] is not None and not (type(value[key]) is int and 0<=value[key]<=value['elapsed_ms']):
             raise ControlError('invalid_capture_failure')
-    if any(type(value[k]) is not int or not 0<=value[k]<=20000
+    if any(type(value[k]) is not int or not 0<=value[k]<=(120000 if value['policy_id']=='post-render-encoded-frame-1800-v1' else 20000)
            for k in ('rendered_frames','submitted_frames','encoded_frames')):
         raise ControlError('invalid_capture_failure')
     if not value['encoded_frames']<=value['submitted_frames']<=value['rendered_frames']:
@@ -517,7 +517,7 @@ class FullClientBridge:
         if value['run_id']!=self.run.get('id'):return
         owner=self.run.get('nativeAcceptance') or self.run.get('adaptiveProtocol') or {}
         if (self.run.get('client')!=client or owner.get('capture_duration_policy',{}).get('id')
-                !='post-render-encoded-frame-v1'):
+                !=value['policy_id']):
             raise ControlError('capture_failure_owner_mismatch')
         path=self.output/value['run_id']/'capture-failure.json'
         if path.is_file():
@@ -700,7 +700,7 @@ class FullClientBridge:
             capture=body.get('capture')
             self.run['captureReady']=bool(not settled_history and self.run.get('id') and valid_frame and isinstance(capture,dict)
                 and capture.get('runId')==self.run.get('id') and capture.get('started') is True
-                and type(capture.get('renderedFrames')) is int and 0<capture['renderedFrames']<=100000
+                and type(capture.get('renderedFrames')) is int and 0<capture['renderedFrames']<=(120000 if self.run.get('adaptiveProtocol',{}).get('wall_seconds')==1800 else 100000)
                 and capture.get('interrupted') is False and body.get('captureState')=='recording')
             if self.run['captureReady'] and not self.run.get('captureReadyAtMs'):
                 self.run['captureReadyAtMs']=server_received_ms
@@ -864,6 +864,15 @@ class FullClientBridge:
                     'browserReleasePending':self._cancelled(self.run.get('id')) and self.run.get('id') not in self.release_acks,
                     'frameAgeMs':max(0,round((time.monotonic()-self.last_seen)*1000)) if self.client else None}
 
+    def recording_upload_limits(self, run_id, client):
+        with self.lock:
+            self.recording_owner(run_id,client)
+            protocol=self.run.get('adaptiveProtocol') if self.run.get('id')==run_id else None
+            if protocol is not None:
+                protocol=validate_protocol(protocol)
+                if protocol['wall_seconds']==1800:return 600*1024*1024,180
+            return 100*1024*1024,60
+
     def recording_owner(self, run_id, client=None):
         if not isinstance(run_id, str) or not re.fullmatch('[a-f0-9]{32}', run_id):
             raise ControlError('invalid_recording_run')
@@ -985,9 +994,9 @@ class FullClientBridge:
         if adaptive_protocol is not None:
             try:adaptive_protocol=validate_protocol(adaptive_protocol)
             except AdaptiveError as error:raise ControlError(str(error)) from None
-            if mode!='api' or duration_seconds!=300 or total_token_limit!=adaptive_protocol['max_total_tokens']:
+            if mode!='api' or duration_seconds!=adaptive_protocol['wall_seconds'] or total_token_limit!=adaptive_protocol['max_total_tokens']:
                 raise ControlError('adaptive_controller_budget_mismatch')
-        if type(duration_seconds) is not int or duration_seconds not in ((30,) if native_acceptance is not None else (300,) if adaptive_protocol is not None else (22, 60)):
+        if type(duration_seconds) is not int or duration_seconds not in ((30,) if native_acceptance is not None else (adaptive_protocol['wall_seconds'],) if adaptive_protocol is not None else (22, 60)):
             raise ValueError('Run duration must be 22 or 60 seconds')
         if mode == 'script' and native_acceptance is None and duration_seconds != 22:
             raise ValueError('Scripted smoke runs last at most 22 seconds')
@@ -1408,7 +1417,7 @@ class FullClientBridge:
             return value
         def phase(**value):
             nonlocal input_deadline,adaptive_started,readiness
-            input_deadline=value['deadline'];adaptive_started=input_deadline-300
+            input_deadline=value['deadline'];adaptive_started=input_deadline-run['adaptiveProtocol']['wall_seconds']
             if value['phase']=='preparing':return
             if value['phase']=='requesting':
                 if run.get('dockerBinding') is not None:validate_binding(run['dockerBinding'])

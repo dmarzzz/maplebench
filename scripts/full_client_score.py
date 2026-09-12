@@ -81,6 +81,9 @@ def score_trial(evidence):
     """
     require(isinstance(evidence, dict), "evidence: expected an object")
     adaptive = evidence.get("schema_version") == 2
+    long=adaptive and evidence.get("horizon_seconds")==1800 and type(evidence.get("horizon_seconds")) is int
+    require("horizon_seconds" not in evidence or long,"invalid_horizon_seconds")
+    wall_ms=1800000 if long else 300000
     require(type(evidence.get("schema_version")) is int and evidence["schema_version"] in (1, 2),
             "schema_version: unsupported persistence evidence")
     require((evidence.get("protocol") == "full-client-adaptive-pilot-v1") if adaptive else evidence.get("protocol") is None,
@@ -144,18 +147,18 @@ def score_trial(evidence):
         require(session.get("protocol") == evidence["protocol"], "session.protocol: mismatched adaptive timing")
         digest_field(session, "adaptive_trace_sha256")
         intervals = session.get("api_intervals")
-        require(isinstance(intervals, list) and 1 <= len(intervals) <= 16,
+        require(isinstance(intervals, list) and 1 <= len(intervals) <= (72 if long else 16),
                 "session.api_intervals: require every adaptive provider interval")
         previous = times[4]; api_ms = 0
         for index, interval in enumerate(intervals):
             require(isinstance(interval, dict) and set(interval) == {"index", "started_at_ms", "ended_at_ms"}
                     and integer(interval, "index") == index, "session.api_intervals: invalid cycle index")
             start, end = integer(interval, "started_at_ms"), integer(interval, "ended_at_ms")
-            require(previous <= start <= end <= times[5] and start < times[4] + 300000,
+            require(previous <= start <= end <= times[5] and start < times[4] + wall_ms,
                     "session.api_intervals: overlapping or out-of-budget provider intervals")
             previous = end; api_ms += end - start
         require(intervals[0]["started_at_ms"] == times[2] and intervals[-1]["ended_at_ms"] == times[3]
-                and times[5] - times[4] <= 308100, "session: adaptive interval envelope mismatch")
+                and times[5] - times[4] <= wall_ms+8100, "session: adaptive interval envelope mismatch")
 
     save = object_field(session, "save")
     require(save.get("status") == "confirmed", "save.status: offline status alone cannot prove a successful save")

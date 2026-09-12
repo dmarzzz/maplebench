@@ -54,6 +54,8 @@ ENV_NAMES = ("MAPLEBENCH_TRIAL_ID", "MAPLEBENCH_SERVER_INSTANCE_ID",
 SETTLEMENT_POLICY = {"capture_tail_ms": 2000, "upload_after_program_ms": 5000,
                      "disconnect_after_program_ms": 5000, "logout_after_disconnect_ms": 5000}
 
+LONG_SETTLEMENT_POLICY = {**SETTLEMENT_POLICY,'upload_after_program_ms':180000,'disconnect_after_program_ms':180000}
+
 
 class RuntimeErrorCode(ValueError):
     """Safe error codes; never echo subprocess output or private paths."""
@@ -321,7 +323,7 @@ class CosmicRuntime:
         self.scenario = parse_json(ref_bytes(self.config["scenario"]))
         duration = self.scenario.get("program_seconds")
         adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
-        require(type(duration) is int and duration in ((300,) if adaptive else (22, 60))
+        require(type(duration) is int and duration in ((300,1800) if adaptive else (22, 60))
                 and isinstance(self.scenario.get("id"), str) and 0 < len(self.scenario["id"]) <= 128
                 and SHA.fullmatch(self.scenario.get("instructions_sha256", "")) is not None
                 and same_json(self.scenario.get("reasoning"), {"effort": "low"}), "invalid_frozen_scenario")
@@ -338,10 +340,10 @@ class CosmicRuntime:
                     and trial["max_actions"] == protocol["max_actions"]
                     and trial["max_output_tokens"] == protocol["max_api_requests"] * protocol["max_output_tokens"]
                     and trial["max_total_tokens"] == protocol["max_total_tokens"]
-                    and trial["controller_seconds"] == 300 and trial["operation_seconds"] >= 335,
+                    and duration == protocol["wall_seconds"] and trial["controller_seconds"] == duration and trial["operation_seconds"] >= duration+35,
                     "bridge_budget_mismatch")
             expected_budgets = {"api_requests": protocol["max_api_requests"], "output_tokens": trial["max_output_tokens"],
-                "total_tokens": protocol["max_total_tokens"], "program_ms": 300000, "run_ms": 335000,
+                "total_tokens": protocol["max_total_tokens"], "program_ms": duration*1000, "run_ms": (duration+35)*1000,
                 "actions": protocol["max_actions"], "sdk_requests": protocol["max_sdk_requests"]}
         else:
             require(self.scenario.get("protocol") is None and self.scenario.get("adaptive_protocol") is None,
@@ -351,7 +353,7 @@ class CosmicRuntime:
                                 "program_ms": duration * 1000, "run_ms": (duration + 63) * 1000,
                                 "actions": 80 if duration == 22 else 240, "sdk_requests": 100 if duration == 22 else 600}
         require(same_json(self.scenario.get("budgets"), expected_budgets), "frozen_bridge_budgets_mismatch")
-        require(same_json(self.scenario.get("settlement_policy"), SETTLEMENT_POLICY),
+        require(same_json(self.scenario.get("settlement_policy"), self.settlement_policy()),
                 "invalid_settlement_policy")
         self.baseline = parse_json(ref_bytes(self.config["baseline_snapshot"]))
         if adaptive:
@@ -707,6 +709,9 @@ class CosmicRuntime:
         self.state["artifacts"]["reset"] = self.artifact("reset.json", reset)
         return {"reset_verified": True}
 
+    def settlement_policy(self):
+        return LONG_SETTLEMENT_POLICY if getattr(self,'scenario',{}).get('adaptive_protocol',{}).get('wall_seconds')==1800 else SETTLEMENT_POLICY
+
     def service_runtime_seconds(self):
         return self.context["request"]["budgets"]["total_seconds"] + 120
 
@@ -910,7 +915,7 @@ class CosmicRuntime:
                 if run.get("status") == "completed":
                     now = self.host.now()
                     terminal_seen = now if terminal_seen is None else terminal_seen
-                    require(now - terminal_seen <= SETTLEMENT_POLICY["upload_after_program_ms"],
+                    require(now - terminal_seen <= self.settlement_policy()["upload_after_program_ms"],
                             "settlement_upload_timeout")
                 return (status if run.get("status") == "completed" and run.get("workerActive") is False
                         and run.get("evidenceStatus") == "saved" and run.get("recordingStatus") == "saved"
@@ -1080,7 +1085,7 @@ class CosmicRuntime:
         recording = parse_json(read_artifact_bytes(self.directory, self.state["artifacts"]["recording"], "recording"))
         path = source / "video.webm"
         with open_verified_artifact(source, {"path": path.name, "sha256": recording["sha256"]},
-                                    "video", maximum=MAX_VIDEO) as stream:
+                                    "video", maximum=600*1024*1024 if getattr(self,'scenario',{}).get("adaptive_protocol",{}).get("wall_seconds")==1800 else MAX_VIDEO) as stream:
             destination = self.directory / "video.webm"
             fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "wb") as out:
@@ -1092,7 +1097,7 @@ class CosmicRuntime:
         from full_client_publish import _probe_video, verify_capture_bundle
         try:
             probe = _probe_video(self.directory / "video.webm", recording["sha256"],
-                **({"maximum_ms": 335000} if getattr(self, "scenario", {}).get("protocol") == "full-client-adaptive-pilot-v1" else {})) | {"video_sha256": recording["sha256"]}
+                **({"maximum_ms": (self.scenario["adaptive_protocol"].get("wall_seconds",300)+35)*1000, **({"duration_policy":self.scenario["adaptive_protocol"]["capture_duration_policy"]} if self.scenario["adaptive_protocol"].get("wall_seconds",300)==1800 else {})} if getattr(self, "scenario", {}).get("protocol") == "full-client-adaptive-pilot-v1" else {})) | {"video_sha256": recording["sha256"]}
         except EvidenceError:
             raise RuntimeErrorCode("recording_probe_failed") from None
         from full_client_capture import verify_video_duration
@@ -1135,14 +1140,14 @@ class CosmicRuntime:
             return (session.get("state") == "waiting" and session.get("fresh") is True
                     and session.get("artifactsSettled") is True and self.account_state() == 0)
         deadline = self.host.deadline
-        self.host.deadline = min(deadline, time.monotonic() + SETTLEMENT_POLICY["logout_after_disconnect_ms"] / 1000)
+        self.host.deadline = min(deadline, time.monotonic() + self.settlement_policy()["logout_after_disconnect_ms"] / 1000)
         try:
             self.admin("disconnect")
             self.wait_for(offline)
         finally:
             self.host.deadline = deadline
         logged_out = self.host.now()
-        require(0 <= logged_out - requested <= SETTLEMENT_POLICY["logout_after_disconnect_ms"],
+        require(0 <= logged_out - requested <= self.settlement_policy()["logout_after_disconnect_ms"],
                 "settlement_logout_timeout")
         rows = [parse_json(row) for row in self.read_stable(Path(self.state["native_directory"]) / "save.jsonl", JSON_LIMIT).splitlines()]
         require(rows and all(row.get("kind") == "save_committed" and all(row.get(k) == v for k, v in self.identity().items())
@@ -1173,7 +1178,7 @@ class CosmicRuntime:
 
     def validate_settlement(self):
         """Bind actual offline artifacts to the frozen, identical settlement policy."""
-        require(same_json(self.scenario.get("settlement_policy"), SETTLEMENT_POLICY),
+        require(same_json(self.scenario.get("settlement_policy"), self.settlement_policy()),
                 "invalid_settlement_policy")
         result, session = self.state["result"], self.state["session"]
         program_end = result["timing"]["startedAtMs"] + result["timeline"]["program_ended_ms"]
@@ -1182,9 +1187,9 @@ class CosmicRuntime:
         require(all(type(value) is int and 0 <= value <= 2**53 - 1
                     for value in (program_end, upload, requested, offline)), "invalid_settlement_timestamps")
         require(program_end <= upload <= requested
-                and upload - program_end <= SETTLEMENT_POLICY["upload_after_program_ms"]
-                and requested - program_end <= SETTLEMENT_POLICY["disconnect_after_program_ms"]
-                and 0 <= offline - requested <= SETTLEMENT_POLICY["logout_after_disconnect_ms"],
+                and upload - program_end <= self.settlement_policy()["upload_after_program_ms"]
+                and requested - program_end <= self.settlement_policy()["disconnect_after_program_ms"]
+                and 0 <= offline - requested <= self.settlement_policy()["logout_after_disconnect_ms"],
                 "settlement_interval_exceeded")
         observation = self.state["upload_status"]
         require(all(observation.get(key) == value for key, value in self.identity().items())
@@ -1202,7 +1207,7 @@ class CosmicRuntime:
         require(all(type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 2**53 - 1
                     for value in times), "invalid_settlement_timestamps")
         end_upper = times[0] + times[1] - times[2]
-        require(end_upper <= program_end + SETTLEMENT_POLICY["capture_tail_ms"],
+        require(end_upper <= program_end + self.settlement_policy()["capture_tail_ms"],
                 "settlement_capture_tail_exceeded")
 
     def collect_final(self):
@@ -1243,6 +1248,7 @@ class CosmicRuntime:
                     "final": final | {"evidence_sha256": arts["final_db"]["sha256"]}}
         if adaptive:
             evidence["protocol"] = self.scenario["protocol"]
+            if self.scenario["adaptive_protocol"].get("wall_seconds",300)==1800:evidence["horizon_seconds"]=1800
         arts["session"] = self.artifact("session.json", session)
         windows = self.xp_window_contract()
         if windows is None:
@@ -1473,7 +1479,7 @@ class CosmicRuntime:
         return {"clean": True}
 
     def perform(self, operation, context, *, timeout_seconds):
-        require(type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= 1800, "invalid_timeout")
+        require(type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= (2100 if context.get("request",{}).get("horizon_seconds")==1800 else 1800), "invalid_timeout")
         require(operation in ("status", "restore_baseline", "start_server", "login", "run_controller",
                               "disconnect", "collect_final", "cleanup"), "unknown_operation")
         self.host.deadline = time.monotonic() + timeout_seconds
@@ -1502,6 +1508,7 @@ class CosmicRuntime:
             self.online_identity()
         else:
             self.frozen()
+        require(spec.get("horizon_seconds",300)==self.scenario.get("adaptive_protocol",{}).get("wall_seconds",300), "trial_horizon_mismatch")
         require(same_json(self.scenario.get("trial_budgets"), spec["budgets"])
                 and (spec.get("protocol") == self.trial_protocol()), "scenario_trial_budgets_mismatch")
         if self.state is None:

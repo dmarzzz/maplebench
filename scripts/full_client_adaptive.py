@@ -54,7 +54,7 @@ def validate_protocol(value):
     bounds={'program_seconds':(1,30),'max_api_requests':(1,16),'max_output_tokens':(256,3000),
             'max_total_tokens':(1024,240000),'max_actions':(1,2400),'max_sdk_requests':(1,10000),
             'max_evidence_bytes':(65536,4*1024*1024)}
-    if long:bounds.update(max_api_requests=(1,72),max_total_tokens=(1024,1440000),max_actions=(1,14400),max_sdk_requests=(1,60000),max_evidence_bytes=(65536,24*1024*1024))
+    if long:bounds.update(max_api_requests=(1,72),max_total_tokens=(1024,1440000),max_actions=(1,14400),max_sdk_requests=(1,60000),max_evidence_bytes=(65536,16*1024*1024))
     require(all(type(value.get(k)) is int and a<=value[k]<=b for k,(a,b) in bounds.items()),'invalid_adaptive_limits')
     if 'horizon_policy' in value:
         require(digest(value['horizon_policy']) in (digest(FULL_HORIZON_POLICY),digest(FINAL_SLOT_POLICY),digest(LONG_FINAL_SLOT_POLICY)),'invalid_adaptive_horizon_policy')
@@ -109,7 +109,7 @@ def long_horizon_protocol(profile):
     value=json.loads(json.dumps(DEFAULT_PROTOCOL))
     value.update(profile=profile,wall_seconds=1800,horizon_policy=LONG_FINAL_SLOT_POLICY,
         max_api_requests=72,max_total_tokens=1440000,max_actions=14400,
-        max_sdk_requests=60000,max_evidence_bytes=24*1024*1024,
+        max_sdk_requests=60000,max_evidence_bytes=16*1024*1024,
         capture_duration_policy=LONG_ENCODED_FRAME_POLICY)
     return validate_protocol(value)
 
