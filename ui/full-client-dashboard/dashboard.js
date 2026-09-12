@@ -8,9 +8,15 @@
   const xp=value=>Number.isFinite(value)?`${value>0?'+':''}${format(value)}`:'—';
   const seconds=value=>Number.isFinite(value)?`${(value/1000).toFixed(1)}s`:'—';
   const alive=value=>value===true?'Alive':value===false?'Dead':'—';
+  const adaptiveRow=row=>['full-client-adaptive-pilot-v1','full-client-xp-windows-v1'].includes(row.research?.protocol_id||row.protocol_id);
+  const wallBudget=row=>row.adaptive?.wall_budget_ms===1800000&&row.adaptive?.horizon_policy?.id==='final-program-slot-1800-v1'?1800000:300000;
+  const nativeScore=row=>row.score_verification==='native_window_runner_receipts_rechecked'
+    &&row.native_xp?.status==='verified_native_windows'&&row.native_xp.publication_eligible===true
+    &&row.native_xp.publication_blocker===null?row.native_xp:null;
   const badge=status=>{const node=el('span',labels[status]||'Unavailable');node.className='pill';if(Object.hasOwn(labels,status))node.classList.add(status);return node;};
   function publication(row){
     const evidence=row.publication_evidence;
+    if(evidence?.status==='native_windows_checked'&&nativeScore(row))return {label:'Native XP windows checked',detail:'Saved XP, complete windows and recording reviewed',tone:'completed'};
     if(evidence?.status==='adaptive_checked')return {label:'Adaptive evidence checked',detail:'Every model cycle and original recording checked',tone:'completed'};
     if(evidence?.status==='aggregate_checked')return {label:'Whole-run score checked',detail:'Recording not yet verified',tone:null};
     if(evidence?.status==='passed')return {label:'Evidence checked',detail:null,tone:'completed'};
@@ -42,8 +48,8 @@
     $('replay-title').textContent=`${row.returned_model||row.requested_model||'Script / no evaluated model'} · ${row.id.slice(0,12)}`;
     replayVerification(row);
     const cue=row.recording?.playback;
-    const adaptive=row.research?.protocol_id==='full-client-adaptive-pilot-v1';
-    replayCue=cue&&Number.isFinite(cue.start_ms)&&cue.start_ms>=0&&cue.start_ms<(adaptive?335000:125000)
+    const adaptive=adaptiveRow(row);
+    replayCue=cue&&Number.isFinite(cue.start_ms)&&cue.start_ms>=0&&cue.start_ms<(adaptive?wallBudget(row)+35000:125000)
       &&['first_acknowledged_input','program_start'].includes(cue.basis)?cue:null;
     replayStart=replayCue?replayCue.start_ms/1000:0;
     $('replay-agent').hidden=!replayCue;
@@ -52,7 +58,7 @@
       +(row.no_op===true?(row.sdk_calls===0?'The program exited without any SDK calls. ':'No input actions were executed in this run. ')+'Showing the full recording.'
       :replayCue?`Opens near ${replayCue.basis==='first_acknowledged_input'?'the first confirmed input':'program start; first-input timing was not recorded'}. Full recording includes the opening wait.`
       :'Showing the full recording; a verified playback cue is unavailable.');
-    if(adaptive)$('replay-timing').textContent+=' The five-minute wall budget includes every model wait; seeking changes playback only.';
+    if(adaptive)$('replay-timing').textContent+=` The ${wallBudget(row)/60000}-minute wall budget includes every model wait; seeking changes playback only.`;
     const hold=adaptiveHold(row);if(hold)$('replay-timing').textContent+=' '+hold.detail;
     $('replay-playback-status').textContent='Loading recording…';
     stopReplay();player.src=url.href;
@@ -109,10 +115,11 @@
     const info=row.adaptive,wait=info?.horizon_wait;
     const labels={token_reservation_limit:'Token reservation limit reached',api_request_limit:'Model request limit reached',
       action_limit:'Input action limit reached',sdk_request_limit:'SDK request limit reached',
+      final_program_complete:'The final model program finished',
       request_window_closed:'Too little time remained for another complete model cycle'};
-    if(row.research?.protocol_id!=='full-client-adaptive-pilot-v1'||info?.verification!=='all_cycle_receipts_rechecked'
-        ||info.horizon_policy?.id!=='full-horizon-reserve-v1'||!wait||!Object.hasOwn(labels,wait.reason)
-        ||!Number.isFinite(info.wall_elapsed_ms)||info.wall_elapsed_ms<0||info.wall_elapsed_ms>300000
+    if(!adaptiveRow(row)||info?.verification!=='all_cycle_receipts_rechecked'
+        ||!['full-horizon-reserve-v1','final-program-slot-v1','final-program-slot-1800-v1'].includes(info.horizon_policy?.id)||!wait||!Object.hasOwn(labels,wait.reason)
+        ||!Number.isFinite(info.wall_elapsed_ms)||info.wall_elapsed_ms<0||info.wall_elapsed_ms>wallBudget(row)
         ||!Number.isFinite(wait.started_ms)||!Number.isFinite(wait.ended_ms)
         ||wait.started_ms<0||wait.started_ms>info.wall_elapsed_ms||wait.ended_ms<wait.started_ms
         ||wait.ended_ms>info.wall_elapsed_ms+5000)return null;
@@ -121,7 +128,7 @@
       detail:`${labels[wait.reason]} at ${seconds(wait.started_ms)}. Observation only for ${seconds(duration)} (${seconds(wait.started_ms)}–${seconds(wait.ended_ms)}): no new model requests or input actions; the game and recording continued.`};
   }
   function adaptiveDetails(row){
-    if(row.research?.protocol_id!=='full-client-adaptive-pilot-v1')return null;
+    if(!adaptiveRow(row))return null;
     const info=row.adaptive,details=el('details');details.className='adaptive-details';
     if(info?.verification!=='all_cycle_receipts_rechecked'){
       details.append(el('summary','Adaptive evidence not yet verified'));return details;
@@ -129,9 +136,26 @@
     const hold=adaptiveHold(row);
     details.append(el('summary',`${info.counters.api_responses_confirmed} model responses · ${seconds(info.wall_elapsed_ms)} wall${hold?' · '+hold.brief:''}`));
     if(hold)details.append(el('p',hold.detail));
-    details.append(el('p',`${info.full_wall_budget_used?'Full wall budget used':'Ended early'} · ${info.end_reason.replaceAll('_',' ')}. Persisted XP covers the complete run. Peak-rate scoring is unavailable.`));
+    details.append(el('p',`${info.full_wall_budget_used?'Full wall budget used':'Ended early'} · ${info.end_reason.replaceAll('_',' ')}. Persisted XP covers the complete run. ${nativeScore(row)?'Authoritative peak-rate evidence appears below.':'Peak-rate scoring is unavailable.'}`));
     const profile=info.class_profile;
-    if(profile)details.append(el('p',`${profile.class_name}, level ${profile.level}. Declared skills: ${Object.values(profile.skill_keys).join(', ')}.`));
+    if(profile){
+      details.append(el('p',`${profile.class_name}, level ${profile.level}. The model chooses among the skills mapped for this fixture.`));
+      const usage=info.skill_usage,skillTable=el('table'),skillHeader=el('tr'),skillBody=el('tbody');
+      for(const label of ['Available skill','Control','Confirmed inputs'])skillHeader.append(el('th',label));
+      const heading=el('thead');heading.append(skillHeader);skillTable.append(heading,skillBody);
+      for(const [key,name] of Object.entries(profile.skill_keys)){
+        const recorded=usage?.basis==='acknowledged_skill_inputs'&&Array.isArray(usage.skills)
+          ?usage.skills.find(item=>item.key===key&&item.name===name):null;
+        const tr=el('tr');cell(tr,name);cell(tr,key);
+        cell(tr,Number.isSafeInteger(recorded?.acknowledged_inputs)&&recorded.acknowledged_inputs>=0
+          ?format(recorded.acknowledged_inputs):'Not recorded');skillBody.append(tr);
+      }
+      const wrap=el('div');wrap.className='table-wrap';wrap.append(skillTable);details.append(wrap);
+      details.append(el('p','Input counts show acknowledged key presses. Successful casts and server effects need separate evidence. Skills absent from this list were not available through the mapped controls.'));
+    }
+    const breakdown=info.timing_breakdown;
+    if(breakdown?.basis==='verified_cycle_intervals')details.append(el('p',`Model wait: ${seconds(breakdown.model_wait_ms)} · Program execution: ${seconds(breakdown.program_ms)} · Observation only: ${seconds(breakdown.observation_only_ms)}. Programs can include waits; execution time is not continuous key input.`));
+    if(['final-program-slot-v1','final-program-slot-1800-v1'].includes(info.horizon_policy?.id))details.append(el('p','The final program can use fresh SDK observations for up to 145 seconds without another model response. Model waiting still counts against the wall-clock budget.'));
     const table=el('table'),head=el('tr'),body=el('tbody');
     for(const name of ['Cycle','Exact model returned','Model wait','Program interval','Inputs','Tokens'])head.append(el('th',name));
     const header=el('thead');header.append(head);table.append(header,body);
@@ -145,10 +169,37 @@
     }
     const wrap=el('div');wrap.className='table-wrap';wrap.append(table);details.append(wrap);return details;
   }
+  function nativeDetails(row){
+    const score=nativeScore(row);if(!score)return null;
+    const windows=score.windows;
+    if(!Array.isArray(windows)||windows.length<1||windows.length>120
+        ||!windows.every(w=>Number.isFinite(w.end_ms)&&Number.isFinite(w.best_so_far)&&w.best_so_far>=0))return null;
+    const section=el('section');section.className='native-xp-details';
+    section.append(el('h3',`${format(score.authoritative_peak_xp_per_minute)} peak normalized XP/min`));
+    section.append(el('p',`${score.complete_windows} complete 15-second windows. Control-window net XP: ${xp(score.control_window_net_xp)}. Saved net XP: ${xp(score.persisted_net_xp)}. Level ${score.initial_level} → ${score.final_level}.`));
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('viewBox','0 0 640 180');svg.setAttribute('role','img');
+    svg.setAttribute('aria-label','Best normalized XP per minute discovered over elapsed time. Exact values are in the table below.');
+    const maximum=Math.max(1,...windows.map(w=>w.best_so_far)),end=Math.max(1,...windows.map(w=>w.end_ms));
+    const line=document.createElementNS(svg.namespaceURI,'path');let path='M 50 145';
+    for(const window of windows){const x=50+window.end_ms/end*570,y=145-window.best_so_far/maximum*115;
+      path+=` H ${x} V ${y}`;}
+    line.setAttribute('d',path);line.setAttribute('fill','none');line.setAttribute('stroke','currentColor');line.setAttribute('stroke-width','3');svg.append(line);
+    for(const [x,y,text] of [[5,30,format(maximum)],[15,145,'0'],[50,170,'0s'],[550,170,seconds(end)]]){
+      const label=document.createElementNS(svg.namespaceURI,'text');label.setAttribute('x',x);label.setAttribute('y',y);label.setAttribute('fill','currentColor');label.setAttribute('font-size','12');label.textContent=text;svg.append(label);}
+    section.append(svg);
+    const details=el('details');details.append(el('summary','Inspect authoritative XP windows'));
+    const table=el('table'),heading=el('tr'),head=el('thead'),body=el('tbody');
+    for(const label of ['Window','Signed XP','Normalized XP/min','Best so far'])heading.append(el('th',label));head.append(heading);table.append(head,body);
+    for(const window of windows){const tr=el('tr');cell(tr,`${seconds(window.start_ms)}–${seconds(window.end_ms)}`);cell(tr,xp(window.net_xp));cell(tr,format(window.normalized_xp_per_minute));cell(tr,format(window.best_so_far));body.append(tr);}
+    const wrap=el('div');wrap.className='table-wrap';wrap.append(table);details.append(wrap);section.append(details);
+    section.append(el('p','The curve shows the best completed window so far. A brief peak does not establish sustained efficiency. Signed XP losses remain in the window table and saved total.'));
+    return section;
+  }
   function renderLive(){
     const rows=snapshot.attempts;
     const publicFeatured=snapshot.source==='full_client_public_catalog'&&rows.find(item=>item.id===snapshot.featured_run_id
-      &&item.status==='completed'&&item.recording&&['runner_verified_receipts_rechecked','adaptive_runner_verified_receipts_rechecked'].includes(item.score_verification));
+      &&item.status==='completed'&&item.recording&&['runner_verified_receipts_rechecked','adaptive_runner_verified_receipts_rechecked','native_window_runner_receipts_rechecked'].includes(item.score_verification));
     const row=publicFeatured||rows.find(item=>['running','recovering','requesting'].includes(item.status))
       ||rows.find(item=>item.id===snapshot.featured_run_id)||rows[0];
     if(!row)return;
@@ -156,7 +207,7 @@
     if(row.status==='completed')liveBadge.textContent='Completed · saved result';
     $('live-badge').replaceWith(Object.assign(liveBadge,{id:'live-badge'}));
     $('live-id').textContent=row.id;
-    const verifiedFeatured=row.id===snapshot.featured_run_id&&row.status==='completed'&&['runner_verified_receipts_rechecked','adaptive_runner_verified_receipts_rechecked'].includes(row.score_verification);
+    const verifiedFeatured=row.id===snapshot.featured_run_id&&row.status==='completed'&&['runner_verified_receipts_rechecked','adaptive_runner_verified_receipts_rechecked','native_window_runner_receipts_rechecked'].includes(row.score_verification);
     $('live-title').textContent=row.requested_model?`${row.status==='completed'?(verifiedFeatured?'Latest verified result: ':'Latest result: '):''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
     const phase=phases.find(([key])=>key===row.phase)?.[1]||'Preparing';
     const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
@@ -174,6 +225,7 @@
     const adaptive=$('adaptive-evidence');adaptive.replaceChildren();
     const hold=adaptiveHold(row);if(hold){const note=el('p',hold.detail);note.className='group-notice';adaptive.append(note);}
     const detail=adaptiveDetails(row);if(detail)adaptive.append(detail);
+    const native=nativeDetails(row);if(native)adaptive.append(native);
     const saved=Number.isFinite(row.persisted_xp);
     $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
     $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
@@ -183,9 +235,9 @@
     if(!node)return;
     const current=Array.isArray(catalog?.cohorts)?catalog.cohorts:[];
     const previous=catalog?.schema_version===2&&Array.isArray(catalog.previous_cohorts)?catalog.previous_cohorts:[];
-    node.replaceChildren();node.hidden=!([1,2].includes(catalog?.schema_version)&&current.length<=3&&previous.length<=3);
+    node.replaceChildren();node.hidden=!([1,2].includes(catalog?.schema_version)&&current.length<=4&&previous.length<=4);
     if(node.hidden)return;
-    const names={hero:'Hero',bowmaster:'Bowmaster',ice_lightning_arch_mage:'Ice/Lightning Arch Mage'};
+    const names={hero:'Hero',bowmaster:'Bowmaster',ice_lightning_arch_mage:'Ice/Lightning Arch Mage',night_lord:'Night Lord'};
     for(const [cohorts,isPrevious] of [[current,false],[previous,true]]){
       if(!cohorts.length)continue;
       const group=el('div');
@@ -218,7 +270,8 @@
       for(const column of columns){
         const value=model.cells.find(item=>item.column_id===column.id),td=cell(tr,null,'research-cell');
         if(!value||value.attempt_ids.length===0){td.textContent='No declared runs';continue;}
-        td.append(el('strong',Number.isFinite(value.mean)?`${xp(value.mean)} mean net XP`:'No verified score'));
+        td.append(el('strong',Number.isFinite(value.mean)?protocol.score_key==='authoritative_peak_xp_per_minute'
+          ?`${format(value.mean)} mean peak XP/min`:`${xp(value.mean)} mean net XP`:'No verified score'));
         td.append(el('small',`${value.valid} valid / ${value.attempted} attempted${value.planned==null?' · plan denominator unknown':` / ${value.planned} planned`}`));
         td.append(el('small',`${value.failed} failed · ${value.unknown} unknown · ${value.in_progress} in progress · ${value.not_started} not started`));
         if(value.valid>1)td.append(el('small',`Observed range ${xp(value.minimum)} to ${xp(value.maximum)}; uncertainty not estimated`));
@@ -251,7 +304,7 @@
         const tr=el('tr'),identity=cell(tr,row.requested_model);identity.append(el('small',row.id.slice(0,12)));
         scoreCell(tr,row);inputDetails(cell(tr,null,'input-summary'),row);cell(tr,alive(row.alive_at_logout));
         const timing=cell(tr,`${seconds(row.timing.api_ms)} API`);
-        timing.append(el('small',row.research?.protocol_id==='full-client-adaptive-pilot-v1'
+        timing.append(el('small',adaptiveRow(row)
           ?`${seconds(row.adaptive?.wall_elapsed_ms)} wall`:`${seconds(row.timing.controller_ms)} play`));
         const hold=adaptiveHold(row);if(hold)timing.append(el('small',hold.brief),el('small',hold.detail));
         publicationCell(tr,row);recording(cell(tr),row);body.append(tr);
@@ -265,7 +318,7 @@
     for(const row of snapshot.attempts){
       const tr=el('tr'),identity=cell(tr);identity.append(el('strong',row.requested_model||'No evaluated model'),el('small',row.id));
       if(row.attribution==='mismatch')identity.append(el('small',`Returned ${row.returned_model}; attribution mismatch`));
-      const detail=adaptiveDetails(row);if(detail)identity.append(detail);
+      const detail=adaptiveDetails(row);if(detail){const native=nativeDetails(row);if(native)detail.append(native);identity.append(detail);}
       const state=cell(tr);state.append(badge(row.status));if(row.no_op===true)state.append(el('small','No input actions'));if(row.failure_code)state.append(el('small',row.failure_code.replaceAll('_',' ')));
       if(row.api_outcome==='uncertain')state.append(el('small',row.api_response_saved?'API receipt saved; runner accounting uncertain':'API outcome uncertain'));
       if(row.kind==='integration')state.append(el('small','Unranked integration'));
