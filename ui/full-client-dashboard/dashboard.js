@@ -315,7 +315,7 @@
   function renderHistory(){
     $('history').replaceChildren();$('history-empty').hidden=snapshot.attempts.length>0;
     $('count').textContent=`${snapshot.attempts.length} visible attempts${snapshot.truncated?' · recent window':''}`;
-    for(const row of snapshot.attempts){
+    for(const row of snapshot.attempts.filter(r=>!$('history-filter')||$('history-filter').value==='all'||($('history-filter').value==='completed'?r.status==='completed':r.status!=='completed'))){
       const tr=el('tr'),identity=cell(tr);identity.append(el('strong',row.requested_model||'No evaluated model'),el('small',row.id));
       if(row.attribution==='mismatch')identity.append(el('small',`Returned ${row.returned_model}; attribution mismatch`));
       const detail=adaptiveDetails(row);if(detail){const native=nativeDetails(row);if(native)detail.append(native);identity.append(detail);}
@@ -330,6 +330,206 @@
       ?`${snapshot.cohort.verified} of ${snapshot.cohort.planned} planned models have verified results. ${snapshot.cohort.archive_replacement?'This completed cohort replaces the public test archive.':'Cohort progress; the existing public archive is retained.'} No runs start from this page.`
       :snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
   }
+  // Public research presentation; all scores and evidence come from the same snapshot.
+  const node=(tag,text,cls)=>{const n=el(tag,text);if(cls)n.className=cls;return n;};
+  const number=format,duration=seconds;
+  const model=row=>row.returned_model||row.requested_model||'Unattributed';
+  const names={'gpt-6-astra':'GPT-6 Astra','gpt-5.6-sol':'GPT-5.6 Sol','gpt-5.6-terra':'GPT-5.6 Terra','gpt-5.6-luna':'GPT-5.6 Luna'};
+  const name=row=>names[model(row)]||model(row);
+  const colors={'gpt-6-astra':'#609b8b','gpt-5.6-sol':'#d2a35b','gpt-5.6-terra':'#a580b7','gpt-5.6-luna':'#6f9bc6'};
+  const color=row=>colors[model(row)]||'#78847b';
+  const status=row=>labels[row.status]||'Incomplete';
+  let recordings=[],selected,filterModel,previewsPlaying=false,presentationIdentity='',montageIdentity='';
+  const runPlayer=$('run-video'),reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
+  function safeRecording(row) {
+    try {
+      const u=new URL(row.recording.url,location.href);
+      if(u.origin!==location.origin||!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash
+        ||!/^\/(?:[A-Za-z0-9_-]+\/){0,3}recordings\/[A-Za-z0-9_./-]+\.(webm|mp4)$/.test(u.pathname))return null;
+      return u.href;
+    }catch{return null;}
+  }
+  function cue(row) {
+    const c=row?.recording?.playback;
+    return c&&Number.isFinite(c.start_ms)&&c.start_ms>=0
+      &&c.start_ms<(adaptiveRow(row)?wallBudget(row)+35000:125000)
+      &&['program_start','first_acknowledged_input'].includes(c.basis)?c:null;
+  }
+  function montageRows(group,rows) {
+    if(!group||!Array.isArray(group.models)||!Array.isArray(group.attempt_ids))return [];
+    const order=['gpt-6-astra','gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna'];
+    return [...new Set(group.models)].sort((a,b)=>(order.indexOf(a)<0?99:order.indexOf(a))-(order.indexOf(b)<0?99:order.indexOf(b)))
+      .map(exact=>({model:exact,row:rows.find(r=>group.attempt_ids.includes(r.id)&&r.requested_model===exact
+        &&r.returned_model===exact&&r.attribution!=='mismatch'&&safeRecording(r))||null}));
+  }
+  function runOutcome(row) {
+    if(!Number.isFinite(row.persisted_xp))return 'No verified saved XP score is available for this attempt.';
+    const saved=row.persisted_xp===0?'The run ended with zero net saved XP.':row.persisted_xp<0
+      ?`${xp(row.persisted_xp)} net XP remained after logout, including losses.`
+      :`${xp(row.persisted_xp)} XP remained saved after normal logout.`;
+    return saved+(row.no_op===true?' No input actions were executed.':'');
+  }
+  function groupLabel(group) {
+    const row=snapshot.attempts.find(r=>group.attempt_ids.includes(r.id));
+    const className=row?.adaptive?.class_profile?.class_name||row?.research?.class_id?.replaceAll('_',' ')||'Undeclared class';
+    return `${className} · ${new Set(group.models).size} models · ${adaptiveRow(row||{})?wallBudget(row)/60000+' min':'legacy'}`;
+  }
+  function dot(row){const d=node('span',null,'model-dot');d.style.setProperty('--model-color',color(row));return d;}
+  function watch(row){
+    if(!safeRecording(row))return node('span','Not recorded','muted small');
+    const b=node('button','Watch ↗','watch-button');b.type='button';b.setAttribute('aria-label',`Watch ${name(row)} attempt ${row.id.slice(0,8)}`);
+    b.addEventListener('click',()=>openRun(row));return b;
+  }
+  function setPreviews(play){
+    previewsPlaying=play;
+    for(const v of document.querySelectorAll('.montage video')){if(play)v.play().catch(()=>{});else v.pause();}
+    $('montage-toggle').textContent=play?'Pause previews':'Play previews';
+    $('montage-toggle').setAttribute('aria-pressed',String(play));
+  }
+  function renderMontage(){
+    const group=snapshot.comparisons.find(g=>g.id===$('showcase-select').value),picks=montageRows(group,snapshot.attempts);
+    const identity=JSON.stringify([group?.id,picks.map(p=>[p.model,p.row?.id,p.row?.persisted_xp,p.row?.recording])]);
+    if(identity===montageIdentity)return;montageIdentity=identity;
+    setPreviews(false);$('montage').replaceChildren();$('montage').classList.toggle('single',picks.length===1);
+    $('montage-toggle').hidden=!picks.some(p=>p.row);
+    $('showcase-class').textContent=group?groupLabel(group):'Awaiting a declared group';
+    $('showcase-caption').textContent=group?`${picks.length} models · one frozen class setup`:'No group published';
+    document.querySelector('.sample-note').textContent='Independent recorded attempts; previews open at verified playback cues. The full recordings retain every wait. These are unranked pilot observations.';
+    if(!picks.length){$('montage').append(node('p','No declared group is available.','loading'));return;}
+    for(const {model:exact,row:r}of picks){
+      if(!r){const empty=node('div',null,'montage-tile empty-preview');empty.append(node('span',names[exact]||exact),node('small','Recording unavailable'));$('montage').append(empty);continue;}
+      const tile=node('button',null,'montage-tile is-loading');tile.type='button';tile.setAttribute('aria-label',`Explore ${name(r)}, ${xp(r.persisted_xp)} saved XP`);
+      const v=node('video');v.muted=true;v.playsInline=true;v.preload='metadata';v.tabIndex=-1;v.setAttribute('aria-hidden','true');v.src=safeRecording(r);
+      let previewStart=0;
+      v.addEventListener('loadedmetadata',()=>{const start=(cue(r)?.start_ms||0)/1000;if(start>0&&start<v.duration){previewStart=start;v.currentTime=start;}else tile.classList.remove('is-loading');});
+      v.addEventListener('seeked',()=>tile.classList.remove('is-loading'),{once:true});
+      v.addEventListener('loadeddata',()=>{if(!previewStart)tile.classList.remove('is-loading');});
+      v.addEventListener('ended',()=>{v.currentTime=previewStart;if(previewsPlaying)v.play().catch(()=>{});});
+      v.addEventListener('error',()=>{tile.classList.remove('is-loading');tile.classList.add('video-unavailable');});
+      const caption=node('span',null,'tile-caption');caption.append(dot(r),node('span',name(r)),node('span',`${xp(r.persisted_xp)} saved XP`,'tile-score'));
+      tile.append(v,caption,node('span','▶','tile-play'));tile.addEventListener('click',()=>openRun(r));$('montage').append(tile);
+    }
+    if(!reducedMotion.matches&&!document.hidden)setPreviews(true);
+  }
+  function renderComparison(){
+    const group=snapshot.comparisons.find(g=>g.id===$('comparison-select').value);
+    const rows=group?snapshot.attempts.filter(r=>group.attempt_ids.includes(r.id)):[];
+    const values=rows.map(r=>r.persisted_xp).filter(Number.isFinite),low=Math.min(0,...values),high=Math.max(0,...values);
+    const floor=low<0?Math.floor(low/1000)*1000:0,ceiling=Math.max(floor+1000,Math.ceil(high/1000)*1000),span=ceiling-floor;
+    $('xp-chart').replaceChildren();$('comparison-rows').replaceChildren();
+    for(const r of rows){
+      const chart=node('div',null,'chart-row');chart.style.setProperty('--model-color',color(r));
+      const label=node('span',null,'chart-model');label.append(dot(r),node('span',name(r)));
+      const track=node('div',null,'chart-track'),bar=node('div',null,'chart-bar');
+      track.style.setProperty('--zero',`${-floor/span*100}%`);
+      if(Number.isFinite(r.persisted_xp)){bar.style.left=`${(Math.min(0,r.persisted_xp)-floor)/span*100}%`;bar.style.width=`${Math.abs(r.persisted_xp)/span*100}%`;bar.classList.toggle('negative',r.persisted_xp<0);bar.classList.toggle('zero',r.persisted_xp===0);}else bar.hidden=true;
+      track.append(bar);chart.append(label,track,node('span',xp(r.persisted_xp),'chart-value'));$('xp-chart').append(chart);
+      const tr=node('tr'),identity=cell(tr);identity.append(dot(r),node('strong',name(r)),node('small',r.id.slice(0,12)));
+      if(r.attribution==='mismatch')identity.append(node('small',`Requested ${r.requested_model}; returned attribution mismatch`));
+      scoreCell(tr,r);inputDetails(cell(tr),r);
+      const time=cell(tr,adaptiveRow(r)?`${seconds(r.adaptive?.wall_elapsed_ms)} wall`:`${seconds(r.timing?.controller_ms)} program`);
+      time.append(node('small',`${seconds(r.timing?.api_ms)} total model wait`));const hold=adaptiveHold(r);if(hold)time.append(node('small',hold.brief));
+      cell(tr,alive(r.alive_at_logout));publicationCell(tr,r);cell(tr).append(watch(r));$('comparison-rows').append(tr);
+    }
+    const axis=node('div',null,'chart-axis');for(let i=0;i<5;i++)axis.append(node('span',number(floor+span*i/4)));$('xp-chart').append(axis);
+    $('group-context').textContent=group?`${groupLabel(group)}. ${group.ready?'Matching frozen inputs; live scene equality is unverified.':'A within-group comparison is not yet established.'}`:'No comparison group is available.';
+  }
+  function renderModels(){
+    $('model-tabs').replaceChildren();
+    for(const m of [...new Set(recordings.map(model))]){
+      const row=recordings.find(r=>model(r)===m),b=node('button',null,'model-tab');b.type='button';b.append(dot(row),node('span',names[m]||m));b.setAttribute('aria-pressed',String(m===filterModel));
+      b.addEventListener('click',()=>{filterModel=m;renderModels();renderRunOptions();const group=snapshot.comparisons.find(g=>g.id===$('comparison-select').value);selectRun(recordings.find(r=>model(r)===m&&group?.attempt_ids.includes(r.id))||recordings.find(r=>model(r)===m));});$('model-tabs').append(b);
+    }
+  }
+  function renderRunOptions(){
+    $('run-select').replaceChildren();
+    for(const r of recordings.filter(r=>model(r)===filterModel)){
+      const option=node('option',`${r.adaptive?.class_profile?.class_name||'Undeclared class'} · ${r.id.slice(0,8)} · ${xp(r.persisted_xp)} XP · ${status(r)}`);option.value=r.id;$('run-select').append(option);
+    }
+  }
+  function selectRun(row){
+    if(!row)return;
+    const changed=selected?.id!==row.id||safeRecording(selected)!==safeRecording(row);
+    selected=row;$('run-select').value=row.id;
+    if(changed){runPlayer.pause();$('cue-button').disabled=true;$('full-button').disabled=true;runPlayer.src=safeRecording(row);$('player-status').textContent='Loading recording…';}
+    $('run-model').textContent=name(row);$('run-dot').style.setProperty('--model-color',color(row));$('run-state').textContent=status(row);$('run-outcome').textContent=runOutcome(row);
+    const metrics=[['Saved XP',xp(row.persisted_xp)],['Acknowledged inputs',number(row.acknowledged_actions)],['Total model wait',duration(row.timing?.api_ms)],[adaptiveRow(row)?'Wall budget used':'Program interval',duration(adaptiveRow(row)?row.adaptive?.wall_elapsed_ms:row.timing?.controller_ms)]];
+    $('run-metrics').replaceChildren();for(const [label,value]of metrics){const d=node('div');d.append(node('dt',label),node('dd',value));$('run-metrics').append(d);}
+    const p=publication(row);$('run-evidence').textContent=`${p.label}. ${p.detail?p.detail+'. ':''}${Number.isFinite(row.persisted_xp)?'Saved XP was verified by the runner.':'Diagnostic XP is not a verified score.'}`;
+    $('run-id').textContent=row.id;$('run-attribution').textContent=`Requested: ${row.requested_model||'none'}. Returned: ${row.returned_model||'not recorded'}. ${row.attribution==='mismatch'?'Model attribution mismatch. ':''}${row.action_attempts!=null?`${row.action_attempts} attempted inputs; ${number(row.acknowledged_actions)} acknowledged.`:'Input receipts unavailable.'}`;
+    const c=cue(row);$('cue-button').hidden=!c;$('cue-button').textContent=c?.basis==='first_acknowledged_input'?'First input':'Program start';
+    $('cue-note').textContent=c?`Playback opens near ${c.basis==='first_acknowledged_input'?'the first acknowledged input':'program start; first-input timing was not recorded'}. Full recording retains the opening wait.`:'Showing the full recording. No verified playback cue is available.';
+    if(adaptiveRow(row))$('cue-note').textContent+=` Every model wait counts within the ${wallBudget(row)/60000}-minute wall budget. Seeking changes playback only.`;
+    const details=$('selected-evidence');details.replaceChildren();const hold=adaptiveHold(row);if(hold)details.append(node('p',hold.detail,'group-notice'));
+    const adaptive=adaptiveDetails(row);if(adaptive)details.append(adaptive);const native=nativeDetails(row);if(native)details.append(native);
+  }
+  function openRun(row){
+    filterModel=model(row);renderModels();renderRunOptions();selectRun(row);setPreviews(false);
+    $('trajectories').scrollIntoView({behavior:reducedMotion.matches?'instant':'smooth'});runPlayer.focus({preventScroll:true});
+  }
+  function playAt(time){if(runPlayer.readyState<1)return;try{runPlayer.currentTime=time;runPlayer.play().catch(()=>{$('player-status').textContent='Use the video controls to play.';});}catch{$('player-status').textContent='Use the video controls to seek.';}}
+  function renderRedesign(){
+    const {generated_at_ms,...presentation}=snapshot;
+    const identity=JSON.stringify(presentation);if(identity===presentationIdentity)return;presentationIdentity=identity;
+    recordings=snapshot.attempts.filter(safeRecording);
+    $('hero-models').textContent=new Set(snapshot.attempts.map(r=>r.requested_model).filter(Boolean)).size;
+    $('hero-recordings').textContent=recordings.length;$('hero-attempts').textContent=snapshot.attempts.length;$('recording-count').textContent=`${recordings.length} recordings`;
+    const previous=$('comparison-select').value;
+    for(const id of ['comparison-select','showcase-select']){const select=$(id);select.replaceChildren();for(const g of snapshot.comparisons){const option=node('option',groupLabel(g));option.value=g.id;select.append(option);}}
+    const group=snapshot.comparisons.find(g=>g.id===previous)||snapshot.comparisons.find(g=>g.attempt_ids.includes(snapshot.featured_run_id))||snapshot.comparisons[0];
+    if(group){$('comparison-select').value=group.id;$('showcase-select').value=group.id;}
+    renderMontage();renderComparison();
+    const featured=recordings.find(r=>r.id===selected?.id)||recordings.find(r=>r.id===snapshot.featured_run_id)||recordings[0];
+    if(featured){filterModel=model(featured);renderModels();renderRunOptions();selectRun(featured);}else{$('player-status').textContent='No recordings available.';}
+    $('snapshot-date').textContent=`Saved ${new Date(snapshot.generated_at_ms).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`;
+  }
+  runPlayer.addEventListener('loadedmetadata',()=>{const start=(cue(selected)?.start_ms||0)/1000;if(start<runPlayer.duration)runPlayer.currentTime=start;$('player-status').textContent='Ready to play';$('cue-button').disabled=false;$('full-button').disabled=false;});
+  runPlayer.addEventListener('playing',()=>{$('player-status').textContent='Playing recorded run';setPreviews(false);});
+  runPlayer.addEventListener('pause',()=>{$('player-status').textContent=runPlayer.ended?'Recording finished':'Paused';});
+  runPlayer.addEventListener('error',()=>{$('player-status').textContent='Recording unavailable. Choose another attempt.';$('cue-button').disabled=true;$('full-button').disabled=true;});
+  $('cue-button').addEventListener('click',()=>playAt((cue(selected)?.start_ms||0)/1000));$('full-button').addEventListener('click',()=>playAt(0));
+  $('montage-toggle').addEventListener('click',()=>setPreviews(!previewsPlaying));reducedMotion.addEventListener('change',e=>{if(e.matches)setPreviews(false);});
+  for(const id of ['comparison-select','showcase-select'])$(id).addEventListener('change',()=>{$('comparison-select').value=$(id).value;$('showcase-select').value=$(id).value;renderComparison();renderMontage();});
+  $('run-select').addEventListener('change',()=>selectRun(recordings.find(r=>r.id===$('run-select').value)));
+  $('history-filter').addEventListener('change',renderHistory);
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){setPreviews(false);runPlayer.pause();}});
+  const architectureTabs = [...document.querySelectorAll('[data-architecture]')];
+  function showArchitecture(key, focus = false) {
+    for (const tab of architectureTabs) {
+      const active = tab.dataset.architecture === key;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+      $(tab.getAttribute('aria-controls')).hidden = !active;
+      if (active && focus) tab.focus();
+    }
+  }
+  for (const tab of architectureTabs) {
+    tab.addEventListener('click', () => showArchitecture(tab.dataset.architecture));
+    tab.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const index = architectureTabs.indexOf(tab);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? architectureTabs.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + architectureTabs.length) % architectureTabs.length;
+      showArchitecture(architectureTabs[next].dataset.architecture, true);
+    });
+  }
+  const worldSteps = {
+    see: { title: 'Game state, not a video feed.', description: 'The model receives the character’s position, HP, MP, XP, level, map, and nearby monster positions. Journey WASM supplies the client observations; the recordings are for people to inspect.', nodes: ['client','controller'] },
+    think: { title: 'Observe, program, adapt.', description: 'The trusted controller sends the task, SDK instructions, and current state to OpenAI. The model returns a JavaScript program. Adaptive pilots repeat this cycle within a fixed wall budget. The game world continues running during inference.', nodes: ['provider','controller'] },
+    act: { title: 'A plan becomes actual key presses.', description: 'The generated program runs in a bounded, networkless Node.js container. It calls observe(), pressKeys(), and wait() through the trusted controller. Journey handles movement and combat through the ordinary game connection.', nodes: ['sandbox','controller','client','proxy'] },
+    save: { title: 'The score has to survive logout.', description: 'Cosmic saves character state in MySQL after ordinary logout. The runner compares persisted XP with the starting baseline, including penalties. Live client XP remains diagnostic; it is not the final score.', nodes: ['server','database','controller'] }
+  };
+  function showWorldStep(key) {
+    const step = worldSteps[key];
+    if (!step) return;
+    for (const button of document.querySelectorAll('[data-world-step]')) button.setAttribute('aria-pressed', String(button.dataset.worldStep === key));
+    for (const mapNode of document.querySelectorAll('.map-node')) mapNode.classList.toggle('is-highlighted', step.nodes.some(name => mapNode.classList.contains(name)));
+    $('world-step-detail').replaceChildren(node('h3',step.title),node('p',step.description));
+  }
+  for (const button of document.querySelectorAll('[data-world-step]')) button.addEventListener('click', () => showWorldStep(button.dataset.worldStep));
+  showWorldStep('see');
+
   function freshness(){
     if(!snapshot)return;
     if(snapshot.source==='full_client_public_catalog'){
@@ -350,11 +550,11 @@
       const response=await fetch('./results.json',{cache:'no-store',signal:AbortSignal.timeout(3000)});
       if(!response.ok)throw Error();const next=await response.json();
       if(next.schema_version!==1||!Array.isArray(next.attempts)||next.attempts.length>100||!Array.isArray(next.comparisons)||!Number.isFinite(next.generated_at_ms))throw Error();
-      snapshot=next;renderCatalog();renderResearch();renderLive();renderComparisons();renderHistory();freshness();
+      snapshot=next;renderRedesign();renderCatalog();renderResearch();renderLive();renderComparisons();renderHistory();freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
     finally{if(!closed&&(snapshot?.live_status_available!==false||[1,2].includes(snapshot?.catalog?.schema_version)))timer=setTimeout(refresh,[1,2].includes(snapshot?.catalog?.schema_version)?10000:2000);}
   }
-  window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
+  window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();setPreviews(false);runPlayer.pause();});
   refresh();
 })();

@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from full_client_presentation import refresh
-from full_client_publication import ASSETS, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO, XP_PROTOCOL, digest, encoded, file_inventory, verify_package
+from full_client_publication import ASSETS, MAX_UI_ASSET, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO, XP_PROTOCOL, digest, encoded, file_inventory, verify_package
 
 
 class PresentationTests(unittest.TestCase):
@@ -43,6 +43,13 @@ class PresentationTests(unittest.TestCase):
     def test_output_inside_source_is_refused(self):
         with self.assertRaisesRegex(ValueError,'presentation_paths_overlap'):
             refresh(self.package,self.sha,self.package,ui_root=self.ui)
+    def test_bounded_self_contained_artwork_keeps_the_same_asset_allowlist(self):
+        html=b'<html><!-- original decorative artwork -->'+b'a'*(2*1024**2)+b'</html>'
+        (self.ui/'index.html').write_bytes(html)
+        result=refresh(self.package,self.sha,self.output,ui_root=self.ui)
+        self.assertEqual((Path(result['package'])/'site/index.html').read_bytes(),html)
+        (self.ui/'index.html').write_bytes(b'a'*(MAX_UI_ASSET+1))
+        with self.assertRaises(ValueError):refresh(self.package,self.sha,self.output,ui_root=self.ui)
     def test_xp_package_preserves_its_existing_larger_video_limit(self):
         self.check_xp_video_limit(33*1024**2,MAX_ADAPTIVE_VIDEO)
     def test_explicit_long_xp_package_preserves_its_own_video_limit(self):

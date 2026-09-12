@@ -9,7 +9,7 @@ import shutil
 import tempfile
 
 from full_client_gallery import copy_recording, directory
-from full_client_publication import (ASSETS, ADAPTIVE_PROTOCOL, XP_PROTOCOL, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO,
+from full_client_publication import (ASSETS, MAX_UI_ASSET, ADAPTIVE_PROTOCOL, XP_PROTOCOL, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO,
     MAX_VIDEO, digest, encoded, file_inventory, require, stable_bytes,
     verify_package, write_new)
 from full_client_trial import publish_attempt, sync_directory
@@ -27,7 +27,7 @@ def refresh(package, expected, output_root, *, ui_root=None):
         site=staging/'site';site.mkdir(mode=0o755);(site/'recordings').mkdir(mode=0o755)
         for name,ref in original['files'].items():
             if name in ASSETS:
-                write_new(site/name,stable_bytes(ui/name,1024**2),0o644)
+                write_new(site/name,stable_bytes(ui/name,MAX_UI_ASSET),0o644)
             elif name.endswith('.webm'):
                 copy_recording(package/'site',{'path':name,'sha256':ref['sha256']},site/name,{},maximum=maximum)
             else:

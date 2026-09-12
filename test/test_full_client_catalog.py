@@ -227,7 +227,7 @@ assert.equal(links().length,1);
 assert.equal(links()[0].href,'./cohorts/aaaaaaaaaaaaaaaa/');
 assert.equal(links()[0].text,'Hero · 1 / 4 verified');
 let scheduled,rendered=0;const setTimeout=(fn,ms)=>{scheduled=ms;return fn};
-const renderResearch=()=>rendered++,renderLive=()=>{},renderComparisons=()=>{},renderHistory=()=>{},freshness=()=>{};
+const renderRedesign=()=>{},renderResearch=()=>rendered++,renderLive=()=>{},renderComparisons=()=>{},renderHistory=()=>{},freshness=()=>{};
 const replay={open:false};
 const next={schema_version:1,attempts:[{id:'a'},{id:'b'},{id:'c'},{id:'d'}],comparisons:[],generated_at_ms:1,
  live_status_available:false,catalog:{schema_version:2,previous_cohorts:[],cohorts:[{url:'./cohorts/aaaaaaaaaaaaaaaa/',class_id:'hero',verified:2}]}};

@@ -25,6 +25,9 @@ from full_client_trial import publish_attempt, sync_directory, validate_spec
 from full_client_research import summarize, CLASSES, TASKS
 
 ASSETS = ('index.html', 'dashboard.js', 'style.css')
+# Self-contained UI may include licensed fonts and original decorative artwork.
+# This matches the existing non-video package verification ceiling.
+MAX_UI_ASSET = 4 * 1024**2
 MAX_VIDEO = 32 * 1024**2
 MAX_ADAPTIVE_VIDEO = 96 * 1024**2
 MAX_LONG_VIDEO = 600 * 1024**2
@@ -270,7 +273,7 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
                       'archive_replacement':replace_archive,'attempt_ids':[r['id'] for r in rows]}}
         snapshot['research_matrix']=summarize(snapshot)
         ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
-        for name in ASSETS:write_new(site/name,stable_bytes(ui/name,1024**2),0o644)
+        for name in ASSETS:write_new(site/name,stable_bytes(ui/name,MAX_UI_ASSET),0o644)
         videos=[{'path':p.name,**stable_fingerprint(p,maximum_video)}
                 for p in sorted(recordings.iterdir())]
         write_new(site/'results.json',encoded(snapshot),0o644)

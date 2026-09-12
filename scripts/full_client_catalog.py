@@ -17,7 +17,7 @@ import tempfile
 
 from full_client_dashboard import Reader, RUN, SHA, model, number, project_attempt
 from full_client_gallery import copy_recording, directory
-from full_client_publication import (ADAPTIVE_PROTOCOL, XP_PROTOCOL, ASSETS, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO,
+from full_client_publication import (ADAPTIVE_PROTOCOL, XP_PROTOCOL, ASSETS, MAX_UI_ASSET, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO,
     digest, encoded, require, stable_bytes, stable_fingerprint, verify_package, write_new)
 from full_client_adaptive_publication import VERIFIED
 from full_client_xp_cohort import VERIFIED as XP_VERIFIED, checked_public as checked_native_public
@@ -198,11 +198,16 @@ def cohort_annotations(value,included):
 
 
 def annotated_index(raw,notes):
-    text=raw.decode('utf-8');require(text.count('</header>')==1,'catalog_annotation_html_anchor')
+    text=raw.decode('utf-8')
+    anchor='<!-- cohort-limitations -->'
+    require(text.count(anchor)==1 or (anchor not in text and text.count('</header>')==1),
+            'catalog_annotation_html_anchor')
     body=''.join('<article><h3><a href="'+escape(note['url'],quote=True)+'">'
                  +escape(CLASSES[note['class_id']])+' cohort</a></h3><p>'
                  +escape(note['text'],quote=True)+'</p></article>' for note in notes)
     section='<section class="research-intro" aria-label="Operator cohort limitations"><h2>Cohort limitations</h2>'+body+'</section>'
+    if anchor in text:
+        return text.replace(anchor,section,1).encode('utf-8')
     return text.replace('</header>','</header>'+section,1).encode('utf-8')
 
 
@@ -308,7 +313,7 @@ def compose(request,output_root):
         content=p['manifest']['content'];prefix=content['target_path'].lstrip('/')
         planned_files.update({prefix+name:value for name,value in content['files'].items()})
     ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
-    root_data={name:stable_bytes(ui/name,1024**2) for name in ASSETS}
+    root_data={name:stable_bytes(ui/name,MAX_UI_ASSET) for name in ASSETS}
     if notes:root_data['index.html']=annotated_index(root_data['index.html'],notes)
     root_data.update({'results.json':encoded(snapshot),
         'vercel.json':encoded({'framework':None,'buildCommand':None,'outputDirectory':'.'}),
