@@ -866,8 +866,8 @@ class FullClientBridge:
 
     def recording_upload_limits(self, run_id, client):
         with self.lock:
-            self.recording_owner(run_id,client)
-            protocol=self.run.get('adaptiveProtocol') if self.run.get('id')==run_id else None
+            owner=self.recording_owner(run_id,client)
+            protocol=owner.get('adaptiveProtocol')
             if protocol is not None:
                 protocol=validate_protocol(protocol)
                 if protocol['wall_seconds']==1800:return 600*1024*1024,180

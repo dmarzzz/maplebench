@@ -400,7 +400,7 @@ The returned trace is not a persisted-XP or publication-validation receipt.
                 program_limit=min(program_limit,max(0,execution_deadline-clock()))
                 require(program_limit>=3,'adaptive_final_slot_execution_window_closed')
             execution=execute(code,deadline=execution_deadline,program_seconds=program_limit,
-                              max_actions=remaining_actions,max_requests=remaining_sdk,step_callback=record)
+                              max_actions=remaining_actions,max_requests=min(remaining_sdk,10000),step_callback=record)
             cycle['timing']['program_ended_ms']=offset();cycle['execution']=execution
             cycle['execution_receipt']=persist_json(prefix+'execution.json',execution)
             require(isinstance(execution,dict) and execution.get('steps')==cycle_steps,'adaptive_execution_receipts_mismatch')
