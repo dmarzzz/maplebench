@@ -49,3 +49,13 @@ strict capture/probe limits, explicit trial budgets, authenticated upload limits
 and actual runtime frozen-scenario loading. Existing runtime, publication and
 short controller suites remain required. A real long capture still needs measured
 worker RAM, upload/verification closeout and external expiry/backup reserves.
+
+Adaptive JSON artifacts also retain the existing16MiB per-file reader ceiling.
+The controller measures actual compact serialized bytes (including the newline)
+before writing any artifact, and validates both final envelopes before writing
+either. The SDK-step budget is an additional cap, not a promise that duplicated
+trace/program envelopes fit. Oversize fails with `adaptive_artifact_byte_limit`,
+preserves the last valid trace and records its hash in the bounded failure record;
+it never leaves an oversized completed artifact or resumes that attempt. The
+check runs at existing evidence persistence boundaries, avoiding repeated copying
+of a growing trace inside every live input callback.

@@ -147,6 +147,26 @@ def capture_failure(value):
     return dict(value)
 
 
+ADAPTIVE_JSON_LIMIT = 16 * 1024 * 1024
+
+
+def adaptive_json_bytes(value):
+    raw = json.dumps(value, allow_nan=False, separators=(',', ':')).encode() + b'\n'
+    if len(raw) > ADAPTIVE_JSON_LIMIT:
+        raise ControlError('adaptive_artifact_byte_limit')
+    return raw
+
+
+def write_adaptive_final(folder, result, publication):
+    # Check both complete envelopes before publishing either success artifact.
+    # SDK steps appear in both the trace and program; their aggregate byte counter
+    # is not a bound on the actual serialized result size.
+    result_raw = adaptive_json_bytes(result)
+    publication_raw = adaptive_json_bytes(publication)
+    write_bytes(folder/'result.json', result_raw)
+    write_bytes(folder/'publication.json', publication_raw)
+
+
 def write_json(path, value):
     """Readers must see either the previous complete evidence or the new one."""
     write_bytes(path, json.dumps(value, allow_nan=False, indent=2).encode() + b'\n')
@@ -1396,7 +1416,7 @@ class FullClientBridge:
     def _run_adaptive(self, run):
         """Actual adaptive API execution; intentionally separate evidence schema."""
         out=self.output/run['id'];started=time.monotonic()-(time.time()-run['startedAtMs']/1000);final_controller=None
-        readiness=None;trace=None;api_outcome='not_started';input_deadline=None;first_input={};adaptive_started=None
+        readiness=None;trace=None;api_outcome='not_started';input_deadline=None;first_input={};adaptive_started=None;last_trace_ref=None
         def check_cancelled():
             with self.lock:
                 try:self._check_cancelled(run['id'])
@@ -1408,7 +1428,10 @@ class FullClientBridge:
             write_bytes(path,raw)
             return {'path':name,'sha256':hashlib.sha256(raw).hexdigest()}
         def persist_json(name,value):
-            return persist_bytes(name,json.dumps(value,allow_nan=False,separators=(',',':')).encode()+b'\n')
+            nonlocal last_trace_ref
+            ref=persist_bytes(name,adaptive_json_bytes(value))
+            if name=='adaptive.json':last_trace_ref=ref
+            return ref
         def request(url,payload=None,timeout=3):
             sent=time.monotonic()
             value=self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
@@ -1505,7 +1528,7 @@ class FullClientBridge:
                 'result':result,'video':json.loads((out/'recording.json').read_text()) if (out/'recording.json').is_file() else None,
                 'score':None,'publication_eligible':False,'reason':'adaptive_trial_evidence_adapter_required'}
             with self.lock:
-                check_cancelled();persist_json('result.json',result);persist_json('publication.json',publication)
+                check_cancelled();write_adaptive_final(out,result,publication)
                 self.run.update(status=status,reason=reason,actions=counters['actions'],apiOutcome=api_outcome,
                     returnedModel=result['controller']['returnedModel'],evidenceStatus='saved' if status=='completed' else 'failed')
                 final_controller=dict(self.run)
@@ -1515,7 +1538,13 @@ class FullClientBridge:
             with self.lock:
                 self.run.update(status='failed',reason=reason,failurePhase='adaptive_controller',
                     apiOutcome=api_outcome,evidenceStatus='failed');final_controller=dict(self.run)
-            try:write_json(out/'failure.json',{'controller':final_controller,'error':reason,'adaptive':trace,'apiOutcome':api_outcome})
+            failure={'controller':final_controller,'error':reason,'adaptive':trace,'adaptiveTrace':last_trace_ref,'apiOutcome':api_outcome}
+            try:
+                try:raw=adaptive_json_bytes(failure)
+                except ControlError:
+                    raw=adaptive_json_bytes({'controller':final_controller,'error':reason,'adaptive':None,
+                        'adaptiveTrace':last_trace_ref,'trace_retained_separately':True,'apiOutcome':api_outcome})
+                write_bytes(out/'failure.json',raw)
             except OSError:pass
         finally:
             # Match the legacy worker's no-replay cleanup contract. Failed leased
