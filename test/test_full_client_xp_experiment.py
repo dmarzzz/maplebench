@@ -61,6 +61,20 @@ class WindowExperimentTests(unittest.TestCase):
                 with self.assertRaisesRegex(experiment.ExperimentError,'invalid_trial_protocol'):
                     experiment.build_plan(config)
 
+    def test_explicit_final_slot_policy_is_admitted_with_native_window_score(self):
+        config = self.configuration(); fixture = config['fixtures'][0]
+        scenario = json.loads(Path(fixture['scenario']['path']).read_text())
+        scenario['adaptive_protocol']['horizon_policy'] = copy.deepcopy(adaptive.FINAL_SLOT_POLICY)
+        fixture['scenario'] = self.fixture.write('fixture0-scenario.json', scenario)
+        backend = json.loads((self.fixture.root / 'fixture0-backend.json').read_text())
+        backend['scenario'] = fixture['scenario']; self.fixture.write('fixture0-backend.json', backend)
+        plan = experiment.build_plan(config); experiment.verify_inputs(plan)
+        self.assertTrue(all(e['spec']['schema_version'] == 3 for e in plan['entries']))
+        scenario['adaptive_protocol']['horizon_policy']['final_program_max_seconds'] += 1
+        fixture['scenario'] = self.fixture.write('fixture0-scenario.json', scenario)
+        with self.assertRaisesRegex(experiment.ExperimentError, 'invalid_trial_protocol'):
+            experiment.build_plan(config)
+
     def test_backend_scoring_opt_in_must_match(self):
         config = self.configuration()
         path = self.fixture.root/'fixture0-backend.json'
