@@ -63,15 +63,43 @@ class LongHorizonTests(unittest.TestCase):
   self.assertEqual(result['duration_ms'],1800001)
   for kw in ({},{'maximum_ms':1835000},{'maximum_ms':335000,'duration_policy':LONG_ENCODED_FRAME_POLICY}):
    with self.assertRaises(EvidenceError):_measure_video_probe(probe,**kw)
- def test_upload_limit_comes_from_validated_run_not_browser_metadata(self):
-  from full_client_bridge import FullClientBridge
-  from unittest.mock import Mock
+ def test_upload_limit_comes_from_immutable_owner_even_when_current_run_differs(self):
+  from full_client_bridge import FullClientBridge,ControlError
+  import json
   with tempfile.TemporaryDirectory() as d:
-   b=FullClientBridge(d);b.recording_owner=Mock();b.run={'id':'a'*32,'adaptiveProtocol':a.long_horizon_protocol(a.DEFAULT_PROTOCOL['profile'])}
-   self.assertEqual(b.recording_upload_limits('a'*32,'owner'),(600*1024*1024,180))
-   self.assertEqual(b.recording_upload_limits('b'*32,'owner'),(100*1024*1024,60))
-   b.run['adaptiveProtocol']['wall_seconds']=1801
-   with self.assertRaises(a.AdaptiveError):b.recording_upload_limits('a'*32,'owner')
+   b=FullClientBridge(d);old='a'*32;folder=b.output/old;folder.mkdir()
+   owner={'client':'owner','adaptiveProtocol':a.long_horizon_protocol(a.DEFAULT_PROTOCOL['profile'])}
+   (folder/'request.json').write_text(json.dumps(owner))
+   b.run={'id':'b'*32,'adaptiveProtocol':a.DEFAULT_PROTOCOL}
+   self.assertEqual(b.recording_upload_limits(old,'owner'),(600*1024*1024,180))
+   with self.assertRaises(ControlError):b.recording_upload_limits(old,'foreign')
+   owner['adaptiveProtocol']['wall_seconds']=1801
+   (folder/'request.json').write_text(json.dumps(owner))
+   with self.assertRaises(a.AdaptiveError):b.recording_upload_limits(old,'owner')
+   owner['adaptiveProtocol']=a.DEFAULT_PROTOCOL
+   (folder/'request.json').write_text(json.dumps(owner))
+   b.run={'id':old,'adaptiveProtocol':a.long_horizon_protocol(a.DEFAULT_PROTOCOL['profile'])}
+   self.assertEqual(b.recording_upload_limits(old,'owner'),(100*1024*1024,60))
+ def test_long_program_budget_passes_actual_sdk_validator_without_docker(self):
+  import maple_agent
+  from unittest.mock import patch
+  with tempfile.TemporaryDirectory() as d:
+   h=Harness(d);h.p=a.long_horizon_protocol(h.p['profile']);budgets=[]
+   def execute(code,**kwargs):
+    budgets.append(kwargs['max_requests'])
+    # Exercise the real executor's public validation, then its expired-deadline
+    # path. No process may start; the adaptive harness still accounts normal play.
+    checked=maple_agent.execute_program(code,{},'http://127.0.0.1:1',deadline=-1,
+      max_actions=kwargs['max_actions'],program_seconds=kwargs['program_seconds'],
+      max_requests=kwargs['max_requests'])
+    self.assertEqual(checked['reason'],'time_limit')
+    return h.execute(code,**kwargs)
+   with patch.object(maple_agent.subprocess,'Popen',side_effect=AssertionError('no Docker')):
+    h.run(execute=execute,sleep=lambda n:setattr(h,'now',h.now+n))
+   self.assertEqual(budgets[0],10000)
+   self.assertTrue(all(1<=n<=10000 for n in budgets))
+   self.assertEqual(h.p['max_sdk_requests'],60000)
+   verify_result(h.result(),h.root,protocol=h.p,model=MODEL)
  def test_runtime_loads_exact_long_scenario_and_rejects_old_settlement(self):
   import hashlib
   from test_full_client_runtime import RuntimeTests
