@@ -28,6 +28,7 @@ NATIVE_PROGRESSION_POLICY = {'id':'native-xp-level-progression-v1',
 FINAL_SLOT_POLICY = {'id':'final-program-slot-v1','request_timeout_seconds':50,
     'settlement_reserve_seconds':5,'passive_observation_interval_ms':1000,
     'ordinary_admission_seconds':150,'final_admission_seconds':75,'final_program_max_seconds':145}
+LONG_FINAL_SLOT_POLICY = {**FINAL_SLOT_POLICY,'id':'final-program-slot-1800-v1'}
 CAPTURE_COHORT_RECIPE = 'full-horizon-capture-cohort-v1'
 ENCODED_COHORT_RECIPE = 'full-horizon-encoded-cohort-v1'
 PASSIVE_STOP_REASONS = frozenset(('request_window_closed','api_request_limit',
@@ -46,19 +47,25 @@ def validate_protocol(value):
     require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','progression_policy','capture_duration_policy'},'invalid_adaptive_protocol')
     require(value.get('schema_version')==1 and type(value['schema_version']) is int
             and value.get('id')==PROTOCOL and type(value.get('wall_seconds')) is int
-            and value['wall_seconds']==300,'invalid_adaptive_protocol')
+            and value['wall_seconds'] in (300,1800),'invalid_adaptive_protocol')
+    long=value['wall_seconds']==1800
+    require(not long or value.get('horizon_policy')==LONG_FINAL_SLOT_POLICY,'explicit_long_horizon_required')
+    require(long or value.get('horizon_policy')!=LONG_FINAL_SLOT_POLICY,'long_horizon_wall_mismatch')
     bounds={'program_seconds':(1,30),'max_api_requests':(1,16),'max_output_tokens':(256,3000),
             'max_total_tokens':(1024,240000),'max_actions':(1,2400),'max_sdk_requests':(1,10000),
             'max_evidence_bytes':(65536,4*1024*1024)}
+    if long:bounds.update(max_api_requests=(1,72),max_total_tokens=(1024,1440000),max_actions=(1,14400),max_sdk_requests=(1,60000),max_evidence_bytes=(65536,24*1024*1024))
     require(all(type(value.get(k)) is int and a<=value[k]<=b for k,(a,b) in bounds.items()),'invalid_adaptive_limits')
     if 'horizon_policy' in value:
-        require(digest(value['horizon_policy']) in (digest(FULL_HORIZON_POLICY),digest(FINAL_SLOT_POLICY)),'invalid_adaptive_horizon_policy')
-        if value['horizon_policy']==FINAL_SLOT_POLICY:
-            require(value['program_seconds']==20 and value['max_api_requests']<=12,'invalid_final_slot_limits')
+        require(digest(value['horizon_policy']) in (digest(FULL_HORIZON_POLICY),digest(FINAL_SLOT_POLICY),digest(LONG_FINAL_SLOT_POLICY)),'invalid_adaptive_horizon_policy')
+        if value['horizon_policy'] in (FINAL_SLOT_POLICY,LONG_FINAL_SLOT_POLICY):
+            require(value['program_seconds']==20 and value['max_api_requests']<=(72 if long else 12),'invalid_final_slot_limits')
     if 'capture_duration_policy' in value:
         from full_client_capture import validate_duration_policy
         try:validate_duration_policy(value['capture_duration_policy'])
         except (ValueError,TypeError):raise AdaptiveError('invalid_capture_duration_policy') from None
+    from full_client_capture import LONG_ENCODED_FRAME_POLICY
+    require((value.get('capture_duration_policy')==LONG_ENCODED_FRAME_POLICY)==long,'long_capture_policy_required')
     profile=value.get('profile')
     require(isinstance(profile,dict) and set(profile)=={'id','class_name','level','skill_keys'}
             and isinstance(profile['id'],str) and re.fullmatch('[a-z0-9][a-z0-9-]{0,63}',profile['id'])
@@ -97,6 +104,15 @@ def final_slot_cohort_protocol(profile):
     value['horizon_policy']=dict(FINAL_SLOT_POLICY)
     return validate_protocol(value)
 
+def long_horizon_protocol(profile):
+    from full_client_capture import LONG_ENCODED_FRAME_POLICY
+    value=json.loads(json.dumps(DEFAULT_PROTOCOL))
+    value.update(profile=profile,wall_seconds=1800,horizon_policy=LONG_FINAL_SLOT_POLICY,
+        max_api_requests=72,max_total_tokens=1440000,max_actions=14400,
+        max_sdk_requests=60000,max_evidence_bytes=24*1024*1024,
+        capture_duration_policy=LONG_ENCODED_FRAME_POLICY)
+    return validate_protocol(value)
+
 def final_slot_offer(remaining, requests_left):
     final=remaining<=150 or requests_left==1
     return {'kind':'final' if final else 'ordinary',
@@ -131,7 +147,7 @@ variables do not survive between responses. The next input contains your recent
 programs and their actual outcomes, so you can revise your own strategy.
 Return JSON {{note,code}} with a short intention, not private reasoning.
 '''
-    if p.get('horizon_policy')==FINAL_SLOT_POLICY:
+    if p.get('horizon_policy') in (FINAL_SLOT_POLICY,LONG_FINAL_SLOT_POLICY):
         text=text.replace(f'Each program gets at most {p["program_seconds"]} seconds', 'Ordinary programs get at most 20 seconds')
         text+='''Frozen final-program-slot-v1: each request declares execution_slot with kind,
 program_max_seconds and admission_seconds. Ordinary requests require 150 seconds
@@ -149,7 +165,7 @@ is required; leave time to return cleanly. Death, cancellation and failures stop
         text+=f'''Frozen full-horizon policy: a new request requires at least {reserve} seconds
 remaining (50 seconds for inference, {p['program_seconds']} for execution, 5 for settlement).
 Once that reserve or a confirmed aggregate budget is exhausted, the harness only
-observes the live world until the 300-second deadline. It does not press keys or
+observes the live world until the {p['wall_seconds']}-second deadline. It does not press keys or
 call the model during that wait. Death, cancellation and failures still stop early.
 '''
     if 'progression_policy' in p:
@@ -159,6 +175,7 @@ new HP/MP and level after a level-up. The harness does not allocate ability or
 skill points, alter stats, restore HP, or reset the character for you. Native
 ledger and ordinary persisted-save evidence are required to verify this variant.
 '''
+    if p['wall_seconds']==1800:text=text.replace('Frozen final-program-slot-v1:', 'Frozen final-program-slot-1800-v1:')
     return text
 
 def run_adaptive(*, run_id, model, protocol, initial, observe, request_api,
@@ -178,14 +195,14 @@ The returned trace is not a persisted-XP or publication-validation receipt.
     on_phase(phase='preparing',cycle=0,deadline=deadline,counters={})
     instructions=prompt(protocol)
     horizon=protocol.get('horizon_policy')
-    final_policy=horizon==FINAL_SLOT_POLICY
+    final_policy=horizon in (FINAL_SLOT_POLICY,LONG_FINAL_SLOT_POLICY)
     reserve=50+protocol['program_seconds']+5 if horizon else None
     cycle_reserve=reserve
     counters={k:0 for k in ('api_requests_started','api_responses_confirmed','reserved_tokens','actual_input_tokens',
         'actual_output_tokens','actual_total_tokens','actions','action_attempts','sdk_requests')}
     trace={'schema_version':1,'protocol':PROTOCOL,'protocol_sha256':digest(protocol),'run_id':run_id,
         'requested_model':model,'limits':protocol,'status':'running','reason':None,
-        'timing':{'wall_started_at_ms':started_wall,'wall_deadline_at_ms':started_wall+300000,
+        'timing':{'wall_started_at_ms':started_wall,'wall_deadline_at_ms':started_wall+protocol['wall_seconds']*1000,
                   'first_input_started_ms':None,'first_input_acked_ms':None},
         'counters':counters,'cycles':[],
         'scoring':{'persisted_net_xp':None,'authoritative_peak_xp_per_minute':None,
@@ -377,7 +394,7 @@ The returned trace is not a persisted-XP or publication-validation receipt.
             program_limit=min(program_limit,max(0,execution_deadline-clock()))
             if final_policy:
                 require(program_limit>=3,'adaptive_final_slot_execution_window_closed')
-                cycle['execution_budget']={'program_seconds':program_limit,'deadline_ms':295000}
+                cycle['execution_budget']={'program_seconds':program_limit,'deadline_ms':protocol['wall_seconds']*1000-5000}
                 save()
                 # Durable evidence time is charged, never added to the program.
                 program_limit=min(program_limit,max(0,execution_deadline-clock()))
@@ -416,8 +433,8 @@ The returned trace is not a persisted-XP or publication-validation receipt.
         ended=offset()
         trace['timing']['controller_ended_ms']=ended
         trace['timing']['wall_ended_at_ms']=started_wall+ended
-        trace['timing']['wall_elapsed_ms']=min(300000,max(0,ended))
-        trace['timing']['cleanup_overrun_ms']=max(0,ended-300000)
+        trace['timing']['wall_elapsed_ms']=min(protocol['wall_seconds']*1000,max(0,ended))
+        trace['timing']['cleanup_overrun_ms']=max(0,ended-protocol['wall_seconds']*1000)
         trace['error']=error
         save()
     return {'trace':trace,'initial':initial,'final':final,'steps':steps}

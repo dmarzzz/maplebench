@@ -241,8 +241,8 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     if(!item?.encodedMode || item.autoRunId!==run.id || !/^[a-f0-9]{32}$/.test(item.autoRunId) || captureFailure?.run_id===item.autoRunId) return;
     const recorder=item.encodedRecorder, start=recorder?.startedAt ?? item.startedAt;
     const offset=at=>Number.isFinite(at)&&Number.isFinite(start)?Math.max(0,Math.min(350000,Math.round(at-start))):null;
-    const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=20000?value:0;
-    captureFailure={schema_version:1,run_id:item.autoRunId,policy_id:'post-render-encoded-frame-v1',
+    const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=(item.durationPolicy?.max_frames||20000)?value:0;
+    captureFailure={schema_version:1,run_id:item.autoRunId,policy_id:item.durationPolicy?.id||'post-render-encoded-frame-v1',
       code:captureFailureCodes.has(code)?code:'encoder_failure_unknown',
       clock_origin:Number.isFinite(recorder?.startedAt)?'encoder_start':'capture_request',elapsed_ms:offset(performance.now()) ?? 0,
       first_frame_offset_ms:offset(recorder?.firstFrameAt),last_frame_offset_ms:offset(recorder?.lastFrameAt),
@@ -317,14 +317,14 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       if(item.finalFrameRequested) item.finishOnFrame();
     };
     item.onRendered = animate;
-    const encoded = durationPolicy?.id === 'post-render-encoded-frame-v1';
+    const encoded = ['post-render-encoded-frame-v1','post-render-encoded-frame-1800-v1'].includes(durationPolicy?.id);
     if(encoded) {
       item.encodedMode=true;item.durationPolicy=durationPolicy;capture=item;
-      const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:335000;
+      const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:run.adaptiveProtocol?.wall_seconds===1800&&durationPolicy?.id==='post-render-encoded-frame-1800-v1'?1835000:335000;
       item.captureDeadlineAt=item.startedAt+encodedLimit;
       item.maxTimer=setTimeout(()=>{retainCaptureFailure(item,'capture_duration_limit');item.errors++;stopRecording();},encodedLimit);
       try {
-        item.encoderPromise=createPostRenderRecorder(output,{maxDurationMs:encodedLimit,onFailure:code=>{
+        item.encoderPromise=createPostRenderRecorder(output,{policy:durationPolicy,maxDurationMs:encodedLimit,onFailure:code=>{
           retainCaptureFailure(item,code);
           item.failFinalFrame?.(Error(code));
           if(capture!==item) return;
