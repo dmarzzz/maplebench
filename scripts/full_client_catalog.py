@@ -100,7 +100,9 @@ def cohort(package,expected):
     manifest=verify_package(package,expected)
     require(type(manifest['schema_version']) is int,'catalog_package_schema')
     content=manifest['content'];site=directory(Path(package)/'site')
-    require(set(content)=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+    require(set(content)-{'presentation_parent_sha256'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+        and ('presentation_parent_sha256' not in content or (isinstance(content['presentation_parent_sha256'],str)
+            and SHA.fullmatch(content['presentation_parent_sha256'])))
         and type(content['schema_version']) is int and content['schema_version']==1
         and content['protocol'] in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) and content['archive_replacement'] is False
         and SHA.fullmatch(str(content['plan_sha256']))
