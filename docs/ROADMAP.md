@@ -58,25 +58,46 @@ Verified foundations:
 - [x] Finite cloud workers can be provisioned and externally deleted.
 - [x] Old uncertain attempts are closed without replaying model requests.
 
-Next release, before fresh model comparisons:
+Source and presentation delivered for the next release:
 
-- [ ] Integrate the expanded skill policy through prompt, SDK, bridge, keymap,
-  native client, fixture transform, receipt verifier and public projection.
+- [x] Integrate the expanded skill policy through prompt, SDK, bridge, keymap,
+  native client, fixture transform, receipt verifier and public projection:
+  ten mapped skills each for Hero, Bowmaster and Ice/Lightning, eight for Night Lord.
+- [x] Add offline asset-definition parity and fixture preparation, plus separate
+  native gates for every skill and finite inventory save/restoration receipts.
+- [x] Integrate urgent acknowledgements, final-slot scheduling and explicit
+  30-minute controller, recorder, adapter and publication contracts.
+- [x] Implement native XP ledger/window projection, signed save reconciliation,
+  class/toolkit qualification and matching recording review before publication.
+- [x] Deploy the dashboard presentation update to the root and cohort pages,
+  preserving all 12 historical scores and recording bytes. Skill inputs and
+  timing diagnostics are displayed when recorded; native curves require new
+  accepted native-window results and are absent from the historical pilots.
+- [x] Prepare create-once fresh worker services, initial database import,
+  gate/lock/queue enrollment and a finite externally deleted worker plan in
+  agent-devops. These helpers have source tests; no replacement worker is active.
+
+Live acceptance still required before fresh model comparisons:
+
 - [ ] Verify each selected skill against pinned game definitions and the actual
   runtime asset version. Explicitly identify unsupported skills and mechanics.
 - [ ] Demonstrate all four classes' new inputs and server effects with labeled
   native development runs, including ammunition, MP, buffs and movement.
 - [ ] Diagnose damage and kills in Bow/Mage fixtures; prove native defeat/XP.
   Acknowledged input or predicted damage numbers alone do not satisfy this gate.
-- [ ] Integrate urgent acknowledgements and final-slot scheduling; preserve
-  cancellation, finite budgets and uncertainty semantics end to end.
+- [ ] Verify urgent acknowledgements and final-slot scheduling in the actual
+  client, including cancellation and uncertain input/model responses.
 - [ ] Build the actual instrumented server and verify gain, level-up, death loss,
   idle coverage, ordinary save and strict timestamp cutoff from native evidence.
 - [ ] Deliver accepted native-window scores to a public cohort with matching video.
-- [ ] Publish skill availability/use, model wait/execution/passive time and native
-  XP-window evidence in the root and cohort pages.
+- [ ] Publish the newly collected skill-use, timing and native XP-window evidence
+  through the deployed dashboard. Presentation-only changes do not satisfy this.
 - [ ] Qualify the explicitly versioned 30-minute controller/recorder/adapter and
   its memory, upload, lifecycle, publication and cleanup limits.
+- [ ] Measure long recording sizes and provide adequate publication capacity.
+  Individual long captures allow 600 MiB, but the current static site payload
+  remains capped at 512 MiB; large multi-class cohorts need additional storage
+  or a separately qualified encoding policy before they can be published.
 - [ ] Run a bounded actual API integration check on the new frozen setup. Review
   attribution, skill actions, ledger, timing, video and ordinary restoration.
 - [ ] Validate interruption containment and publication retry without gameplay
