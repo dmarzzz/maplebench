@@ -323,6 +323,7 @@ class CosmicRuntime:
         self.scenario = parse_json(ref_bytes(self.config["scenario"]))
         duration = self.scenario.get("program_seconds")
         adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
+        preview = self.preview_contract()
         require(type(duration) is int and duration in ((300,1800) if adaptive else (22, 60))
                 and isinstance(self.scenario.get("id"), str) and 0 < len(self.scenario["id"]) <= 128
                 and SHA.fullmatch(self.scenario.get("instructions_sha256", "")) is not None
@@ -352,12 +353,25 @@ class CosmicRuntime:
                                 "total_tokens": self.scenario["trial_budgets"]["max_total_tokens"],
                                 "program_ms": duration * 1000, "run_ms": (duration + 63) * 1000,
                                 "actions": 80 if duration == 22 else 240, "sdk_requests": 100 if duration == 22 else 600}
+            if preview:
+                from full_client_skill_preview import prompt as preview_prompt
+                trial = self.scenario["trial_budgets"]
+                require(duration == preview["program_seconds"] and trial["controller_seconds"] == duration+2
+                        and trial["operation_seconds"] >= preview["run_seconds"]
+                        and all(trial[key] == preview[key] for key in
+                                ("max_api_requests", "max_actions", "max_output_tokens", "max_total_tokens")),
+                        "bridge_budget_mismatch")
+                require(self.scenario["instructions_sha256"] == hashlib.sha256(preview_prompt(preview).encode()).hexdigest(),
+                        "frozen_prompt_mismatch")
         require(same_json(self.scenario.get("budgets"), expected_budgets), "frozen_bridge_budgets_mismatch")
         require(same_json(self.scenario.get("settlement_policy"), self.settlement_policy()),
                 "invalid_settlement_policy")
         self.baseline = parse_json(ref_bytes(self.config["baseline_snapshot"]))
         if adaptive:
             require(protocol["profile"]["level"] == self.baseline.get("character", {}).get("level"),
+                    "baseline_identity_mismatch")
+        if preview:
+            require(preview["profile"]["level"] == self.baseline.get("character", {}).get("level"),
                     "baseline_identity_mismatch")
         self.readiness_policy()
         self.manifest = parse_json(ref_bytes(self.config["runtime_manifest"]))
@@ -369,6 +383,23 @@ class CosmicRuntime:
             self.baseline["character"].get(k) == db[k] for k in ("character_id", "account_id")),
             "baseline_identity_mismatch")
         self.xp_window_contract()
+
+    def preview_contract(self):
+        """Separate opt-in controller identity; schema-1 persistence stays private."""
+        scenario = getattr(self, "scenario", {})
+        value = scenario.get("preview_protocol")
+        if value is None:
+            return None
+        require(scenario.get("protocol") is None and scenario.get("adaptive_protocol") is None
+                and scenario.get("xp_window_protocol") is None and self.config.get("xp_window_protocol") is None,
+                "invalid_frozen_scenario")
+        from full_client_skill_preview import validate_protocol
+        try:
+            value = validate_protocol(value)
+        except ValueError:
+            raise RuntimeErrorCode("invalid_frozen_scenario") from None
+        require(value["baseline_sha256"] == self.config["baseline"]["sha256"], "baseline_identity_mismatch")
+        return value
 
     def xp_window_contract(self):
         """Both private runtime and frozen scenario must explicitly opt in."""
@@ -474,6 +505,8 @@ class CosmicRuntime:
         required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_skill_toolkit.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
                     controls / "controller.js", controls / "webcodecs-recorder.js", controls / "waiting.html",
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
+        if getattr(self, "scenario", {}).get("preview_protocol") is not None:
+            required.add(script.parent / "full_client_skill_preview.py")
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}
         require(all(str(path) in extras for path in required), "serving_sources_not_frozen")
         asset_root = root / "assets"
@@ -875,7 +908,16 @@ class CosmicRuntime:
         duration = self.scenario.get("program_seconds")
         adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
         protocol = self.scenario.get("adaptive_protocol") if adaptive else None
-        if adaptive:
+        preview = self.preview_contract()
+        if preview:
+            from full_client_skill_preview import prompt as preview_prompt
+            prompt = preview_prompt(preview)
+            require(spec.get("schema_version") == 1 and spec.get("protocol") is None
+                    and duration == preview["program_seconds"] and budgets["controller_seconds"] == duration+2
+                    and all(budgets[key] == preview[key] for key in
+                            ("max_api_requests", "max_actions", "max_output_tokens", "max_total_tokens")),
+                    "bridge_budget_mismatch")
+        elif adaptive:
             from full_client_adaptive import prompt as adaptive_prompt
             prompt = adaptive_prompt(protocol)
             require(spec.get("schema_version") == (3 if self.xp_window_contract() else 2)
@@ -900,6 +942,7 @@ class CosmicRuntime:
                        docker_binding=self.docker_binding(),
                        readiness_policy=readiness_policy,
                        **({"adaptive_protocol": protocol} if adaptive else {}),
+                       **({"preview_protocol": preview} if preview else {}),
                        trial_context={"scenario_fingerprint": spec["scenario_fingerprint"],
                                       "baseline_sha256": spec["baseline_sha256"]})
             terminal_seen = None
@@ -946,12 +989,19 @@ class CosmicRuntime:
         if adaptive:
             return self.verify_adaptive_controller()
         api = result["api"]
-        require(result.get("source") == "full-client-trial" and result["controller"]["id"] == self.run_id
+        require(result.get("source") == ("full-client-skill-preview; unscored development" if preview else "full-client-trial") and result["controller"]["id"] == self.run_id
                 and result["controller"]["model"] == spec["model"] and api["model"] == spec["model"]
                 and result["controller"].get("mode") == "api"
                 and result["controller"].get("dockerImageId") == self.manifest["docker_image_id"]
                 and result["controller"].get("status") == "completed"
                 and api.get("status") == "completed", "controller_model_or_source_mismatch")
+        if preview:
+            require(result.get("protocol") == result["controller"].get("protocol") == preview["id"]
+                    and same_json(result.get("previewProtocol"), preview)
+                    and same_json(result["controller"].get("previewProtocol"), preview)
+                    and result.get("model_api_requests") == 1 and result.get("publication_eligible") is False
+                    and "score" in result and result["score"] is None,
+                    "controller_model_or_source_mismatch")
         require(same_json(result["controller"].get("dockerBinding"), self.docker_binding()),
                 "docker_binding_mismatch")
         require(same_json(result.get("trialContext"), {"scenario_fingerprint": spec["scenario_fingerprint"],
@@ -1317,6 +1367,11 @@ class CosmicRuntime:
                 candidate_status="awaiting_native_window_publication_acceptance", publication_eligible=False,
                 authoritative_peak_xp_per_minute=score["peak_normalized_xp_per_minute"],
                 authoritative_window_status="verified_native_windows")
+        preview = self.preview_contract()
+        if preview:
+            candidate.update(protocol=preview["id"], previewProtocol=preview, run_kind="skill_preview",
+                candidate_status="unscored_development_requires_separate_recording_review",
+                score=None, publication_eligible=False)
         self.artifact("publication-candidate.json", candidate)
 
     def settle_owned_controller(self):

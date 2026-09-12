@@ -176,7 +176,24 @@ def fingerprint(value):
 def _toolkit_program(value):
     """Finite evidence recipe: no successful effect is inferred from a key ACK."""
     policy=value['skill_toolkit']
-    code="""// New toolkit native qualification candidate; no model or score.
+    code="// New toolkit native qualification candidate; no model or score.\n"
+    if value['class_id']=='ice_lightning_arch_mage':
+        # Isolate the movement skill before attack animations, buffs or combat.
+        # Thirty milliseconds limits ordinary walking; paired observations and
+        # the recording still need review for contact, collision and MP use.
+        code+="""const teleportStart=await sdk.observe();
+const teleportNearby=teleportStart.monsters.filter(m=>Math.abs(m.y-teleportStart.character.y)<=50)
+  .sort((a,b)=>Math.abs(a.x-teleportStart.character.x)-Math.abs(b.x-teleportStart.character.x));
+const teleportDirection=teleportNearby.length&&teleportNearby[0].x>=teleportStart.character.x?'LEFT':'RIGHT';
+for(const direction of [teleportDirection,teleportDirection==='LEFT'?'RIGHT':'LEFT']){
+  await sdk.observe();
+  await sdk.pressKeys([direction,'SECONDARY_SKILL'],30);
+  await sdk.observe();
+  await sdk.wait(1100);
+  await sdk.observe();
+}
+"""
+    code+="""
 await sdk.observe();
 await sdk.pressKeys(['JUMP'],300);
 await sdk.observe();
@@ -205,6 +222,7 @@ for(let i=0;i<4;i++){
     code+="await sdk.pressKeys(['ATTACK'],600);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
     for skill in sorted(policy['skills'],key=lambda skill:skill['route']=='movement'):
         if skill['slot']=='PRIMARY_SKILL' or skill['route']=='buff':continue
+        if value['class_id']=='ice_lightning_arch_mage' and skill['route']=='movement':continue
         if skill['skill_id']==1111003:
             # Coma spent the previous orbs; give ordinary Brandish contact new
             # opportunities before Panic. Still require observed native orbs.

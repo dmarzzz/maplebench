@@ -192,7 +192,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       && Number.isFinite(character.exp) && Number.isFinite(baseline.exp) ? character.exp - baseline.exp : null;
     const xp = delta === null ? (available && baseline && character.level !== baseline.level ? 'XP Δ unavailable (level changed)' : 'XP Δ —')
       : `XP Δ ${delta >= 0 ? '+' : ''}${format(delta)} (${baselineScope})`;
-    const skillProfile = run.adaptiveProtocol?.profile || run.nativeAcceptance?.profile;
+    const skillProfile = run.adaptiveProtocol?.profile || run.nativeAcceptance?.profile || run.previewProtocol?.profile;
     const keys = [...new Set([...held.keys(),...physical])].map(code => {const key=(skillProfile?skillNamesByCode[code]:null)||namesByCode[code]||code; return skillProfile?.skill_keys?.[key]||key;}).join(' + ') || 'none';
     return {mode,state,hp:`HP ${available ? format(character.hp)+' / '+format(character.maxHp) : '—'}`,
       mp:`MP ${available ? format(character.mp)+' / '+format(character.maxMp) : '—'}`,xp,keys:`Keys: ${keys}`,
@@ -517,12 +517,12 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   const executeInput = async (command, deadline) => {
     if(activeCommand) return;
     const item={interrupted:false,failure:null,keydown:false,startedAt:performance.now()}; activeCommand=item;
-    const toolkit=run.adaptiveProtocol?.skill_toolkit||run.nativeAcceptance?.skill_toolkit;
+    const toolkit=run.adaptiveProtocol?.skill_toolkit||run.nativeAcceptance?.skill_toolkit||run.previewProtocol?.skill_toolkit;
     const skillMap=toolkit?.id==='full-client-skill-toolkit-v1'?toolkitKeyNames:skillKeyNames;
     const declared=toolkit?new Set(toolkit.skills?.map(skill=>skill.slot)||[]):null;
     const keys=Array.isArray(command.keys)?command.keys.map(name=>{
       if(toolkitKeyNames[name]&&declared&&!declared.has(name))return undefined;
-      return(run.adaptiveProtocol||run.nativeAcceptance)?(skillMap[name]||keyNames[name]):keyNames[name];
+      return(run.adaptiveProtocol||run.nativeAcceptance||run.previewProtocol)?(skillMap[name]||keyNames[name]):keyNames[name];
     }):[];
     let ok=false;
     const reject=code=>{item.failure ??= code;throw Error(code);};

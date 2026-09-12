@@ -193,6 +193,14 @@ const sdk={observe:async()=>{calls.push(['observe']);return {character:{x:0,y:0}
             for skill in value['skill_toolkit']['skills']:
                 if skill['route']=='buff':self.assertLess(inputs.index([skill['slot']]),first_attack)
             self.assertIn(['MP_POTION'],inputs);self.assertIn(['ATTACK'],inputs)
+            if cls=='ice_lightning_arch_mage':
+                self.assertEqual(inputs[:2],[['LEFT','SECONDARY_SKILL'],['RIGHT','SECONDARY_SKILL']])
+                calls=result['calls']
+                probes=[i for i,c in enumerate(calls) if c[0]=='pressKeys' and 'SECONDARY_SKILL' in c[1]]
+                self.assertEqual(len(probes),2)
+                for i in probes:
+                    self.assertEqual(calls[i][2],30)
+                    self.assertEqual(calls[i-1],['observe']);self.assertEqual(calls[i+1],['observe'])
 
     def test_offline_transform_all_classes_preserves_account_and_weapon(self):
         for cls in CLASSES:

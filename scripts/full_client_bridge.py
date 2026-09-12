@@ -829,6 +829,7 @@ class FullClientBridge:
             _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},
                 SCENARIO | (sdk_scenario(self.run['nativeAcceptance']) if self.run.get('nativeAcceptance')
                     else sdk_scenario(self.run['adaptiveProtocol']) if self.run.get('adaptiveProtocol')
+                    else sdk_scenario(self.run['previewProtocol']) if self.run.get('previewProtocol')
                     else {'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) else {}))
             if self.pending:
                 raise ValueError('Another input is in flight')
@@ -1001,14 +1002,14 @@ class FullClientBridge:
 
     def start(self, mode, model=None, duration_seconds=22, *, client=None, run_id=None, request_id=None,
               total_token_limit=None, trial_context=None, docker_image_id=None, docker_binding=None,
-              readiness_policy=None, adaptive_protocol=None, native_acceptance=None, lease_fds=(), private=False):
+              readiness_policy=None, adaptive_protocol=None, preview_protocol=None, native_acceptance=None, lease_fds=(), private=False):
         if mode not in ('script', 'api') or (mode == 'api' and model not in MODELS):
             raise ValueError('Invalid controller selection')
         if native_acceptance is not None:
             try:native_acceptance=validate_native(native_acceptance)
             except (ValueError,TypeError) as error:raise ControlError('invalid_native_acceptance') from None
             if (not private or mode!='script' or model is not None or duration_seconds!=native_acceptance['wall_seconds']
-                    or adaptive_protocol is not None or trial_context is not None or readiness_policy is not None
+                    or adaptive_protocol is not None or preview_protocol is not None or trial_context is not None or readiness_policy is not None
                     or total_token_limit is not None or run_id is None or run_id!=request_id
                     or docker_binding is None or docker_image_id is None
                     or not isinstance(lease_fds,(tuple,list)) or len(lease_fds)!=2
@@ -1017,8 +1018,19 @@ class FullClientBridge:
         if adaptive_protocol is not None:
             try:adaptive_protocol=validate_protocol(adaptive_protocol)
             except AdaptiveError as error:raise ControlError(str(error)) from None
-            if mode!='api' or duration_seconds!=adaptive_protocol['wall_seconds'] or total_token_limit!=adaptive_protocol['max_total_tokens']:
+            if mode!='api' or preview_protocol is not None or duration_seconds!=adaptive_protocol['wall_seconds'] or total_token_limit!=adaptive_protocol['max_total_tokens']:
                 raise ControlError('adaptive_controller_budget_mismatch')
+        if preview_protocol is not None:
+            from full_client_skill_preview import validate_protocol as validate_preview
+            try:preview_protocol=validate_preview(preview_protocol)
+            except ValueError:raise ControlError('invalid_skill_preview_protocol') from None
+            if (not private or mode!='api' or native_acceptance is not None or adaptive_protocol is not None
+                    or duration_seconds!=preview_protocol['program_seconds']
+                    or total_token_limit!=preview_protocol['max_total_tokens']
+                    or not isinstance(trial_context,dict) or readiness_policy is None):
+                raise ControlError('skill_preview_private_contract_required')
+            if trial_context.get('baseline_sha256')!=preview_protocol['baseline_sha256']:
+                raise ControlError('skill_preview_baseline_mismatch')
         if type(duration_seconds) is not int or duration_seconds not in ((native_acceptance['wall_seconds'],) if native_acceptance is not None else (adaptive_protocol['wall_seconds'],) if adaptive_protocol is not None else (22, 60)):
             raise ValueError('Run duration must be 22 or 60 seconds')
         if mode == 'script' and native_acceptance is None and duration_seconds != 22:
@@ -1064,6 +1076,8 @@ class FullClientBridge:
             identity['readinessPolicy'] = readiness_policy
         if adaptive_protocol is not None:
             identity['adaptiveProtocol'] = adaptive_protocol
+        if preview_protocol is not None:
+            identity.update(protocol=preview_protocol['id'],previewProtocol=preview_protocol)
         if native_acceptance is not None:
             identity.update(protocol=native_acceptance['id'],nativeAcceptance=native_acceptance)
         with self.lock:
@@ -1120,6 +1134,9 @@ class FullClientBridge:
                 value.update(actionLimit=adaptive_protocol['max_actions'],sdkRequestLimit=adaptive_protocol['max_sdk_requests'],
                     controllerSeconds=adaptive_protocol['wall_seconds'],cycleProgramSeconds=adaptive_protocol['program_seconds'],
                     protocol=ADAPTIVE_PROTOCOL,cycleNumber=0)
+            if preview_protocol is not None:
+                value.update(actionLimit=preview_protocol['max_actions'],sdkRequestLimit=preview_protocol['max_sdk_requests'],
+                    controllerSeconds=preview_protocol['program_seconds']+2,publicationEligible=False)
             folder = self.output/value['id']
             folder.mkdir(parents=True)
             write_json(folder/'request.json', value)
@@ -1195,8 +1212,12 @@ class FullClientBridge:
             if run['mode'] == 'api':
                 api_started = None
                 key = read_private_file(self.key_file).strip()
-                prompt = PROMPT.format(program_seconds=program_seconds,
-                                       action_limit=action_limit, sdk_request_limit=sdk_request_limit)
+                if run.get('previewProtocol'):
+                    from full_client_skill_preview import prompt as preview_prompt
+                    prompt=preview_prompt(run['previewProtocol'])
+                else:
+                    prompt = PROMPT.format(program_seconds=program_seconds,
+                                           action_limit=action_limit, sdk_request_limit=sdk_request_limit)
                 phase = 'api_request'
                 intent = {'model':run['model'],'status':'preparing',
                     'startedAtMs':round(time.time()*1000),'outputTokenLimit':3000,'timeoutSeconds':50,
@@ -1304,7 +1325,8 @@ class FullClientBridge:
             phase = 'program_execution'
             program_started=time.monotonic()
             input_deadline=program_started+program_seconds
-            result = execute_program(code, SCENARIO | (sdk_scenario(run['nativeAcceptance']) if run.get('nativeAcceptance') else {}), 'http://127.0.0.1:8840',
+            result = execute_program(code, SCENARIO | (sdk_scenario(run['nativeAcceptance']) if run.get('nativeAcceptance')
+                                     else sdk_scenario(run['previewProtocol']) if run.get('previewProtocol') else {}), 'http://127.0.0.1:8840',
                                      deadline=time.monotonic()+program_seconds+2, program_seconds=program_seconds,
                                      max_actions=action_limit, max_requests=sdk_request_limit,
                                      request_fn=run_request, step_callback=record_progress,cancel_event=cancel_event,
@@ -1337,6 +1359,9 @@ class FullClientBridge:
                                          'trialContext':run.get('trialContext'),
                                          **({'protocol':run['nativeAcceptance']['id'],'nativeAcceptance':run['nativeAcceptance'],'model_api_requests':0,
                                               'publication_eligible':False,'score':None} if run.get('nativeAcceptance') else {}),
+                                         **({'protocol':run['previewProtocol']['id'],'previewProtocol':run['previewProtocol'],
+                                              'source':'full-client-skill-preview; unscored development','model_api_requests':1,
+                                              'publication_eligible':False,'score':None} if run.get('previewProtocol') else {}),
                                          'timing':{'startedAtMs':started_ms, 'endedAtMs':round(time.time()*1000),
                                                    'elapsedMs':round((time.monotonic()-started)*1000),
                                                    'apiLatencyMs':api_ms},
@@ -1358,6 +1383,12 @@ class FullClientBridge:
                 'scenario':{'id':'hero-full-client-skeletons-integration',
                             'fingerprint':None, 'reset_fingerprint':None},
                 'score':None, 'video':None}
+            if run.get('previewProtocol'):
+                publication.update(protocol=run['previewProtocol']['id'],previewProtocol=run['previewProtocol'],
+                    run_kind='skill_preview',publication_eligible=False,
+                    scenario={'id':run['previewProtocol']['skill_toolkit']['fixture_id'],
+                              'fingerprint':run['trialContext']['scenario_fingerprint'],
+                              'reset_fingerprint':run['trialContext']['baseline_sha256']})
             with self.lock:
                 self._check_cancelled(run['id'])
                 if (out/'recording.json').is_file():
