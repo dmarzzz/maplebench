@@ -279,7 +279,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     const output = document.createElement('canvas'), headerHeight = 120;
     output.width = game.width; output.height = game.height + headerHeight;
     const ctx = output.getContext('2d');
-    const durationPolicy=run.nativeAcceptance?.capture_duration_policy || run.adaptiveProtocol?.capture_duration_policy;
+    const durationPolicy=run.nativeAcceptance?.capture_duration_policy || run.adaptiveProtocol?.capture_duration_policy || run.previewProtocol?.capture_duration_policy;
     const item = {autoRunId,startedAt:performance.now(),startedWall:Date.now(),recorderStarted:false,
       frames:0,firstFrameWall:null,lastFrameWall:null,firstFrameAt:null,lastFrameAt:null,maxGap:0,hidden:document.hidden,
       errors:0,relayLost:false,clock:null,clockVerified:false,terminalToken:null,
@@ -345,7 +345,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     const encoded = ['post-render-encoded-frame-v1','post-render-encoded-frame-1800-v1'].includes(durationPolicy?.id);
     if(encoded) {
       item.encodedMode=true;item.durationPolicy=durationPolicy;capture=item;
-      const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:run.adaptiveProtocol?.wall_seconds===1800&&durationPolicy?.id==='post-render-encoded-frame-1800-v1'?1835000:335000;
+      const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:run.previewProtocol?run.previewProtocol.capture_max_ms:run.adaptiveProtocol?.wall_seconds===1800&&durationPolicy?.id==='post-render-encoded-frame-1800-v1'?1835000:335000;
       item.captureDeadlineAt=item.startedAt+encodedLimit;
       item.maxTimer=setTimeout(()=>{retainCaptureFailure(item,'capture_duration_limit');item.errors++;stopRecording();},encodedLimit);
       try {

@@ -87,6 +87,15 @@ class SkillPreviewPublicationTests(unittest.TestCase):
         for forbidden in ('must-never-export', 'instructions', self.code, 'api_request', 'private_marker'):
             self.assertNotIn(forbidden, raw)
 
+    def test_decoder_policy_comes_from_frozen_contract_not_recording_claim(self):
+        recording = copy.deepcopy(self.values['recording'])
+        recording['capture_duration_policy'] = {'id': 'untrusted-recording-policy'}
+        self.save('recording', recording)
+        with patch.object(preview, 'verify_video_duration') as verify:
+            self.row()
+        self.assertEqual(verify.call_args.args[2], self.protocol['capture_duration_policy'])
+        self.assertNotEqual(verify.call_args.args[2], recording['capture_duration_policy'])
+
     def test_wrong_model_saved_program_or_teleport_key_receipt_is_rejected(self):
         original = copy.deepcopy(self.values)
         mutations = [('api_response', lambda v: v.update(model='gpt-5.6-sol')),

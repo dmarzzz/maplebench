@@ -22,7 +22,7 @@ from full_client_trial import publish_attempt
 from full_client_vercel import checked_payload, MAX_PAYLOAD, PUBLIC_NAME
 from maple_agent import validate_rpc
 
-PROTOCOL = 'full-client-skill-preview-v1'
+from full_client_skill_preview import PROTOCOL
 MAX_VIDEO = 96 * 1024**2
 REQUIRED_ARTIFACTS = {'result', 'api_request', 'api_response', 'program', 'recording',
     'capture', 'capture_ready', 'capture_clock', 'capture_terminal', 'video_probe', 'video'}
@@ -44,7 +44,7 @@ def project_preview(folder, refs, *, probe_video=None):
     api = result.get('api', {})
     request = reader.artifact(folder, refs, 'api_request')
     response = reader.artifact(folder, refs, 'api_response')
-    require(result.get('protocol') == PROTOCOL and controller.get('protocol') == PROTOCOL
+    require(result.get('protocol') == protocol['id'] and controller.get('protocol') == protocol['id']
         and same_json(controller.get('previewProtocol'), protocol)
         and result.get('score') is None and result.get('publication_eligible') is False
         and type(result.get('model_api_requests')) is int and result['model_api_requests'] == 1
@@ -154,7 +154,7 @@ def project_preview(folder, refs, *, probe_video=None):
     actual_probe = (probe_video or _probe_video)(folder / video['path'], video['sha256'])
     require(same_json({key: value for key, value in probe.items() if key != 'video_sha256'}, actual_probe),
         'preview_decoder_evidence_changed')
-    verify_video_duration(actual_probe, recording, recording.get('capture_duration_policy'))
+    verify_video_duration(actual_probe, recording, protocol.get('capture_duration_policy'))
     # Hash via the verified reader; do not trust a saved byte count or a filename.
     from full_client_score import open_verified_artifact
     with open_verified_artifact(folder, video, 'video', maximum=MAX_VIDEO) as stream:
@@ -165,7 +165,7 @@ def project_preview(folder, refs, *, probe_video=None):
     require(number(end), 'preview_timing_missing')
     alive = result.get('final', {}).get('character', {}).get('alive')
     require(type(alive) is bool, 'preview_final_observation_missing')
-    return {'id': run_id, 'protocol_id': PROTOCOL, 'kind': 'skill_development_preview',
+    return {'id': run_id, 'protocol_id': protocol['id'], 'kind': 'skill_development_preview',
         'class_id': toolkit['class_id'], 'class_name': protocol['profile']['class_name'],
         'requested_model': requested, 'returned_model': requested, 'attribution': 'exact',
         'ranked': False, 'score': None, 'comparison_group': None, 'publication_eligible': False,

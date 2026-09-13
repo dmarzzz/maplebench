@@ -5,27 +5,35 @@ import json
 import re
 
 from full_client_skill_toolkit import toolkit, profile, prompt_reference
+from full_client_capture import ENCODED_FRAME_POLICY
 
-PROTOCOL = 'full-client-skill-preview-v1'
+LEGACY_PROTOCOL = 'full-client-skill-preview-v1'
+PROTOCOL = 'full-client-skill-preview-v2'
+PROTOCOLS = (LEGACY_PROTOCOL, PROTOCOL)
 SOURCE = 'full-client-skill-preview; unscored development'
 
 
-def contract(class_id, baseline_sha256):
+def contract(class_id, baseline_sha256, *, protocol=PROTOCOL):
+    if protocol not in PROTOCOLS:
+        raise ValueError('invalid_skill_preview_protocol')
     if not isinstance(baseline_sha256, str) or re.fullmatch('[a-f0-9]{64}', baseline_sha256) is None:
         raise ValueError('invalid_skill_preview_baseline')
     kit = toolkit(class_id)
-    return {'schema_version':1, 'id':PROTOCOL, 'baseline_sha256':baseline_sha256,
+    value = {'schema_version':1, 'id':protocol, 'baseline_sha256':baseline_sha256,
             'profile':profile(kit), 'skill_toolkit':kit,
             'program_seconds':60, 'api_timeout_seconds':50, 'run_seconds':123,
             'max_api_requests':1, 'max_output_tokens':3000, 'max_total_tokens':32000,
             'max_actions':240, 'max_sdk_requests':600,
             'purpose':'skill_exploration_unscored_development',
             'publication_eligible':False, 'score':None}
+    if protocol == PROTOCOL:
+        value.update(capture_duration_policy=dict(ENCODED_FRAME_POLICY), capture_max_ms=125000)
+    return value
 
 
 def validate_protocol(value):
     try:
-        expected = contract(value['skill_toolkit']['class_id'], value['baseline_sha256'])
+        expected = contract(value['skill_toolkit']['class_id'], value['baseline_sha256'], protocol=value['id'])
         if json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False) != json.dumps(
                 expected, sort_keys=True, separators=(',', ':'), allow_nan=False):
             raise ValueError()
@@ -49,6 +57,10 @@ def prompt(value):
                 if value['skill_toolkit']['class_id'] == 'ice_lightning_arch_mage' else
                 'Explore several mapped class skills when their resource and target requirements '
                 'allow; observe the effects and adapt your movement and timing.\n')
+    animation = ('A key acknowledgement confirms physical input, not a successful cast. Native animation\n'
+                 'can reject the next skill while the previous animation is still active. Allow about\n'
+                 '2500ms after each buff and 1500ms after each attack, then observe before another cast.\n'
+                 if value['id'] == PROTOCOL else '')
     return f'''You control a level 180 {title} in a private MapleStory v83 full client.
 This is a short, unscored development preview for skill exploration. It is not a
 ranked trial or an equal-start model comparison. Discover how the mapped skills
@@ -66,7 +78,7 @@ Coordinates increase rightward/downward. Use ordinary direction inputs, jump,
 and the mapped native skills. Attacks generally need a nearby target in the
 correct direction and platform. There is no target-by-ID action, moveTo, useSkill,
 stat editing, reset, automatic combat, or resource refill. Observe inside loops.
-{specific}Buff explicitly before combat where useful; allow casting time. Try varied skills
+{specific}{animation}Buff explicitly before combat where useful; allow casting time. Try varied skills
 without repeatedly exhausting MP or overwriting useful buffs. Only actual native
 animation, displacement, contact and saved resource evidence establish effects.
 You have up to 60 seconds of PROGRAM execution after this single model response,

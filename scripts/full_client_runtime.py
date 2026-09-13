@@ -1152,7 +1152,10 @@ class CosmicRuntime:
             raise RuntimeErrorCode("recording_probe_failed") from None
         from full_client_capture import verify_video_duration
         try:
-            verify_video_duration(probe,recording,getattr(self,'scenario',{}).get('adaptive_protocol',{}).get('capture_duration_policy'))
+            preview = self.preview_contract()
+            policy = (preview.get('capture_duration_policy') if preview is not None else
+                      getattr(self,'scenario',{}).get('adaptive_protocol',{}).get('capture_duration_policy'))
+            verify_video_duration(probe, recording, policy)
         except (ValueError,TypeError):
             raise RuntimeErrorCode('recording_duration_mismatch') from None
         self.state["artifacts"]["video_probe"] = self.artifact("video-probe.json", probe)
