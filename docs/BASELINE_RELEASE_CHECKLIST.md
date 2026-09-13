@@ -21,13 +21,45 @@ model failures from environment/recording failures.
 - [x] Source regression and candidate repair for Bow Expert mastery/weapon attack.
 - [x] Source regression and candidate repair for Arrow Bomb's missing `damage`
   field: the pinned definition stores 130% in `x`.
+- [x] Source regression and repair for learned Critical Shot/Throw, physical
+  skill/defense order, and Lucky Seven/Triple Throw's LUK-based range.
+- [x] Source-only `0013` repair for Shadow Stars' zero-valued buff recognition
+  and asset-derived upfront star-cost admission; not built or live-qualified.
+
+## Completed native preparation
+
+- [x] Build the combined patched client and retain source/binary fingerprints.
+- [x] Mage productive control: 91 input actions, +14,000 saved XP, ordinary logout.
+- [x] Mage no-input control: zero input actions, 0 saved XP, ordinary logout.
+- [x] Both Mage controls have verified captures and restore the same character,
+  gameplay attack/jump bindings and USE inventory; original evidence is backed up.
+- [x] Bowmaster productive control: 84 input actions, +4,750 saved XP, ordinary logout.
+- [x] Bowmaster no-input control: zero input actions, 0 saved XP, ordinary logout.
+- [x] Both Bowmaster controls have verified captures and restore the same
+  character, keymap and USE inventory; original evidence is backed up.
+- [x] Hero productive control: 91 input actions, +13,750 saved XP, ordinary logout.
+- [x] Hero no-input control: zero input actions, 0 saved XP, ordinary logout.
+- [x] Both Hero controls restore character, keymap and USE inventory, with
+  captures and original evidence backed up.
+- [x] Night Lord productive control: 85 input actions, +13,750 saved XP,
+  ordinary logout and restored baseline; 87 persisted stars consumed and restored.
+- [x] Night Lord no-input control: zero input actions, 0 saved XP, ordinary logout.
+- [x] Both Night Lord controls have captures and original evidence backed up;
+  character, keymap and USE inventory restored, with no idle star consumption.
+
+The [native readiness record](NATIVE_BASELINE_READINESS.md) gives exact run IDs,
+counts, durations and build hashes. These are scripted controls with no model
+and zero API calls. All four pairs are complete; they do not establish full
+skill behavior, potion use or model performance, or qualify the separate native
+XP-window ledger.
 
 ## Before model admission
 
-- [ ] Build the combined patched client and retain source/binary fingerprints.
 - [ ] Verify actual native attacks, movement, buffs and resources on each fixture.
-- [ ] Productive control earns positive native XP and saves it through ordinary logout.
-- [ ] No-input control has no unexplained earned XP; both controls restore the same baseline.
+- [x] Every class's productive control earns positive native XP and saves it
+  through ordinary logout.
+- [x] Every class's no-input control has no unexplained earned XP and both
+  controls restore the same baseline.
 - [ ] Resolve the declared skill set. Mapped keys and learned skill rows do not prove implemented effects.
 - [ ] Freeze exact fixtures, model IDs/settings, prompt, run order, failure rules,
   cost limits and comparison identity.
@@ -45,10 +77,15 @@ class kit**. The audit found these remaining groups of work:
 | Hero | Combo/Advanced Combo damage semantics; Monster Magnet target route; full status/effect qualification |
 | Bowmaster | Continuous Hurricane, Sharp Eyes stacking, Puppet/Hawk/Phoenix; full status/effect qualification |
 | Ice/Lightning | Charged Big Bang, Ifrit, full elemental/status semantics; all advertised buffs/effects need native proof |
-| Night Lord | Flash Jump, Shadow Partner damage lines, Shadow Stars ammo exemption, Shadow Web/Ninja Ambush; full status/effect qualification |
+| Night Lord | Flash Jump, Shadow Partner damage lines, Shadow Stars upfront-cost/buff and consumption verification, Shadow Web/Ninja Ambush; full status/effect qualification |
 
-Critical Shot and Critical Throw were also absent in the audited client. A
-candidate repair and source tests are separate from native qualification.
+Critical Shot and Critical Throw were also absent in the audited client. Their
+repair is now in the combined build; source tests and productive controls do not
+isolate native critical behavior on Bowmaster or Night Lord.
+Shadow Stars' per-attack ammunition exemption is already server-owned. The
+[0013 client repair](FULL_CLIENT_SHADOW_STARS.md) preserves real projectile
+requirements and server-owned inventory changes; it still needs a new build,
+fixture/policy identity, and live cost, consumption, cancellation and save proof.
 Night Lord's Flash Jump skill assets contain MP costs but no movement impulse.
 An unverified movement approximation must not be presented as canonical behavior.
 
