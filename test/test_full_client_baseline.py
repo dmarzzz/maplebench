@@ -172,5 +172,20 @@ class BaselineTests(unittest.TestCase):
                 h.run(sleep=lambda seconds: setattr(h, 'now', h.now + seconds))
                 self.assertEqual(json.loads(h.api_calls[0][0]['input'])['recent_programs'], [])
 
+    def test_v1_level_change_stops_before_another_model_request(self):
+        with tempfile.TemporaryDirectory() as folder:
+            h = Harness(folder); h.p = self.make()
+            original_observe = h.observation
+            def observe():
+                value = original_observe()
+                if h.programs:value['character']['level'] = 181
+                return value
+            h.observation = observe
+            trace = h.run()['trace']
+            self.assertEqual(trace['status'], 'failed')
+            self.assertEqual(trace['reason'], 'adaptive_profile_level_mismatch')
+            self.assertEqual(len(h.api_calls), 1)
+            self.assertEqual(len(h.programs), 1)
+
 
 if __name__ == '__main__':unittest.main()

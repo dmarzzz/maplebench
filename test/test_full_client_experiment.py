@@ -156,6 +156,41 @@ class ExperimentTests(unittest.TestCase):
         with self.assertRaises(experiment.ExperimentError):
             experiment.build_plan(config)
 
+    def test_baseline_plan_requires_its_source_dependency_before_assigning_ids(self):
+        import full_client_adaptive as adaptive
+        import full_client_adaptive_evidence as adaptive_evidence
+        import full_client_baseline as baseline
+        import maple_agent
+        from full_client_skill_toolkit import toolkit
+        config = self.config(models=['gpt-6-astra'])
+        fixture = config['fixtures'][0]
+        p = baseline.protocol(toolkit('ice_lightning_arch_mage'))
+        budgets = {'total_seconds':1200, 'operation_seconds':360, 'controller_seconds':300,
+                   'max_actions':1600, 'max_api_requests':12, 'max_output_tokens':36000,
+                   'max_total_tokens':240000}
+        scenario = json.loads(Path(fixture['scenario']['path']).read_text())
+        scenario.update(protocol=adaptive.PROTOCOL, adaptive_protocol=p, trial_budgets=budgets)
+        fixture.update(protocol=adaptive.PROTOCOL, budgets=budgets,
+                       scenario=self.write('fixture0-scenario.json', scenario))
+        backend = json.loads((self.root/'fixture0-backend.json').read_text())
+        backend['scenario'] = fixture['scenario']; self.write('fixture0-backend.json', backend)
+        config['aggregate_limits'] = {'api_requests':12, 'total_tokens':240000, 'wall_seconds':1205}
+        config['runner']['dependencies'] += [experiment.pin(Path(module.__file__).resolve())
+                                             for module in (adaptive, adaptive_evidence, maple_agent)]
+        assigned = []
+        with self.assertRaisesRegex(experiment.ExperimentError, 'runner_dependencies_missing'):
+            experiment.build_plan(config, id_factory=lambda: assigned.append('called'))
+        self.assertEqual(assigned, [])
+        self.assertEqual(list(self.attempts.iterdir()), [])
+        dependency = experiment.pin(Path(baseline.__file__).resolve())
+        config['runner']['dependencies'].append(dependency)
+        self.assertEqual(len(experiment.build_plan(config)['entries']), 1)
+        config['runner']['dependencies'].remove(dependency)
+        scenario['adaptive_protocol'].pop('baseline_policy')
+        fixture['scenario'] = self.write('fixture0-scenario.json', scenario)
+        backend['scenario'] = fixture['scenario']; self.write('fixture0-backend.json', backend)
+        self.assertEqual(len(experiment.build_plan(config)['entries']), 1)
+
     def test_five_repetitions_do_not_claim_exact_four_model_balance(self):
         plan = self.plan(models=list(experiment.MODELS), repetitions=5)
         self.assertFalse(plan["balance"]["exact_position_balance"])
