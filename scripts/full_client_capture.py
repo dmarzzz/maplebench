@@ -146,7 +146,7 @@ def capture_receipt(value, owner, anchor, clock, terminal):
         if (owner.get('protocol')!=native['id'] or owner.get('mode')!='script' or owner.get('model') is not None
                 or owner.get('adaptiveProtocol') or preview is not None):raise ValueError('invalid_native_capture_identity')
         policy=native['capture_duration_policy']
-    if preview is not None or owner.get('protocol') in ('full-client-skill-preview-v1','full-client-skill-preview-v2'):
+    if preview is not None or owner.get('protocol') in ('full-client-skill-preview-v1','full-client-skill-preview-v2','full-client-skill-preview-v3'):
         from full_client_skill_preview import validate_protocol as validate_preview
         preview=validate_preview(preview)
         if (owner.get('protocol')!=preview['id'] or owner.get('mode')!='api'

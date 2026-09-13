@@ -24,13 +24,13 @@ class PreviewEncodedTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
-        self.protocol = preview.contract('ice_lightning_arch_mage', 'b' * 64)
+        self.protocol = preview.contract('ice_lightning_arch_mage', 'b' * 64, protocol=preview.ENCODED_PROTOCOL)
         self.fixture = native_fixture.encoded_native_fixture()
         self.raw_video = b'SYNTHETIC ONLY: independent decoder is mocked'
         self.sha = hashlib.sha256(self.raw_video).hexdigest()
         self.fixture.value['encoder_receipt'].update(webm_sha256=self.sha, webm_bytes=len(self.raw_video))
         self.fixture.probe.update(webm_sha256=self.sha, webm_bytes=len(self.raw_video))
-        self.owner = self.fixture.owner | {'protocol': preview.PROTOCOL, 'mode': 'api',
+        self.owner = self.fixture.owner | {'protocol': self.protocol['id'], 'mode': 'api',
             'model': 'gpt-6-astra', 'previewProtocol': self.protocol}
         self.bridge = FullClientBridge(self.root / 'relay')
         self.bridge.run = copy.deepcopy(self.owner)
@@ -47,7 +47,7 @@ class PreviewEncodedTests(unittest.TestCase):
             client=self.owner['client'], capture=self.fixture.value if capture is None else capture)
 
     def result(self):
-        return {'protocol': preview.PROTOCOL, 'previewProtocol': self.protocol,
+        return {'protocol': self.protocol['id'], 'previewProtocol': self.protocol,
             'controller': self.owner, 'timing': {'startedAtMs': 20000, 'endedAtMs': 22000},
             'timeline': {'api_started_ms': 200, 'program_started_ms': 500, 'program_ended_ms': 1800}}
 
@@ -75,7 +75,7 @@ class PreviewEncodedTests(unittest.TestCase):
                 self.assertEqual(preview.fingerprint(old), contract_sha)
                 self.assertEqual(hashlib.sha256(preview.prompt(old).encode()).hexdigest(), prompt_sha)
                 self.assertNotIn('capture_duration_policy', old)
-                new = preview.contract(cls, 'b' * 64)
+                new = preview.contract(cls, 'b' * 64, protocol=preview.ENCODED_PROTOCOL)
                 self.assertEqual(new['capture_duration_policy'], ENCODED_FRAME_POLICY)
                 self.assertEqual(new['capture_max_ms'], 125000)
                 self.assertIn('2500ms after each buff and 1500ms after each attack', preview.prompt(new))

@@ -153,7 +153,7 @@ def sdk_scenario(protocol):
     return out
 
 
-def prompt_reference(value):
+def prompt_reference(value, *, include_physical_keys=True):
     value = validate_toolkit(value)
     lines = ['Frozen expanded skill toolkit (new training fixture; native qualification is a separate gate):']
     resources = value['resources']
@@ -167,7 +167,8 @@ def prompt_reference(value):
     else:
         lines.append('This fixture has no ammunition supply or ammunition requirement.')
     for skill in value['skills']:
-        lines.append(f"  {skill['slot']} ({skill['code'][3:]}): {skill['name']} level {skill['level']} — {skill['description']}")
+        physical_key = f" ({skill['code'][3:]})" if include_physical_keys else ''
+        lines.append(f"  {skill['slot']}{physical_key}: {skill['name']} level {skill['level']} — {skill['description']}")
     lines += ['Both HP_POTION and MP_POTION consume the same finite Power Elixir supply.',
               'A key acknowledgement proves input delivery, not a cast, hit, buff or resource consumption.',
               'Unmapped skill slots are unavailable. No automatic refill or alternate skill dispatch exists.']
