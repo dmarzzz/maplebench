@@ -8,7 +8,7 @@ import unittest
 import xml.etree.ElementTree as ET
 
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'scripts'))
-from full_client_skill_definitions import inspect,NX
+from full_client_skill_definitions import inspect,NX,xml_values
 from full_client_skill_toolkit import toolkit
 from test_full_client_skill_toolkit import definitions
 
@@ -24,6 +24,7 @@ def nx_bytes(tree):
         if isinstance(value,dict):
             start=len(nodes);count=len(value);nodes.extend(value.items())
         elif type(value) is int:kind=1;raw=struct.pack('<q',value)
+        elif type(value) is float:kind=2;raw=struct.pack('<d',value)
         elif type(value) is str:kind=3;raw=struct.pack('<I',string(value))+b'\0'*4
         elif type(value) is list:kind=4;raw=struct.pack('<ii',*value)
         encoded.append(struct.pack('<IIHH8s',string(name),start,count,kind,raw));at+=1
@@ -38,13 +39,14 @@ def xml_tree(name,value):
     for key,item in value.items():
         if isinstance(item,dict):node.append(xml_tree(key,item))
         elif type(item) is int:ET.SubElement(node,'int',name=key,value=str(item))
+        elif type(item) is float:ET.SubElement(node,'double',name=key,value=str(item))
         elif type(item) is str:ET.SubElement(node,'string',name=key,value=item)
         elif type(item) is list:ET.SubElement(node,'vector',name=key,x=str(item[0]),y=str(item[1]))
     return node
 
 
 class DefinitionTests(unittest.TestCase):
-    def fixture(self,root,cls='night_lord'):
+    def fixture(self,root,cls='night_lord',*,decimal_item=False):
         root=root.resolve()
         p=toolkit(cls);d=definitions(p);skilltree={}
         for sid,definition in d['skills'].items():
@@ -54,6 +56,8 @@ class DefinitionTests(unittest.TestCase):
         for iid,definition in d['items'].items():
             items.setdefault(f'{int(iid)//10000:04d}.img',{})['0'+iid]={'info':definition['info']}
             if 'spec' in definition:items[f'{int(iid)//10000:04d}.img']['0'+iid]['spec']=definition['spec']
+        if decimal_item:
+            next(iter(next(iter(items.values())).values()))['info']['unitPrice']=0.8
         assets=root/'assets';assets.mkdir();wz=root/'wz';(wz/'Skill.wz').mkdir(parents=True);(wz/'Item.wz/Consume').mkdir(parents=True)
         (assets/'Skill.nx').write_bytes(nx_bytes(skilltree));(assets/'Item.nx').write_bytes(nx_bytes({'Consume':items}))
         for stem,tree in skilltree.items():(wz/'Skill.wz'/f'{stem}.xml').write_bytes(ET.tostring(xml_tree(stem,tree)))
@@ -87,6 +91,24 @@ class DefinitionTests(unittest.TestCase):
             with self.assertRaises(ValueError):NX(path,time.monotonic()+2)
             path.write_bytes(nx_bytes({'level':{'mpCon':1}}))
             with self.assertRaisesRegex(ValueError,'definition_read_limit'):NX(path,time.monotonic()-1)
+
+    def test_decimal_comma_matches_nx_and_different_value_still_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            assets,wz=self.fixture(Path(directory),decimal_item=True)
+            for path in (wz/'Item.wz/Consume').glob('*.xml'):
+                tree=ET.parse(path);node=tree.getroot().find('.//double[@name="unitPrice"]')
+                if node is not None:
+                    node.set('value','0,8');tree.write(path);break
+            else:self.fail('missing decimal fixture')
+            self.assertEqual(inspect('night_lord',assets,wz)['status'],'nx_xml_scalars_verified_not_live_qualified')
+            node.set('value','0,9');tree.write(path)
+            with self.assertRaisesRegex(ValueError,'nx_xml_mismatch'):inspect('night_lord',assets,wz)
+
+    def test_xml_double_rejects_nonfinite_or_mixed_separators(self):
+        for value in ('NaN','Infinity','1e999','1,2.3','1,2,3','',None):
+            node=ET.Element('imgdir');child=ET.SubElement(node,'double',name='unitPrice')
+            if value is not None:child.set('value',value)
+            with self.subTest(value=value),self.assertRaisesRegex(ValueError,'invalid_definition_double'):xml_values(node)
 
 
 if __name__=='__main__':unittest.main()

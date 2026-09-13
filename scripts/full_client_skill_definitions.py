@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import struct
 import time
@@ -104,7 +105,14 @@ def xml_values(node):
     for child in node:
         name=child.get('name');need(name not in out)
         if child.tag in ('int','short','long'):out[name]=int(child.get('value'))
-        elif child.tag=='double':out[name]=float(child.get('value'))
+        elif child.tag=='double':
+            # Some WZ XML exports use a decimal comma. NX stores the same
+            # binary number; this changes parsing, never the parity check.
+            value=child.get('value')
+            need(isinstance(value,str) and re.fullmatch(r'[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?',value),
+                 'invalid_definition_double')
+            out[name]=float(value.replace(',','.'))
+            need(math.isfinite(out[name]),'invalid_definition_double')
         elif child.tag=='string':out[name]=child.get('value')
         elif child.tag=='vector':out[name]=[int(child.get('x')),int(child.get('y'))]
     return out
