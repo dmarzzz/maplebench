@@ -184,12 +184,15 @@ def preview_panel(rows):
     cards = []
     for row in rows:
         recording = row['recording']
+        instruction_label = ('Named SDK controls clarified (v3)' if row['protocol_id'] == 'full-client-skill-preview-v3'
+            else 'Earlier SDK instructions (' + row['protocol_id'].rsplit('-', 1)[-1] + ')')
         url = escape(recording['url'], quote=True)
         cue = recording['playback']['start_ms'] / 1000
         items = ''.join('<tr><td>' + escape(s['name']) + '</td><td>' + escape(s['key'])
             + '</td><td>' + str(s['acknowledged_inputs']) + '</td></tr>' for s in row['skills'])
         cards.append('<article class="skill-preview-card"><h3>' + escape(row['class_name'])
-            + ' · ' + escape(row['requested_model']) + '</h3><video controls playsinline preload="metadata" src="'
+            + ' · ' + escape(row['requested_model']) + '</h3><p>' + escape(instruction_label)
+            + '</p><video controls playsinline preload="metadata" src="'
             + url + '#t=' + format(cue, '.3f') + '" aria-label="Short ' + escape(row['class_name'], quote=True)
             + ' skill preview"></video><p>60-second program budget · ' + str(row['actions'])
             + ' acknowledged inputs · ' + ('Alive' if row['alive_at_last_observation'] else 'Dead')
