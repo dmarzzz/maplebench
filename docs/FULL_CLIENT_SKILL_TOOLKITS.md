@@ -125,8 +125,11 @@ tests. No live inventory transaction has been qualified by those tests.
 - Night Lord Flash Jump currently reaches an empty movement switch branch.
   The accepted runtime's asset displacement and physics behavior must be read
   and implemented before it is bound; this change does not invent a jump force.
-- Shadow Partner hit duplication and Shadow Stars ammunition exemption are
-  absent from this client path. Neither is granted or bound.
+- Shadow Partner hit duplication is absent from this client path. Shadow Stars'
+  per-attack ammunition exemption is already server-owned; native zero-valued
+  buff recognition and upfront star-cost admission need the separate
+  [unqualified successor repair](FULL_CLIENT_SHADOW_STARS.md). Neither skill is
+  granted or bound by this toolkit.
 - Summons such as Puppet, Phoenix and Ifrit require their own native AI and
   packet/effect acceptance. They are excluded. Ice/Lightning's summon is Ifrit;
   Elquines belongs to Fire/Poison in the pinned server definitions.

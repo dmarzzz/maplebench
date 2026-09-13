@@ -1,0 +1,57 @@
+--- a/src/client/Character/Player.cpp
++++ b/src/client/Character/Player.cpp
+@@ -308,6 +308,23 @@
+         uint16_t bullets    = effective_ammunition(inventory.get_bulletcount(),
+             weapon == Weapon::BOW || weapon == Weapon::CROSSBOW,
+             has_buff(Buffstat::SOULARROW));
++
++        if (move.get_id() == 4121006) // Shadow Stars pays from one real star stack.
++        {
++            // The server accepts any USE stack of throwing stars for the
++            // upfront fee, independently of the currently equipped weapon.
++            // Do not combine stacks or borrow Soul Arrow's virtual arrows.
++            bullets = 0;
++            for (int16_t slot = 1; slot <= inventory.get_slotmax(InventoryType::USE); ++slot)
++            {
++                if (inventory.get_item_id(InventoryType::USE, slot) / 10000 == 207)
++                {
++                    const int16_t count = inventory.get_item_count(InventoryType::USE, slot);
++                    if (count > bullets)
++                        bullets = static_cast<uint16_t>(count);
++                }
++            }
++        }
+ 
+         return move.can_use(level, weapon, job, hp, mp, bullets);
+     }
+@@ -508,6 +525,12 @@
+ 
+     bool Player::has_buff(Buffstat::Id stat) const
+     {
++        // Cosmic sends Shadow Stars as SHADOW_CLAW with value zero. Its
++        // received skill identity remains present until ordinary cancellation;
++        // cancel_buff replaces the entry with a default, empty Buff.
++        if (stat == Buffstat::SHADOW_CLAW)
++            return buffs[stat].stat == stat && buffs[stat].skillid == 4121006;
++
+         return buffs[stat].value > 0;
+     }
+ 
+--- a/src/client/Gameplay/Combat/Skill.cpp
++++ b/src/client/Gameplay/Combat/Skill.cpp
+@@ -338,7 +338,14 @@
+             return FBR_WEAPONTYPE;
+         }
+ 
+-        // Buffs do not consume ammunition, even when NX omits bullet fields.
++        // Shadow Stars has an explicit upfront star fee even though it is
++        // a buff. Player supplies the largest real single star stack; the
++        // server alone removes the fee and controls subsequent consumption.
++        if (skillid == 4121006)
++            return (stats.bulletcost > 0 && bullets >= stats.bulletcost)
++                ? FBR_NONE : FBR_BULLETCOST;
++
++        // Other buffs retain their existing no-ammunition requirement.
+         if (!is_attack())
+             return FBR_NONE;
+ 
