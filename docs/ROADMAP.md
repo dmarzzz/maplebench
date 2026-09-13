@@ -1,6 +1,6 @@
 # MapleBench roadmap and release burn-down
 
-Decision snapshot: September 12, 2026. Implementation, live qualification and
+Decision snapshot: September 13, 2026. Implementation, live qualification and
 publication are separate gates. A checked source test is not a gameplay result.
 
 ## Goal
@@ -23,6 +23,35 @@ Bowmaster and Ice/Lightning Arch Mage. Each class has Astra, Sol, Terra and Luna
 Hero saved XP is 18,250 / 18,250 / 18,250 / 23,000 respectively. All eight Bow/Mage
 runs saved zero XP. Those are observations of limited fixtures, not proof of
 canonical class behavior or a stable model ordering.
+
+Three additional short Ice/Lightning skill previews are now public, outside the
+comparison cohorts. They use the expanded ten-control fixture and the versioned
+`full-client-skill-preview-v2` protocol. Each made one actual API request, saved
+an original recording, completed ordinary logout, and passed recording and
+publication checks. Playback starts at the first acknowledged input; the full
+recording still includes model planning.
+
+| Model | Program execution | Inputs | SDK calls |
+| --- | ---: | ---: | ---: |
+| Astra | 30.825 s | 19 | 45 |
+| Sol | 41.161 s | 22 | 89 |
+| Terra | 25.303 s | 10 | 31 |
+
+All three survived and saved zero net XP. Reviewed recordings show Teleport and
+multiple spell effects; Astra and Sol show Blizzard damage. These observations
+do not establish full-class qualification or verified monster defeats. Some
+acknowledged inputs were blocked by an ongoing casting animation, and Terra
+sometimes attacked in the wrong direction.
+
+Luna's API response used a raw `D` key where the SDK requires `BUFF_1`; the input
+guard rejected the first RPC before any game action. The prompt's `BUFF_1 (D)`
+notation was ambiguous. The temporary worker reached its fixed deletion deadline
+before that failed attempt's full evidence backup and cleanup confirmation were
+finished. This outcome is incomplete evidence, not a zero-score comparison or a
+successful fourth clip. The three successful clips and the previously closed
+attempts were backed up before deletion.
+
+Watch the [short skill previews](https://maplebench.vercel.app/#skill-previews).
 
 Night Lord's first API attempt failed an input-receipt deadline and was excluded.
 The original group was permanently closed. Its four entries must never be reused.
@@ -75,7 +104,15 @@ Source and presentation delivered for the next release:
   accepted native-window results and are absent from the historical pilots.
 - [x] Prepare create-once fresh worker services, initial database import,
   gate/lock/queue enrollment and a finite externally deleted worker plan in
-  agent-devops. These helpers have source tests; no replacement worker is active.
+  agent-devops. The September 13 verification worker was used for bounded skill
+  previews and its scheduled deletion was independently verified.
+- [x] Publish three bounded actual API skill previews with encoded-frame capture,
+  exact model attribution, current post-input SDK observations, and playback
+  cues that skip the opening model-planning wait.
+- [x] Clarify the short-preview SDK vocabulary in protocol v3: list exact named
+  controls and executable examples, omit ambiguous browser-letter hints, and
+  preserve the original v1/v2 contracts and prompts. Focused tests pass; a new
+  actual API preview on v3 is still required.
 
 Live acceptance still required before fresh model comparisons:
 
@@ -101,7 +138,8 @@ Live acceptance still required before fresh model comparisons:
 - [ ] Run a bounded actual API integration check on the new frozen setup. Review
   attribution, skill actions, ledger, timing, video and ordinary restoration.
 - [ ] Validate interruption containment and publication retry without gameplay
-  replay; backup all evidence before external worker deletion.
+  replay; back up all evidence, including failed attempts, before external worker
+  deletion. Luna's September 13 failure exposed an incomplete backup/closeout gap.
 - [ ] Publish source/reproducibility notes and agent-devops deployment receipts.
 
 After the new version is accepted:
