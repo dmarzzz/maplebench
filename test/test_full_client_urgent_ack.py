@@ -37,6 +37,7 @@ class UrgentAckTests(unittest.TestCase):
         for case in ('stale','early','late','run','client','id'):
             with self.subTest(case=case),tempfile.TemporaryDirectory() as d:
                 b,body=self.setup_bridge(d);now=101.6
+                body['clientSentAtMs']=10000
                 if case=='stale':body['renderAgeMs']=1500
                 if case=='early':now=101
                 if case=='late':now=103
@@ -48,6 +49,7 @@ class UrgentAckTests(unittest.TestCase):
                         with self.assertRaises(ControlError):b.frame(body,acknowledgement_only=True)
                     else:b.frame(body,acknowledgement_only=True)
                 self.assertFalse(b.pending.get('ack',{}).get('ok',False))
+                self.assertIsNone(b.sdk_ack_snapshot)
                 self.assertEqual(b.pending['deadline'],103)
     def test_optional_timing_is_bounded_and_first_receipt_preserved(self):
         with tempfile.TemporaryDirectory() as d:
@@ -85,10 +87,23 @@ class UrgentAckTests(unittest.TestCase):
             self.assertTrue(b.pending['ack']['ok'])
             self.assertEqual(b.pending['ackObservation']['ageMs'],0)
 
+    def test_ordered_ack_still_requires_capture_clock_transit_proof(self):
+        with tempfile.TemporaryDirectory() as d:
+            b,body=self.setup_bridge(d)
+            body['clientSentAtMs']=10000
+            b.run.update(readinessPolicy={'expected_map_id':1},captureClockAccepted='clock')
+            b.capture_clock={'id':'clock','server_sent_ms':0};b.capture_clock_received_ms=0
+            body.update(captureClockAck='wrong',captureClockReceivedAtMs=0)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=101.6),mock.patch('full_client_bridge.time.time',return_value=10):
+                b.frame(body,acknowledgement_only=True)
+            self.assertFalse(b.pending['ack']['ok'])
+            self.assertIsNone(b.sdk_ack_snapshot)
+
     def test_request_returns_ack_bound_snapshot_despite_older_normal_poll(self):
         import threading,time,copy
         with tempfile.TemporaryDirectory() as d:
             b,body=self.setup_bridge(d);b.pending=None;body['ack']=None
+            body['clientSentAtMs']=10000
             b.frame(body);result={}
             def request():result.update(b.request('/v1/action',{'type':'press_keys','keys':['LEFT'],'durationMs':30}))
             thread=threading.Thread(target=request);thread.start()
@@ -97,12 +112,88 @@ class UrgentAckTests(unittest.TestCase):
             command=b.frame(body)['command'];self.assertIsNotNone(command)
             time.sleep(.035)
             urgent=copy.deepcopy(body);urgent['ack']={'id':command['id'],'ok':True}
+            urgent['clientSentAtMs']=10100
             urgent['observation']['character']['x']=42
+            urgent['renderedHud']={'hp':100,'mp':10,'maxHp':100,'maxMp':20}
             with b.lock:
                 b.frame(urgent,acknowledgement_only=True)
                 b.frame(body) # older normal snapshot arrives before request thread wakes
             thread.join(1);self.assertFalse(thread.is_alive())
             self.assertTrue(result['accepted']);self.assertEqual(result['observation']['character']['x'],42)
+            observed=b.request('/v1/observe')
+            self.assertEqual(observed['character']['x'],42)
+            self.assertEqual(observed['renderedHud'],urgent['renderedHud'])
+            self.assertEqual(b.observation['character']['x'],0) # Capture/readiness keep their own stream.
+            observed['character']['x']=-999 # Callers cannot modify the retained evidence.
+            self.assertEqual(b.request('/v1/observe')['character']['x'],42)
+            newer=copy.deepcopy(body);newer['clientSentAtMs']=10200
+            newer['observation']['character']['x']=64
+            b.frame(newer)
+            self.assertEqual(b.request('/v1/observe')['character']['x'],64)
+            self.assertIsNone(b.sdk_ack_snapshot)
+
+    def ordered_bridge(self,folder):
+        import copy
+        b,urgent=self.setup_bridge(folder)
+        urgent['clientSentAtMs']=10100
+        urgent['observation']['character']['x']=42
+        normal=copy.deepcopy(urgent);normal['ack']=None;normal['clientSentAtMs']=10000
+        normal['observation']['character']['x']=0
+        with mock.patch('full_client_bridge.time.monotonic',return_value=101.4):b.frame(normal)
+        with mock.patch('full_client_bridge.time.monotonic',return_value=101.6):b.frame(urgent,acknowledgement_only=True)
+        return b,normal,urgent
+
+    def test_ordered_snapshot_ages_without_refresh_from_older_polls(self):
+        with tempfile.TemporaryDirectory() as d:
+            b,normal,urgent=self.ordered_bridge(d)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=102):
+                b.frame(normal)
+                observed=b.request('/v1/observe')
+                self.assertEqual(observed['character']['x'],42)
+                self.assertAlmostEqual(observed['ageMs'],400)
+                self.assertAlmostEqual(observed['renderAgeMs'],400)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=103.2):
+                b.frame(normal) # Even a fresh poll receipt cannot refresh the newer ACK sample.
+                with self.assertRaisesRegex(ControlError,'client_state_stale'):b.request('/v1/observe')
+
+    def test_ordered_snapshot_does_not_bypass_invalid_post_render_frame(self):
+        with tempfile.TemporaryDirectory() as d:
+            b,normal,urgent=self.ordered_bridge(d)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=101.7):
+                normal['renderAgeMs']=1500;b.frame(normal)
+                with self.assertRaisesRegex(ControlError,'client_state_stale'):b.request('/v1/observe')
+
+    def test_new_ordinary_frame_must_cover_both_observation_and_render_order(self):
+        with tempfile.TemporaryDirectory() as d:
+            b,normal,urgent=self.ordered_bridge(d)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=101.7):
+                normal['clientSentAtMs']=10200;normal['renderAgeMs']=200
+                b.frame(normal)
+                self.assertEqual(b.request('/v1/observe')['character']['x'],42)
+                normal['renderAgeMs']=0;b.frame(normal)
+                self.assertEqual(b.request('/v1/observe')['character']['x'],0)
+
+    def test_ordered_snapshot_cannot_cross_run_or_browser_owner(self):
+        for owner in ('run','client','run_client'):
+            with self.subTest(owner=owner),tempfile.TemporaryDirectory() as d:
+                b,normal,urgent=self.ordered_bridge(d)
+                if owner=='run':b.run['id']='c'*32
+                elif owner=='client':b.client='replacement'
+                else:b.run['client']='replacement'
+                with mock.patch('full_client_bridge.time.monotonic',return_value=101.7):
+                    self.assertEqual(b.request('/v1/observe')['character']['x'],0)
+                    self.assertIsNone(b.sdk_ack_snapshot)
+
+    def test_urgent_without_frame_order_keeps_legacy_poll_observation(self):
+        with tempfile.TemporaryDirectory() as d:
+            b,body=self.setup_bridge(d);normal=json.loads(json.dumps(body));normal['ack']=None
+            with mock.patch('full_client_bridge.time.monotonic',return_value=101.6):
+                b.frame(normal)
+                body['observation']['character']['x']=42
+                b.frame(body,acknowledgement_only=True)
+                self.assertTrue(b.pending['ack']['ok'])
+                self.assertIsNone(b.sdk_ack_snapshot)
+                self.assertEqual(b.request('/v1/observe')['character']['x'],0)
 
     def test_recorded_adaptive_result_with_transport_timing_verifies(self):
         from test_full_client_adaptive import Harness,MODEL,verify_result

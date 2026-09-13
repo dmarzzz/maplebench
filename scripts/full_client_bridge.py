@@ -191,6 +191,22 @@ def _number(value, minimum=0, maximum=2**53-1):
     return type(value) in (int, float) and minimum <= value <= maximum and math.isfinite(value)
 
 
+def _frame_order(body):
+    # Both samples use the same browser clock. Receive order is insufficient:
+    # an ordinary POST already in flight can arrive after an urgent ACK.
+    sent=body.get('clientSentAtMs')
+    age,render_age=body.get('ageMs'),body.get('renderAgeMs')
+    if not all(_number(value) for value in (sent,age,render_age)) or min(sent-age,sent-render_age)<0:
+        return None
+    return (sent-age,sent-render_age)
+
+
+def _frame_hud(body):
+    hud=body.get('renderedHud')
+    fields=('hp','mp','maxHp','maxMp')
+    return {k:hud[k] for k in fields} if isinstance(hud,dict) and all(_number(hud.get(k)) for k in fields) else None
+
+
 def _observation(value):
     if not isinstance(value, dict) or type(value.get('ready')) is not bool:
         raise ControlError('invalid_observation')
@@ -269,6 +285,8 @@ class FullClientBridge:
         self.last_input_poll = None
         self.fresh_until = 0
         self.observation = {'ready': False}
+        self.observation_order = None
+        self.sdk_ack_snapshot = None
         self.pending = None
         self.cancel_events = {}
         self.leases = {}
@@ -401,6 +419,28 @@ class FullClientBridge:
         return json.loads(json.dumps(self.observation)) | {
             'ageMs':self.observation['ageMs']+elapsed,
             'renderAgeMs':self.observation['renderAgeMs']+elapsed}
+
+    def _sdk_snapshot(self):
+        ordinary=self._snapshot() # An ACK never replaces the live poll/freshness gate.
+        cached=self.sdk_ack_snapshot
+        if cached is None:
+            return ordinary
+        if (cached['owner']!=(self.run.get('id'),self.client)
+                or cached['owner'][1]!=self.run.get('client')):
+            self.sdk_ack_snapshot=None
+            return ordinary
+        if self.observation_order is not None and all(
+                current>=previous for current,previous in zip(self.observation_order,cached['order'])):
+            self.sdk_ack_snapshot=None
+            return ordinary
+        elapsed=max(0,(time.monotonic()-cached['received_at'])*1000)
+        observation=json.loads(json.dumps(cached['observation']))
+        observation['ageMs']+=elapsed
+        observation['renderAgeMs']+=elapsed
+        if max(observation['ageMs'],observation['renderAgeMs'])>=1500:
+            # Do not roll back to an older poll when the newer sample expires.
+            raise ControlError('client_state_stale')
+        return observation
 
     def _wait_for_capture(self, run_id, timeout=5):
         deadline=time.monotonic()+timeout
@@ -624,7 +664,8 @@ class FullClientBridge:
 
     def _acknowledge_only(self, body, obs, age, render_age, ack):
         # A concurrent ordinary poll may carry an older frame. Never feed this
-        # expedited receipt into global observation/readiness/capture state.
+        # expedited receipt into global readiness/capture state. The SDK keeps
+        # its validated snapshot separately until ordinary samples catch up.
         with self.lock:
             pending=self.pending;client=body['client']
             if (ack is None or not pending or body.get('ackRunId')!=pending.get('runId')
@@ -655,6 +696,14 @@ class FullClientBridge:
                     pending['ack']={'id':ack['id'],'ok':ack['ok'] and valid and enough}
                     pending['ackObservation']=json.loads(json.dumps(obs)) | {'ageMs':age,'renderAgeMs':render_age}
                     pending['ackObservedAt']=now
+                    order=_frame_order(body)
+                    cached=self.sdk_ack_snapshot
+                    owner=(pending['runId'],client)
+                    if (pending['ack']['ok'] and order is not None and
+                            (cached is None or cached['owner']!=owner or all(
+                                current>=previous for current,previous in zip(order,cached['order'])))):
+                        self.sdk_ack_snapshot={'owner':owner,'order':order,'received_at':now,
+                            'observation':pending['ackObservation'] | {'renderedHud':_frame_hud(body)}}
                     self.lock.notify_all()
             return {'command':None}
 
@@ -712,9 +761,7 @@ class FullClientBridge:
                 and has_failure_release(self.output/run_id/'release.json',run_id)
             )
             valid_frame = obs['ready'] and max(age, render_age) < 1500
-            hud = body.get('renderedHud')
-            hud = {k:hud[k] for k in ('hp', 'mp', 'maxHp', 'maxMp')} if isinstance(hud, dict) and all(
-                _number(hud.get(k)) for k in ('hp', 'mp', 'maxHp', 'maxMp')) else None
+            hud = _frame_hud(body)
             self.observation = obs | {'ageMs':age, 'renderAgeMs':render_age, 'renderedHud':hud} if valid_frame else {'ready': False}
             self.last_seen = now
             self.fresh_until = now + (1500-max(age, render_age))/1000 if valid_frame else now
@@ -770,6 +817,7 @@ class FullClientBridge:
                 self.frame_transit=None
             else:
                 self._record_readiness_frame(capture,server_received_ms,now)
+            self.observation_order=_frame_order(body) if valid_frame else None
             # Only bounded scalar transport facts enter timeout evidence. The
             # observation, character, HUD, and arbitrary ACK fields never do.
             self.last_input_poll={'client':client,'runId':run_id,'receivedAt':now,
@@ -823,7 +871,7 @@ class FullClientBridge:
             if not self.fresh():
                 raise ControlError('client_state_stale')
             if url.endswith('/v1/observe'):
-                return self._snapshot()
+                return self._sdk_snapshot()
             if not url.endswith('/v1/action') or not isinstance(payload, dict) or payload.get('type') != 'press_keys':
                 raise ValueError('Only full-client keyboard actions are supported')
             _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},
