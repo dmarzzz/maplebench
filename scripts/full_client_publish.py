@@ -822,6 +822,15 @@ def verify_capture_bundle(manifest, artifact_root):
                 and same_json(config,result["controller"].get("nativeAcceptance")),
                 "capture: native acceptance cannot carry a model identity")
         owner.update(mode="script",model=None,nativeAcceptance=config)
+    if result.get("protocol") in ("full-client-skill-preview-v1", "full-client-skill-preview-v2") or result.get("previewProtocol") is not None:
+        from full_client_skill_preview import validate_protocol as validate_preview
+        config = validate_preview(result.get("previewProtocol"))
+        require(result["protocol"] == result["controller"].get("protocol") == config["id"]
+                and same_json(config, result["controller"].get("previewProtocol"))
+                and result["controller"].get("mode") == "api"
+                and result.get("nativeAcceptance") is None and not result.get("adaptive"),
+                "capture: preview protocol and model controller must match")
+        owner.update(mode="api", model=result["controller"].get("model"), previewProtocol=config)
     try:
         measured = capture_receipt(capture, owner, ready, clock, terminal)
     except (ValueError, TypeError, KeyError, OverflowError) as error:

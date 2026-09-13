@@ -576,7 +576,7 @@ class FullClientBridge:
         # A previous run may still be in one outstanding browser POST. It must
         # neither overwrite a new run nor block the response carrying its ID.
         if value['run_id']!=self.run.get('id'):return
-        owner=self.run.get('nativeAcceptance') or self.run.get('adaptiveProtocol') or {}
+        owner=self.run.get('nativeAcceptance') or self.run.get('adaptiveProtocol') or self.run.get('previewProtocol') or {}
         if (self.run.get('client')!=client or owner.get('capture_duration_policy',{}).get('id')
                 !=value['policy_id']):
             raise ControlError('capture_failure_owner_mismatch')

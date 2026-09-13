@@ -7,7 +7,7 @@ import unittest
 
 @unittest.skipUnless(shutil.which('node'), 'Node required')
 class EncodedControllerTests(unittest.TestCase):
-    def run_lifecycle(self, checks):
+    def run_lifecycle(self, checks, *, preview_protocol=None):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
         start=source[source.index('  const captureFailureCodes ='):source.index('  Module.MapleBenchOnRendered =')]
         hook=source[source.index('  Module.MapleBenchOnRendered ='):source.index('  async function stopRecording()')]
@@ -50,6 +50,17 @@ const createPostRenderRecorder=async(canvas,options)=>{
 };
 const uploadRecording=async()=>{uploads++;assert.equal(pendingUpload.metadata.schema_version,3);if(uploadWait)await uploadWait;};
 """
+        if preview_protocol is not None:
+            import json
+            fixture=fixture.replace("nativeAcceptance:{capture_duration_policy:policy,capture_max_ms:45000}",
+                                    "previewProtocol:"+json.dumps(preview_protocol))
+            fixture=fixture.replace('assert.equal(options.maxDurationMs,45000)',
+                                    'assert.equal(options.maxDurationMs,125000)')
+            if 'capture_duration_policy' not in preview_protocol:
+                fixture=fixture.replace("const MediaRecorder={isTypeSupported:()=>{throw Error('Unexpected legacy fallback');}};",
+                    "class MediaRecorder {static isTypeSupported(){return true;} start(){this.onstart();}}")
+                fixture=fixture.replace("({getContext:()=>ctx})", "({getContext:()=>ctx,captureStream:()=>({getTracks:()=>[]})})")
+
         result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+start+hook+stop+
                                '(async()=>{'+checks+'})().then(()=>console.log("LIFECYCLE_CHECKS_COMPLETE"))'
                                '.catch(e=>{console.error(e);process.exitCode=1;});'],
@@ -76,6 +87,38 @@ assert.equal(pendingUpload.metadata.first_frame_offset_ms,0);
 assert.equal(pendingUpload.metadata.terminal_token,'terminal');
 assert.equal(pendingUpload.metadata.interrupted,false);
 """)
+
+    def test_preview_v2_uses_encoded_lifecycle_and_original_short_request_deadline(self):
+        import full_client_skill_preview as preview
+        protocol=preview.contract('ice_lightning_arch_mage','b'*64)
+        self.run_lifecycle("""
+await startRecording(run.id);assert.equal(created,1);assert.equal(capture.encodedMode,true);
+assert.deepEqual(capture.durationPolicy,run.previewProtocol.capture_duration_policy);
+assert.equal(capture.captureDeadlineAt,125100);
+assert.equal(timers.get(capture.maxTimer).ms,125000);
+Module.MapleBenchOnRendered();await advance(500);Module.MapleBenchOnRendered();
+capture.clockVerified=true;capture.terminalToken='terminal';
+const ending=stopRecording();await advance(100);Module.MapleBenchOnRendered();finish();await ending;
+assert.equal(uploads,1);assert.equal(pendingUpload.metadata.schema_version,3);
+assert.deepEqual(pendingUpload.metadata.capture_duration_policy,run.previewProtocol.capture_duration_policy);
+assert.equal(pendingUpload.metadata.interrupted,false);assert.equal(timers.size,0);
+""",preview_protocol=protocol)
+
+    def test_explicit_preview_v1_retains_legacy_readiness_capture_timer(self):
+        import full_client_skill_preview as preview
+        self.run_lifecycle("""
+run.readinessPolicy={schema_version:1};await startRecording(run.id);
+assert.equal(created,0);assert.equal(capture.recorderStarted,true);
+assert.equal(capture.encodedMode,undefined);assert.equal(timers.get(capture.maxTimer).ms,125000);
+await advance(1);assert.notEqual(capture,null);assert.equal(uploads,0);
+""",preview_protocol=preview.contract('ice_lightning_arch_mage','b'*64,protocol=preview.LEGACY_PROTOCOL))
+
+    def test_preview_v2_encoder_failure_never_falls_back_to_legacy(self):
+        import full_client_skill_preview as preview
+        self.run_lifecycle("""
+failStart=true;await startRecording(run.id);assert.equal(created,1);assert.equal(capture,null);
+assert.equal(uploads,0);assert.equal(pendingUpload,null);assert.equal(timers.size,0);
+""",preview_protocol=preview.contract('ice_lightning_arch_mage','b'*64))
 
     def test_unsupported_encoder_has_no_fallback_or_upload(self):
         self.run_lifecycle("""

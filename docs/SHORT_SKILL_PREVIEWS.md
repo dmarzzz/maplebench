@@ -1,11 +1,25 @@
 # Short skill previews
 
-`full-client-skill-preview-v1` is a development protocol for reviewing native
+`full-client-skill-preview-v2` is the default development protocol for reviewing native
 controls and model skill choices. It gives one model response up to 60 seconds
 of program execution, with 240 acknowledged actions and 600 SDK requests at
 most. Readiness and the single API request have separate bounded allowances;
 the complete controller envelope is 123 seconds. Login, upload, ordinary logout,
 and restoration add lifecycle time outside the program window.
+
+V2 freezes the existing `post-render-encoded-frame-v1` policy and a 125,000 ms
+capture ceiling. The controller records CPU-copied render frames with VP8 packet
+hashes and an exact timestamp ledger; upload, runtime collection, and publication
+recompute the same policy from the frozen preview contract. The 250 ms endpoint,
+5 ms wall drift, 2 ms timestamp slack, and 1,000 ms internal gap limits are
+unchanged. Encoder failure cannot fall back to MediaRecorder.
+
+Explicit `contract(..., protocol='full-client-skill-preview-v1')` still produces
+the historical contract and prompt unchanged. Its legacy recording validation
+keeps the 100 ms duration tolerance. A legacy recording cannot be relabeled V2,
+and an invalid old recording remains invalid. New V2 prompts explain native
+animation lock and suggest about 2,500 ms after buffs and 1,500 ms after attacks,
+followed by observation; these are guidance, not proof of successful casts.
 
 Each preview freezes its class toolkit, equipped baseline, prompt, model, source,
 and runtime. The model gets the actual named skills and resource constraints.
