@@ -79,14 +79,44 @@ try:
     if len(raw) > 1024 * 1024: raise ValueError()
     print(json.dumps({'ok': True, 'value': json.loads(raw)}))
 except urllib.error.HTTPError as error:
-    print(json.dumps({'ok': False, 'error': 'HTTP ' + str(error.code)}))
+    print(json.dumps({'ok': False, 'failure': {'category': 'http_error', 'http_status': error.code}}))
+except TimeoutError:
+    print(json.dumps({'ok': False, 'failure': {'category': 'timeout', 'http_status': None}}))
+except urllib.error.URLError:
+    print(json.dumps({'ok': False, 'failure': {'category': 'transport_error', 'http_status': None}}))
+except (ValueError, TypeError):
+    print(json.dumps({'ok': False, 'failure': {'category': 'invalid_response', 'http_status': None}}))
 except Exception:
-    print(json.dumps({'ok': False, 'error': 'Request failed'}))
+    print(json.dumps({'ok': False, 'failure': {'category': 'request_failed', 'http_status': None}}))
 '''
 
 
 class AgentError(RuntimeError):
-    pass
+    def __init__(self, *args, request_failure=None):
+        super().__init__(*args)
+        self.request_failure = request_failure
+
+
+# Only categorical transport evidence can cross the private HTTP boundary.
+# Do not parse arbitrary exception text, response bodies, headers or URLs.
+HTTP_FAILURE_STATUSES = frozenset((400, 401, 402, 403, 404, 405, 408, 409, 410,
+                                 411, 412, 413, 414, 415, 416, 417, 422, 425, 426,
+                                 428, 429, 431, 451, 500, 501, 502, 503, 504, 505,
+                                 506, 507, 508, 510, 511))
+REQUEST_FAILURE_CATEGORIES = frozenset(('http_error', 'timeout', 'transport_error',
+                                      'invalid_response', 'worker_failed', 'request_failed'))
+
+
+def safe_request_failure(error):
+    """Return a new allowlisted record; exception text is never inspected."""
+    category, status = ('timeout' if isinstance(error, TimeoutError) else 'request_failed'), None
+    value = error.request_failure if isinstance(error, AgentError) else None
+    if type(value) is dict and type(value.get('category')) is str and value['category'] in REQUEST_FAILURE_CATEGORIES:
+        category = value['category']
+        candidate = value.get('http_status')
+        if category == 'http_error' and type(candidate) is int and candidate in HTTP_FAILURE_STATUSES:
+            status = candidate
+    return {'schema_version': 1, 'category': category, 'http_status': status}
 
 
 class BudgetLimit(AgentError):
@@ -110,13 +140,19 @@ def bounded_request(url, payload=None, key=None, timeout=20):
                                 timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         raise TimeoutError('Request deadline reached') from None
+    if result.returncode:
+        raise AgentError('Request failed', request_failure={'category': 'worker_failed'})
     try:
         envelope = json.loads(result.stdout)
-        if result.returncode or not envelope['ok']:
-            raise AgentError(envelope.get('error', 'Request failed'))
+        if type(envelope) is not dict or type(envelope.get('ok')) is not bool:
+            raise ValueError()
+        if not envelope['ok']:
+            failure = safe_request_failure(AgentError(request_failure=envelope.get('failure')))
+            message = 'HTTP ' + str(failure['http_status']) if failure['http_status'] is not None else 'Request failed'
+            raise AgentError(message, request_failure=failure)
         return envelope['value']
     except (ValueError, KeyError, TypeError):
-        raise AgentError('Invalid endpoint response') from None
+        raise AgentError('Invalid endpoint response', request_failure={'category': 'invalid_response'}) from None
 
 
 def validate_base_url(base_url):

@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 
-from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, validate_rpc
+from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, safe_request_failure, validate_rpc
 from full_client_capture import capture_receipt
 from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL, NATIVE_V4_PROTOCOL, validate_contract as validate_native, program as native_program
 from full_client_docker import DockerBindingError, validate_binding
@@ -1227,6 +1227,7 @@ class FullClientBridge:
         sdk_request_limit = run['sdkRequestLimit']
         phase = 'initial_observation'
         api_outcome = 'not_started'
+        api_failure = None
         final_controller = None
         progress_steps = []
         cancel_event = self.cancel_events.get(run['id'])
@@ -1274,7 +1275,7 @@ class FullClientBridge:
                 requested = False
 
                 def api_request(url, payload, credential, timeout):
-                    nonlocal requested, api_outcome, api_started, readiness_receipt, readiness_sha256
+                    nonlocal requested, api_outcome, api_started, readiness_receipt, readiness_sha256, api_failure
                     if requested:
                         raise ControlError('api_request_limit')
                     with self.lock:
@@ -1320,7 +1321,11 @@ class FullClientBridge:
                         timeline['api_started_ms']=round((api_started-started)*1000)
                         requested = True
                         api_outcome = 'uncertain'
-                    response = bounded_request(url, payload, credential, timeout)
+                    try:
+                        response = bounded_request(url, payload, credential, timeout)
+                    except Exception as error:
+                        api_failure = safe_request_failure(error)
+                        raise
                     write_json(out/'api-response.json', response)
                     api_outcome = 'receipt_saved'
                     if run.get('trialContext') and (not isinstance(response.get('metadata'),dict)
@@ -1457,12 +1462,14 @@ class FullClientBridge:
             with self.lock:
                 self.run.update(status='failed', reason=reason, failurePhase=phase,
                                 apiOutcome=api_outcome, evidenceStatus='failed')
+                if api_failure is not None: self.run['apiFailure'] = api_failure
                 final_controller = dict(self.run)
             try:
                 if phase=='readiness':
                     timeline['readiness_ended_ms']=round((time.monotonic()-started)*1000)
                 write_json(out/'failure.json', {'controller':final_controller, 'error':reason,
                     'phase':phase,'apiOutcome':api_outcome,'program':result,'timeline':timeline,
+                    **({'apiFailure':api_failure} if api_failure is not None else {}),
                     **({'readiness':readiness_receipt,'readinessSha256':readiness_sha256}
                        if readiness_receipt is not None else {})})
             except OSError:
@@ -1500,6 +1507,7 @@ class FullClientBridge:
         """Actual adaptive API execution; intentionally separate evidence schema."""
         out=self.output/run['id'];started=time.monotonic()-(time.time()-run['startedAtMs']/1000);final_controller=None
         readiness=None;trace=None;api_outcome='not_started';input_deadline=None;first_input={};adaptive_started=None;last_trace_ref=None
+        api_failure=None
         def check_cancelled():
             with self.lock:
                 try:self._check_cancelled(run['id'])
@@ -1546,12 +1554,15 @@ class FullClientBridge:
                 if self.run.get('id')==run['id'] and step.get('method')=='pressKeys' and step.get('result',{}).get('accepted') is True:
                     self.run['actions']+=1
         def provider(url,body,timeout):
-            nonlocal readiness,api_outcome
+            nonlocal readiness,api_outcome,api_failure
             check_cancelled()
             remaining=min(timeout,input_deadline-time.monotonic())
             if remaining<=0:raise AdaptiveError('adaptive_wall_deadline')
             key=read_private_file(self.key_file).strip();api_outcome='uncertain'
             try:return bounded_request(url,body,key,remaining)
+            except Exception as error:
+                api_failure=safe_request_failure(error)
+                raise
             finally:del key
         def execute(code,**kwargs):
             return execute_program(code,SCENARIO|sdk_scenario(run['adaptiveProtocol']),'http://127.0.0.1:8840',request_fn=request,
@@ -1607,6 +1618,9 @@ class FullClientBridge:
                     if final['character']['level']==initial['character']['level'] else None,
                 'persistedNetXp':None,'authoritativePeakXpPerMinute':None,
                 'publicationEligible':False,'publicationBlocker':'adaptive_trial_evidence_adapter_required'}
+            if api_failure is not None:
+                result['apiFailure']=api_failure
+                result['controller']['apiFailure']=api_failure
             publication={'schema_version':3,'protocol':ADAPTIVE_PROTOCOL,'run_kind':'adaptive_pilot',
                 'result':result,'video':json.loads((out/'recording.json').read_text()) if (out/'recording.json').is_file() else None,
                 'score':None,'publication_eligible':False,'reason':'adaptive_trial_evidence_adapter_required'}
@@ -1614,19 +1628,24 @@ class FullClientBridge:
                 check_cancelled();write_adaptive_final(out,result,publication)
                 self.run.update(status=status,reason=reason,actions=counters['actions'],apiOutcome=api_outcome,
                     returnedModel=result['controller']['returnedModel'],evidenceStatus='saved' if status=='completed' else 'failed')
+                if api_failure is not None:self.run['apiFailure']=api_failure
                 final_controller=dict(self.run)
                 write_json(out/'controller.json',final_controller)
         except Exception as error:
             reason=error.code if isinstance(error,ControlError) else str(error) if isinstance(error,(AdaptiveError,DockerBindingError)) else type(error).__name__
             with self.lock:
                 self.run.update(status='failed',reason=reason,failurePhase='adaptive_controller',
-                    apiOutcome=api_outcome,evidenceStatus='failed');final_controller=dict(self.run)
+                    apiOutcome=api_outcome,evidenceStatus='failed')
+                if api_failure is not None:self.run['apiFailure']=api_failure
+                final_controller=dict(self.run)
             failure={'controller':final_controller,'error':reason,'adaptive':trace,'adaptiveTrace':last_trace_ref,'apiOutcome':api_outcome}
+            if api_failure is not None:failure['apiFailure']=api_failure
             try:
                 try:raw=adaptive_json_bytes(failure)
                 except ControlError:
                     raw=adaptive_json_bytes({'controller':final_controller,'error':reason,'adaptive':None,
-                        'adaptiveTrace':last_trace_ref,'trace_retained_separately':True,'apiOutcome':api_outcome})
+                        'adaptiveTrace':last_trace_ref,'trace_retained_separately':True,'apiOutcome':api_outcome,
+                        **({'apiFailure':api_failure} if api_failure is not None else {})})
                 write_bytes(out/'failure.json',raw)
             except OSError:pass
         finally:

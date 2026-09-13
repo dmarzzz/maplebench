@@ -11,6 +11,11 @@ authoritative XP measurements, inspectable model programs and matching videos.
 The evaluated system is model + harness + tools + knowledge + budgets.
 See [research framing](RESEARCH_FRAMING.md) for the central question and limits.
 
+The next experiments follow [baseline before strategy search](BASELINE_EXPERIMENT_DESIGN.md):
+qualify a productive task and simple feedback/replanning agent first, then test
+explicit self-review as a separate condition. Skill-showcase clips do not
+establish the performance baseline, and a candidate-search loop is later work.
+
 The intended research task is 30 minutes, including inference. Its primary score
 is the best normalized XP/min in a complete fixed 15-second native window.
 Preserve signed net XP separately. Compare within a declared class/task/fixture;
@@ -51,12 +56,23 @@ finished. This outcome is incomplete evidence, not a zero-score comparison or a
 successful fourth clip. The three successful clips and the previously closed
 attempts were backed up before deletion.
 
+A fresh worker passed a native check after the v3 prompt correction: two
+collision-constrained Teleport casts with MP consumption, a 74-pixel jump and
+visible Ice Strike damage. The subsequent single Luna v3 request failed during
+the API request, before returning a program or executing an input. Its supervisor
+completed cleanup under the original operation claim without replaying the API
+request. The failure receipt retained only `AgentError`, losing the HTTP status;
+a later read-only model lookup succeeded but cannot explain the earlier failure.
+This attempt does not add a fourth public gameplay clip or validate the v3 prompt
+against an actual model response.
+
 Watch the [short skill previews](https://maplebench.vercel.app/#skill-previews).
 
 Night Lord's first API attempt failed an input-receipt deadline and was excluded.
 The original group was permanently closed. Its four entries must never be reused.
 A transport correction passed focused tests; complete fresh native qualification
-has not been preserved and reviewed. All temporary cloud workers were deleted.
+has not been preserved and reviewed. Those earlier temporary workers were deleted;
+the current bounded verification worker has a separately recorded finite lease.
 
 **The old 16-entry matrix is no longer a release objective.** Finish the benchmark
 improvements first, use bounded development runs to validate them, then declare
