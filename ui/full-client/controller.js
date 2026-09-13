@@ -150,12 +150,35 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     const node = element('button', '', parent, text); node.type = 'button';
     node.addEventListener('click', action); collection?.push(node); return node;
   };
-  for (const [text, code, ms] of [['← 1s','ArrowLeft',1000],['→ 1s','ArrowRight',1000],['Jump','Space',180],
-    ['Brandish','KeyA',500],['Combo','KeyS',180],['Booster','KeyD',180],['Maple Warrior','KeyF',180],
-    ['HP potion','KeyQ',180],['MP potion','KeyW',180]]) button(text, () => hold(code,ms), manualGroup,manualButtons);
+  const manualSkillBindings = value => {
+    const profile = value.adaptiveProtocol?.profile || value.nativeAcceptance?.profile || value.previewProtocol?.profile;
+    if (profile) return Object.entries(toolkitKeyNames)
+      .filter(([slot]) => typeof profile.skill_keys?.[slot] === 'string' && profile.skill_keys[slot].length > 0)
+      .map(([slot, code]) => ({code, label:`${profile.skill_keys[slot]} (${code.slice(3)})`, ms:slot === 'PRIMARY_SKILL' ? 500 : 180}));
+    return [['Brandish','KeyA',500],['Combo','KeyS',180],['Booster','KeyD',180],['Maple Warrior','KeyF',180]]
+      .map(([label, code, ms]) => ({code, label:`${label} (${code.slice(3)})`, ms}));
+  };
+  for (const [text, code, ms] of [['← 1s','ArrowLeft',1000],['→ 1s','ArrowRight',1000],['Jump','Space',180]])
+    button(text, () => hold(code,ms), manualGroup,manualButtons);
+  const skillButtons = Object.values(toolkitKeyNames).map(code => {
+    const entry = {code, ms:180};
+    entry.node = button('', () => hold(entry.code,entry.ms), manualGroup,manualButtons);
+    entry.node.hidden = true; return entry;
+  });
+  const updateManualSkills = () => {
+    const bindings = manualSkillBindings(run);
+    for (const entry of skillButtons) {
+      const binding = bindings.find(item => item.code === entry.code);
+      entry.node.hidden = !binding;
+      if (binding) { entry.node.textContent = binding.label; entry.ms = binding.ms; }
+    }
+  };
+  updateManualSkills();
+  for (const [text, code] of [['HP potion','KeyQ'],['MP potion','KeyW']])
+    button(text, () => hold(code,180), manualGroup,manualButtons);
   button('Release keys', () => releaseAll(true,'interrupted_operator'), manualGroup);
   for (const type of ['keydown','keyup']) window.addEventListener(type, event => {
-    if (!event.isTrusted || !namesByCode[event.code]) return;
+    if (!event.isTrusted || !Object.hasOwn(codes,event.code)) return;
     // Preserve keyboard activation of toolbar controls without forwarding their
     // Space/arrows to the game's window-level keyboard listener.
     if (event.target !== game && /^(BUTTON|SUMMARY|INPUT|SELECT|TEXTAREA)$/.test(event.target?.tagName)) {
@@ -210,6 +233,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     captureStatus.textContent = capture ? `● REC ${((performance.now()-capture.startedAt)/1000).toFixed(1)}s`
       : saving ? 'SAVING' : !relayConnected || data.stale ? 'WAITING'
       : activeRun() ? 'RUNNING' : held.size || physical.size ? 'MANUAL' : 'IDLE';
+    updateManualSkills();
     manualButtons.forEach(node => { node.disabled = busy(); });
     runButtons.forEach(node => { node.disabled = busy() || !relayConnected || !fresh(observe()) || saving || Boolean(pendingUpload) || Boolean(capture); });
     recordButton.disabled = Boolean(capture) || saving || Boolean(pendingUpload); stopButton.disabled = !capture || capture.stopping;
