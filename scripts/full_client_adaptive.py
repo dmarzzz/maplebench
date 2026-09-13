@@ -44,7 +44,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 def validate_protocol(value):
-    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','progression_policy','capture_duration_policy','skill_toolkit'},'invalid_adaptive_protocol')
+    require(isinstance(value,dict) and set(DEFAULT_PROTOCOL)<=set(value)<=set(DEFAULT_PROTOCOL)|{'horizon_policy','progression_policy','capture_duration_policy','skill_toolkit','baseline_policy'},'invalid_adaptive_protocol')
     require(value.get('schema_version')==1 and type(value['schema_version']) is int
             and value.get('id')==PROTOCOL and type(value.get('wall_seconds')) is int
             and value['wall_seconds'] in (300,1800),'invalid_adaptive_protocol')
@@ -82,6 +82,10 @@ def validate_protocol(value):
     if 'progression_policy' in value:
         require(digest(value['progression_policy'])==digest(NATIVE_PROGRESSION_POLICY)
                 and 'horizon_policy' in value and profile['level']<=200,'invalid_adaptive_progression_policy')
+    if 'baseline_policy' in value:
+        from full_client_baseline import validate_binding
+        try:validate_binding(value)
+        except (ValueError,TypeError):raise AdaptiveError('invalid_baseline_protocol') from None
     return json.loads(json.dumps(value))
 
 
@@ -126,6 +130,9 @@ def final_slot_offer(remaining, requests_left):
 
 def prompt(protocol):
     p=validate_protocol(protocol)
+    if 'baseline_policy' in p:
+        from full_client_baseline import prompt as baseline_prompt
+        return baseline_prompt(p)
     text = f'''You control the real MapleStory v83 full client with this frozen profile:
 {json.dumps(p['profile'],sort_keys=True)}
 Discover and improve a gameplay strategy through repeated observation and code.
