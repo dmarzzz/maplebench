@@ -231,11 +231,14 @@ def attach_previews(catalog, selections, output_root, *, probe_video=None):
     require('<!-- skill-previews:start -->' not in html and html.count('<main>') == 1, 'preview_html_anchor')
     html = html.replace('<main>', '<main>\n' + preview_panel(rows), 1)
     style = (stable_bytes(original / 'style.css', 4 * 1024**2) + b'\n'
-        b'.skill-preview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:24px}'
+        b'#skill-previews{max-width:1200px;margin-left:auto;margin-right:auto;padding-left:24px;padding-right:24px;box-sizing:border-box}'
+        b'.skill-preview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:start}'
         b'.skill-preview-card{background:#fff;border:1px solid #d6d1c8;border-radius:16px;padding:20px;min-width:0}'
-        b'.skill-preview-card video{display:block;width:100%;aspect-ratio:4/3;background:#17252e;border-radius:8px}'
+        b'.skill-preview-card:only-child{grid-column:1/-1;width:100%;max-width:900px;justify-self:center}'
+        b'.skill-preview-card video{display:block;width:100%;height:auto;max-height:60vh;aspect-ratio:4/3;object-fit:contain;background:#17252e;border-radius:8px}'
         b'.skill-preview-card table{width:100%;text-align:left}.skill-preview-card td,.skill-preview-card th{padding:7px}'
-        b'.skill-preview-id{font-size:12px;overflow-wrap:anywhere}.skill-preview-card summary{cursor:pointer}\n')
+        b'.skill-preview-id{font-size:12px;overflow-wrap:anywhere}.skill-preview-card summary{cursor:pointer}'
+        b'@media(max-width:760px){.skill-preview-grid{grid-template-columns:minmax(0,1fr)}}\n')
     root_data = {'index.html': html.encode(), 'style.css': style, 'results.json': encoded(snapshot)}
     planned = copy.deepcopy(files)
     for _, refs, row in sources:
