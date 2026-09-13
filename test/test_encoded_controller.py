@@ -90,7 +90,7 @@ assert.equal(pendingUpload.metadata.interrupted,false);
 
     def test_preview_v2_uses_encoded_lifecycle_and_original_short_request_deadline(self):
         import full_client_skill_preview as preview
-        protocol=preview.contract('ice_lightning_arch_mage','b'*64)
+        protocol=preview.contract('ice_lightning_arch_mage','b'*64,protocol=preview.ENCODED_PROTOCOL)
         self.run_lifecycle("""
 await startRecording(run.id);assert.equal(created,1);assert.equal(capture.encodedMode,true);
 assert.deepEqual(capture.durationPolicy,run.previewProtocol.capture_duration_policy);
@@ -118,7 +118,7 @@ await advance(1);assert.notEqual(capture,null);assert.equal(uploads,0);
         self.run_lifecycle("""
 failStart=true;await startRecording(run.id);assert.equal(created,1);assert.equal(capture,null);
 assert.equal(uploads,0);assert.equal(pendingUpload,null);assert.equal(timers.size,0);
-""",preview_protocol=preview.contract('ice_lightning_arch_mage','b'*64))
+""",preview_protocol=preview.contract('ice_lightning_arch_mage','b'*64,protocol=preview.ENCODED_PROTOCOL))
 
     def test_unsupported_encoder_has_no_fallback_or_upload(self):
         self.run_lifecycle("""

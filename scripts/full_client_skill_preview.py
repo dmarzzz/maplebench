@@ -8,8 +8,9 @@ from full_client_skill_toolkit import toolkit, profile, prompt_reference
 from full_client_capture import ENCODED_FRAME_POLICY
 
 LEGACY_PROTOCOL = 'full-client-skill-preview-v1'
-PROTOCOL = 'full-client-skill-preview-v2'
-PROTOCOLS = (LEGACY_PROTOCOL, PROTOCOL)
+ENCODED_PROTOCOL = 'full-client-skill-preview-v2'
+PROTOCOL = 'full-client-skill-preview-v3'
+PROTOCOLS = (LEGACY_PROTOCOL, ENCODED_PROTOCOL, PROTOCOL)
 SOURCE = 'full-client-skill-preview; unscored development'
 
 
@@ -26,7 +27,7 @@ def contract(class_id, baseline_sha256, *, protocol=PROTOCOL):
             'max_actions':240, 'max_sdk_requests':600,
             'purpose':'skill_exploration_unscored_development',
             'publication_eligible':False, 'score':None}
-    if protocol == PROTOCOL:
+    if protocol != LEGACY_PROTOCOL:
         value.update(capture_duration_policy=dict(ENCODED_FRAME_POLICY), capture_max_ms=125000)
     return value
 
@@ -60,7 +61,27 @@ def prompt(value):
     animation = ('A key acknowledgement confirms physical input, not a successful cast. Native animation\n'
                  'can reject the next skill while the previous animation is still active. Allow about\n'
                  '2500ms after each buff and 1500ms after each attack, then observe before another cast.\n'
-                 if value['id'] == PROTOCOL else '')
+                 if value['id'] != LEGACY_PROTOCOL else '')
+    controls = ''
+    if value['id'] == PROTOCOL:
+        names = 'LEFT RIGHT UP DOWN JUMP ATTACK HP_POTION MP_POTION'.split()
+        names += [skill['slot'] for skill in value['skill_toolkit']['skills']]
+        controls = ('Allowed sdk.pressKeys strings (complete list): ' + json.dumps(names) + '.\n'
+                    'Use these exact named controls. Browser key letters, keyboard codes, numeric\n'
+                    'skill IDs and skill names are not SDK controls. Invalid keys stop the program.\n'
+                    'Copy this syntax for a buff, then observe:\n'
+                    "  await sdk.pressKeys(['BUFF_1'], 100);\n"
+                    '  await sdk.wait(2500);\n'
+                    '  const afterBuff = await sdk.observe();\n'
+                    'For the primary attack, face a nearby monster on your platform, then use:\n'
+                    "  await sdk.pressKeys(['PRIMARY_SKILL'], 100);\n"
+                    '  await sdk.wait(1500);\n'
+                    '  const afterAttack = await sdk.observe();\n')
+        if value['skill_toolkit']['class_id'] == 'ice_lightning_arch_mage':
+            controls += ('For directional Teleport, use the named movement and skill controls:\n'
+                         '  const beforeTeleport = await sdk.observe();\n'
+                         "  await sdk.pressKeys(['RIGHT', 'SECONDARY_SKILL'], 30);\n"
+                         '  const afterTeleport = await sdk.observe();\n')
     return f'''You control a level 180 {title} in a private MapleStory v83 full client.
 This is a short, unscored development preview for skill exploration. It is not a
 ranked trial or an equal-start model comparison. Discover how the mapped skills
@@ -74,7 +95,7 @@ function, explicitly await its call; a function declaration alone does nothing.
     Basic keys: LEFT RIGHT UP DOWN JUMP ATTACK HP_POTION MP_POTION.
     The frozen reference below names the available skill keys.
   sdk.wait(milliseconds): wait 1..3000ms.
-Coordinates increase rightward/downward. Use ordinary direction inputs, jump,
+{controls}Coordinates increase rightward/downward. Use ordinary direction inputs, jump,
 and the mapped native skills. Attacks generally need a nearby target in the
 correct direction and platform. There is no target-by-ID action, moveTo, useSkill,
 stat editing, reset, automatic combat, or resource refill. Observe inside loops.
@@ -87,4 +108,4 @@ and remains in the full recording; the world stays live during inference. Return
 before the program deadline. No second model request or hidden helper policy will
 continue the preview. Code runs in a bounded networkless container. Return JSON
 {{note,code}} with a brief intention, not private reasoning.
-''' + prompt_reference(value['skill_toolkit'])
+''' + prompt_reference(value['skill_toolkit'], include_physical_keys=value['id'] != PROTOCOL)
