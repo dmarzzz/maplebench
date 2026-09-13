@@ -1,0 +1,115 @@
+--- a/src/client/Gameplay/Combat/Attack.h
++++ b/src/client/Gameplay/Combat/Attack.h
+@@ -49,6 +49,9 @@
+         float critical      = 0.0f;
+         float ignoredef     = 0.0f;
+         int32_t matk        = 0;
++        int32_t totalmagic  = 0;
++        int32_t intelligence = 0;
++        int32_t luck        = 0;
+         int32_t accuracy    = 0;
+         int32_t fixdamage   = 0;
+         int16_t playerlevel = 1;
+--- a/src/client/Character/Player.cpp
++++ b/src/client/Character/Player.cpp
+@@ -352,6 +352,9 @@
+             attack.mindamage /= 10;
+             attack.maxdamage /= 10;
+         }
++        attack.intelligence = stats.get_total(Equipstat::INT);
++        attack.luck         = stats.get_total(Equipstat::LUK);
++        attack.totalmagic   = attack.intelligence + stats.get_total(Equipstat::MAGIC);
+         attack.critical    = stats.get_critical();
+         attack.ignoredef   = stats.get_ignoredef();
+         attack.accuracy    = stats.get_total(Equipstat::ACC);
+--- a/src/client/Gameplay/Combat/Skill.cpp
++++ b/src/client/Gameplay/Combat/Skill.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "Skill.h"
++#include "SpellDamagePolicy.h"
+ 
+ #include "../../Character/SkillId.h"
+ #include "../../Data/SkillData.h"
+@@ -187,7 +188,25 @@
+         }
+         else if (stats.matk)
+         {
+-            attack.matk += stats.matk;
++            int32_t amplification = 100;
++            // Both explorer mage passives use y for damage, x for MP cost.
++            // The ordinary server skill effect remains responsible for MP.
++            for (int32_t passive : {2110001, 2210001}) {
++                const int32_t learned = user.get_skilllevel(passive);
++                if (learned <= 0) continue;
++                const std::string id = std::to_string(passive);
++                const int32_t percent = nl::nx::skill[id.substr(0, 3) + ".img"]
++                    ["skill"][id]["level"][std::to_string(learned)]["y"];
++                amplification = std::max(amplification, percent);
++            }
++            attack.matk = stats.matk;
++            const SpellRange damage = spell_range(attack.totalmagic, attack.intelligence,
++                stats.matk, stats.mastery, amplification);
++            attack.mindamage = damage.minimum;
++            attack.maxdamage = damage.maximum;
++            // Ordinary spells do not inherit the unfinished client's universal
++            // physical critical chance. A spell-specific critical may follow.
++            attack.critical = 0.0f;
+             attack.damagetype = Attack::DMG_MAGIC;
+         }
+         else
+--- a/src/client/Gameplay/MapleMap/Mob.cpp
++++ b/src/client/Gameplay/MapleMap/Mob.cpp
+@@ -1,4 +1,5 @@
+ #include "Mob.h"
++#include "../Combat/SpellDamagePolicy.h"
+ 
+ #include "../Movement.h"
+ 
+@@ -702,7 +703,9 @@
+         case Attack::DMG_MAGIC:
+             mindamage = calculate_mindamage(leveldelta, attack.mindamage, damagetype == Attack::DMG_MAGIC);
+             maxdamage = calculate_maxdamage(leveldelta, attack.maxdamage, damagetype == Attack::DMG_MAGIC);
+-            hitchance = calculate_hitchance(leveldelta, attack.accuracy);
++            hitchance = damagetype == Attack::DMG_MAGIC
++                ? spell_hit_chance(attack.intelligence, attack.luck, leveldelta, avoid)
++                : calculate_hitchance(leveldelta, attack.accuracy);
+             critical  = attack.critical;
+             break;
+         case Attack::DMG_FIXED:
+--- /dev/null
++++ b/src/client/Gameplay/Combat/SpellDamagePolicy.h
+@@ -0,0 +1,32 @@
++// MapleBench spell range policy, version 1. AGPL-3.0-or-later.
++// Spell power and mastery come from the pinned skill definition. Maximum
++// base/amp rounding follows the pinned Cosmic parser; mastery is a WZ tier
++// (10 = 60%), not a percent or a physical-weapon mastery value.
++#pragma once
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++namespace jrc {
++struct SpellRange { double minimum, maximum; };
++inline SpellRange spell_range(int32_t magic, int32_t intelligence,
++                             int32_t power, int32_t mastery_tier,
++                             int32_t amplification_percent) {
++    const double m = std::max(0, magic);
++    const double i = std::max(0, intelligence);
++    const double mastery = std::min(1.0, std::max(0.1, 0.1 + mastery_tier * 0.05));
++    const double maximum = std::ceil((m * m / 1000.0 + m) / 30.0 + i / 200.0);
++    const double minimum = std::ceil((m * m / 1000.0 + m * mastery * 0.9) / 30.0 + i / 200.0);
++    const double amp = std::max(100, amplification_percent);
++    const double spell = std::max(0, power);
++    return {std::floor(minimum * amp / 100.0) * spell,
++            std::floor(maximum * amp / 100.0) * spell};
++}
++inline float spell_hit_chance(int32_t intelligence, int32_t luck,
++                             int16_t level_delta, int32_t avoid) {
++    if (avoid <= 0) return 1.0f;
++    const double accuracy = 5.0 * (std::max(0, intelligence) / 10 + std::max(0, luck) / 10);
++    if (accuracy <= 0) return 0.01f;
++    const double rate = accuracy * 100.0 / (std::max<int16_t>(0, level_delta) * 10.0 + 255.0);
++    return static_cast<float>(std::min(1.0, std::max(0.01, (1.2 - avoid / rate) / 0.7)));
++}
++}

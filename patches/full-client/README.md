@@ -99,3 +99,23 @@ Blizzard, and marks Drain ranged. It leaves buffs and unknown skills on their
 existing routes. The compiled-method regression exercises the real dispatcher;
 the expanded kits still require a new WASM build and native qualification. See
 [the exact toolkit and resource contract](../../docs/FULL_CLIENT_SKILL_TOOLKITS.md).
+
+## Baseline combat repairs
+
+The next candidate applies `0008-spell-damage.patch`,
+`0009-bow-expert.patch`, and the separately reviewed later numbered patches
+after the existing 0001–0006 source basis. There is no 0007 Flash Jump patch:
+canonical movement remains unverified. Never infer an absent patch is applied.
+
+0008 connects INT/equipment magic, spell power, mastery and explorer
+amplification to the actual magic damage path. See
+[the formula and its limits](../../docs/FULL_CLIENT_SPELL_DAMAGE.md).
+0009 applies Bow Expert's bow-only mastery and WATK bonus without allowing
+ordinary mastery to overwrite it because of passive iteration order.
+0011 reads Arrow Bomb's native `x` damage field only when its `damage` field is
+absent; other skills retain their existing interpretation.
+
+These source regressions do not establish a live-qualified, complete class kit.
+Freeze the exact combined build and pass the
+[baseline release checks](../../docs/BASELINE_RELEASE_CHECKLIST.md) before
+admitting model comparisons. Historical programs and recordings remain unchanged.

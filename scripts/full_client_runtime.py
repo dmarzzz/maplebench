@@ -507,6 +507,9 @@ class CosmicRuntime:
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
         if getattr(self, "scenario", {}).get("preview_protocol") is not None:
             required.add(script.parent / "full_client_skill_preview.py")
+        adaptive = getattr(self, "scenario", {}).get("adaptive_protocol")
+        if isinstance(adaptive, dict) and "baseline_policy" in adaptive:
+            required.add(script.parent / "full_client_baseline.py")
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}
         require(all(str(path) in extras for path in required), "serving_sources_not_frozen")
         asset_root = root / "assets"

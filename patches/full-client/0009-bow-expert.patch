@@ -1,0 +1,47 @@
+--- a/src/client/Character/PassiveBuffs.cpp
++++ b/src/client/Character/PassiveBuffs.cpp
+@@ -65,7 +65,7 @@
+         // WZ stores mastery in 5% steps above the 10% unmastered floor:
+         // e.g. 1 -> 15%, 10 -> 60%.
+         float mastery = 0.1f + static_cast<float>(level["mastery"]) * 0.05f;
+-        stats.set_mastery(mastery);
++        stats.set_mastery(mastery > stats.get_mastery() ? mastery : stats.get_mastery());
+         stats.add_value(Equipstat::ACC, level["x"]);
+     }
+ 
+@@ -92,6 +92,25 @@
+     }
+ 
+ 
++    // Skill.wz/312.img/3120005: mastery uses 5% steps; x is weapon attack.
++    // String.wz level 30 confirms 90% mastery and +10 WATK, bow only.
++    class BowExpertBuff final : public PassiveBuff
++    {
++    public:
++        bool is_applicable(CharStats& stats, nl::node) const override
++        {
++            return stats.get_weapontype() == Weapon::BOW;
++        }
++
++        void apply_to(CharStats& stats, nl::node level) const override
++        {
++            float mastery = 0.1f + static_cast<float>(level["mastery"]) * 0.05f;
++            stats.set_mastery(mastery > stats.get_mastery() ? mastery : stats.get_mastery());
++            stats.add_value(Equipstat::WATK, level["x"]);
++        }
++    };
++
++
+     PassiveBuffs::PassiveBuffs()
+     {
+         // Beginner
+@@ -128,6 +147,9 @@
+         // Hunter
+         buffs[SkillId::BOW_MASTERY] = std::make_unique<WeaponMasteryBuff<Weapon::BOW>>();
+ 
++        // Bowmaster: unlike ordinary mastery, x grants WATK, not accuracy.
++        buffs[3120005] = std::make_unique<BowExpertBuff>();
++
+         // Crossbowman
+         buffs[SkillId::CROSSBOW_MASTERY] = std::make_unique<WeaponMasteryBuff<Weapon::CROSSBOW>>();
+ 

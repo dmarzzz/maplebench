@@ -1094,6 +1094,30 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(runtime.RuntimeErrorCode,'serving_sources_not_frozen'):
             self.backend.web_identity({'MainPID':'123','User':'synthetic'})
 
+    def test_baseline_source_is_required_only_for_its_opt_in_and_needs_restart(self):
+        from full_client_baseline import protocol
+        from full_client_skill_toolkit import toolkit
+        self.web_fixture()
+        p = protocol(toolkit('ice_lightning_arch_mage'))
+        historical = copy.deepcopy(p); historical.pop('baseline_policy')
+        self.backend.scenario = {'adaptive_protocol': historical}
+        with patch.object(runtime.pwd, 'getpwnam', return_value=MagicMock(pw_uid=1234)):
+            # Existing adaptive fixtures do not suddenly require the new file.
+            self.backend.web_identity({'MainPID':'123', 'User':'synthetic'})
+        self.host.proc.reset_mock()
+        self.backend.scenario = {'adaptive_protocol': p}
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'serving_sources_not_frozen'):
+            self.backend.web_identity({'MainPID':'123', 'User':'synthetic'})
+        self.host.proc.assert_not_called()
+        path = Path(self.backend.config['web_script']).parent / 'full_client_baseline.py'
+        path.write_text('synthetic frozen baseline source')
+        self.backend.manifest['extra_files'].append({'path':str(path), 'sha256':'1'*64})
+        with patch.object(runtime.pwd, 'getpwnam', return_value=MagicMock(pw_uid=1234)):
+            self.backend.web_identity({'MainPID':'123', 'User':'synthetic'})
+            future = runtime.time.time() + 20; os.utime(path, (future, future))
+            with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'web_process_predates_frozen_sources'):
+                self.backend.web_identity({'MainPID':'123', 'User':'synthetic'})
+
     def test_skill_module_is_frozen_for_legacy_serving_and_requires_process_restart(self):
         self.web_fixture()
         path=Path(self.backend.config['web_script']).parent/'full_client_skill_toolkit.py'

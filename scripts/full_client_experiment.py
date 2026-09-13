@@ -266,6 +266,8 @@ def fixture_inputs(fixture, runner):
                     ("full_client_adaptive.py", "full_client_adaptive_evidence.py", "maple_agent.py")}
         if windows:
             required.add(str(Path(__file__).resolve().parent / "full_client_xp_windows.py"))
+        if "baseline_policy" in protocol:
+            required.add(str(Path(__file__).resolve().parent / "full_client_baseline.py"))
         require(required <= {ref["path"] for ref in runner["dependencies"]}, "runner_dependencies_missing")
     read_ref(fixture["baseline"], maximum=MAX_BASELINE, keep=False)
     runtime = decode(read_ref(fixture["runtime_manifest"], maximum=MAX_MANIFEST), maximum=MAX_MANIFEST)

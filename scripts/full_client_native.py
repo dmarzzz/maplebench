@@ -10,6 +10,7 @@ PROTOCOL = 'scripted-native-acceptance-v1'
 NATIVE_V2_PROTOCOL = 'scripted-native-acceptance-v2'
 NATIVE_V3_PROTOCOL = 'scripted-native-acceptance-v3'
 NATIVE_V4_PROTOCOL = 'scripted-native-acceptance-v4'
+PRODUCTIVITY_PROTOCOL = 'scripted-native-productivity-v1'
 PROFILES = {
     'hero': {'id':'hero-180','class_name':'Hero','level':180,
              'skill_keys':{'PRIMARY_SKILL':'Brandish','SECONDARY_SKILL':'Combo Attack','BUFF_1':'Booster','BUFF_2':'Maple Warrior'}},
@@ -21,9 +22,17 @@ PROFILES = {
                    'skill_keys':{'PRIMARY_SKILL':'Triple Throw','SECONDARY_SKILL':'Avenger','BUFF_1':'Claw Booster','BUFF_2':'Haste'}},
 }
 
-def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL):
-    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
+def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL, control='active'):
+    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,PRODUCTIVITY_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
         raise ValueError('invalid_native_fixture')
+    if protocol==PRODUCTIVITY_PROTOCOL:
+        if control not in ('active','idle'):raise ValueError('invalid_native_control')
+        policy=toolkit(class_id)
+        return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
+            'baseline_sha256':baseline_sha256,'control':control,'wall_seconds':120,
+            'max_actions':128,'max_sdk_requests':600,'capture_max_ms':125000,
+            'capture_duration_policy':dict(ENCODED_FRAME_POLICY)}
+    if control!='active':raise ValueError('invalid_native_control')
     if protocol==TOOLKIT_NATIVE_PROTOCOL:
         policy=toolkit(class_id)
         return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
@@ -39,7 +48,7 @@ def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL):
 
 def validate_contract(value):
     if not isinstance(value,dict):raise ValueError('invalid_native_acceptance')
-    expected=contract(value.get('class_id'),value.get('baseline_sha256'),protocol=value.get('id'))
+    expected=contract(value.get('class_id'),value.get('baseline_sha256'),protocol=value.get('id'),control=value.get('control','active'))
     if json.dumps(value,sort_keys=True,allow_nan=False)!=json.dumps(expected,sort_keys=True):
         raise ValueError('invalid_native_acceptance')
     validate_duration_policy(value['capture_duration_policy'])
@@ -68,6 +77,7 @@ if(nearby.length){const dx=nearby[0].x-first.character.x;
 
 def program(value):
     value=validate_contract(value);class_id=value['class_id']
+    if value['id']==PRODUCTIVITY_PROTOCOL:return _productivity_program(value)
     if value['id']==TOOLKIT_NATIVE_PROTOCOL:return _toolkit_program(value)
     if value['id']==PROTOCOL:return _legacy_program(value)
     if value['id']==NATIVE_V3_PROTOCOL and class_id!='hero':return _targeted_program(value)
@@ -109,6 +119,75 @@ for(let step=0;step<4;step++){
     # Keep a short passive tail for end-frame and native-effect inspection.
     code+='await sdk.wait(1500);\nawait sdk.observe();\n'
     return code
+
+
+def _productivity_program(value):
+    """Internal SDK control, never model gameplay or native effect certification.
+
+    A sticky target avoids dividing many small hits across several high-HP mobs.
+    Target disappearance is only an observation; ordinary native XP/save evidence
+    must independently establish productive combat. The paired idle control uses
+    the same duration and observations without a single physical input.
+    """
+    code="""// Scripted productivity control; no model, search, score or hidden game API.
+const end=Date.now()+116000;
+const room=()=>Date.now()+3500<end;
+let actions=0;
+async function input(keys,ms){
+  if(!room()||actions>=128)return false;
+  const result=await sdk.pressKeys(keys,ms);actions++;
+  if(result.accepted!==true)throw new Error('control_input_not_accepted');
+  return true;
+}
+"""
+    if value['control']=='idle':
+        return code+"""while(room()){
+  const scene=await sdk.observe();
+  if(!scene.character.alive)break;
+  await sdk.wait(1000);
+}
+await sdk.observe();
+"""
+    buffs={'hero':['SECONDARY_SKILL','BUFF_1'], 'bowmaster':['BUFF_1','BUFF_2','SKILL_7'],
+           'ice_lightning_arch_mage':['BUFF_1','BUFF_2'], 'night_lord':['BUFF_1','BUFF_2']}
+    code+='for(const key of '+json.dumps(buffs[value['class_id']])+""" ){
+  if(!await input([key],100))break;
+  await sdk.wait(2500);
+  if(!(await sdk.observe()).character.alive)return;
+}
+let targetId=null;
+for(let step=0;step<100&&room()&&actions<125;step++){
+  let scene=await sdk.observe();
+  if(!scene.character.alive)break;
+  if(scene.character.hp<scene.character.maxHp*0.4||scene.character.mp<scene.character.maxMp*0.2){
+    if(!await input(['HP_POTION'],100))break;
+    await sdk.wait(800);continue;
+  }
+  const near=scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=50);
+  let target=near.find(m=>m.objectId===targetId);
+  if(!target)target=near.sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x))[0];
+  if(!target){targetId=null;await sdk.wait(1000);continue;}
+  targetId=target.objectId;
+  let dx=target.x-scene.character.x;
+  const range=__RANGE__;
+  if(!await input([dx<0?'LEFT':'RIGHT'],Math.abs(dx)>range?300:30))break;
+  scene=await sdk.observe();
+  if(!scene.character.alive)break;
+  target=scene.monsters.find(m=>m.objectId===targetId);
+  if(!target||Math.abs(target.y-scene.character.y)>50){await sdk.wait(200);continue;}
+  const afterDx=target.x-scene.character.x;
+  if(Math.abs(afterDx)>range||((afterDx<0)!==(dx<0))){await sdk.wait(200);continue;}
+  if(!await input(['PRIMARY_SKILL'],100))break;
+  await sdk.wait(1500);
+}
+// A quiet tail keeps both controls within the same declared observation horizon.
+while(room()){
+  if(!(await sdk.observe()).character.alive)break;
+  await sdk.wait(1000);
+}
+await sdk.observe();
+"""
+    return code.replace('__RANGE__','100' if value['class_id']=='hero' else '250')
 
 def _targeted_program(value,*,horizontal_limit=110):
     # This is a distinct, explicitly requested recipe. V1/V2 bytes are retained.
