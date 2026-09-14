@@ -3,6 +3,7 @@
 This verifies observability, not gameplay effects or benchmark admission.
 """
 import hashlib
+import re
 import json
 from pathlib import Path
 import shutil
@@ -125,6 +126,27 @@ class SkillEvidenceTests(unittest.TestCase):
         self.assertGreater(len(value['receivedBuffs']), 60)
         self.assertLess(len(value['receivedBuffs']), 100)
 
+    def test_inactive_javascript_object_is_one_emscripten_macro_argument(self):
+        after = (self.tree/'src/client/Gameplay/Stage.cpp').read_text()
+        call = re.search(r'EM_ASM\(\{.*?^ {12}\}\);', after, flags=re.S|re.M).group()
+        # Like Emscripten, the first macro argument is stringified JS while
+        # subsequent arguments are C++ expressions. A bare object comma must
+        # not split JavaScript into those C++ arguments.
+        prefix = ('void native_asm_stub(const char*) {}\n'
+                  '#define EM_ASM(code, ...) native_asm_stub(#code, ##__VA_ARGS__)\n'
+                  'void inactive() {\n')
+        probe = self.tree/'macro-probe.cpp'
+        probe.write_text(prefix+call+'\n}\n')
+        compiler = shutil.which('c++')
+        subprocess.run([compiler,'-std=c++17','-fsyntax-only',str(probe)],
+                       check=True,capture_output=True,timeout=15)
+        broken=call.replace('({schemaVersion:1, ready:false})','{schemaVersion:1, ready:false}')
+        self.assertNotEqual(broken,call)
+        probe.write_text(prefix+broken+'\n}\n')
+        result=subprocess.run([compiler,'-std=c++17','-fsyntax-only',str(probe)],
+                              capture_output=True,timeout=15)
+        self.assertNotEqual(result.returncode,0)
+
     def test_existing_agent_observation_stays_separate_and_inactive_state_clears(self):
         before = (FIXTURE/'Stage.cpp').read_text()
         after = (self.tree/'src/client/Gameplay/Stage.cpp').read_text()
@@ -133,7 +155,7 @@ class SkillEvidenceTests(unittest.TestCase):
         def original_observation(source):
             return source[source.index(start):source.index(end)+len(end)]
         self.assertEqual(original_observation(before), original_observation(after))
-        self.assertIn('Module.MapleBenchSkillState = {schemaVersion:1, ready:false}', after)
+        self.assertIn('Module.MapleBenchSkillState = ({schemaVersion:1, ready:false})', after)
         self.assertIn('Module.MapleBenchSkillState.capturedAt = Module.MapleBenchObservation.capturedAt', after)
 
 

@@ -27,7 +27,7 @@
 -            EM_ASM({ Module.MapleBenchObservation = {ready:false}; });
 +            EM_ASM({
 +                Module.MapleBenchObservation = {ready:false};
-+                Module.MapleBenchSkillState = {schemaVersion:1, ready:false};
++                Module.MapleBenchSkillState = ({schemaVersion:1, ready:false});
 +            });
  #endif
              return;
