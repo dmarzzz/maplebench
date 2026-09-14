@@ -1,0 +1,10 @@
+{
+  "Character/Player.cpp": "c499a212d019b1d0b128c74e86b5cec4625aaa97307475b1e073a8cebb712cb8",
+  "Character/Player.h": "ad94fe98d32df1e3e12b7feae17ff5095d99a9163b0a7c9e32cb5b9d2bcf002a",
+  "Gameplay/Combat/Attack.h": "b7a0ec51aef83d18fe80ac3fb00c47c006eb2e9881edd5205ef80d991d53441b",
+  "Gameplay/Combat/Combat.cpp": "3c4521660455ae9b272dc6643e83b8a30a696df4bb8700021c5d30b31877df52",
+  "Gameplay/Combat/RegularAttack.cpp": "8d6c0904a8f370ec573dbfb733e3f62f449bb71768850710c469d9237fcb9fcf",
+  "Gameplay/Combat/Skill.cpp": "cd3c27fcceae6fdc046da2fa4e0d9fd7db4eb948efc4d66b98ac76c485099d32",
+  "Gameplay/MapleMap/Mob.cpp": "2c311926f384d9b4666e359e8232178bfa005568a39934f5774acd177379bbde",
+  "Net/Packets/AttackAndSkillPackets.h": "2f87f76d4eb718b9121e2bfac3bc37f1383ed8888c53182da9dcf7de8045afd4"
+}

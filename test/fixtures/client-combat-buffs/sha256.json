@@ -1,0 +1,14 @@
+{
+  "Character/Buff.h": "38fd16157eaeafb300426a6b40dae6b0bbdd6d7fb57d924ffced97fcf4af7939",
+  "Character/Inventory/Weapon.h": "8a74df8bacf0315fa410234b8ce33cdc843e10b05bd7fdcc68aa7b0b5ee31d12",
+  "Character/Player.cpp": "c499a212d019b1d0b128c74e86b5cec4625aaa97307475b1e073a8cebb712cb8",
+  "Gameplay/Combat/AmmunitionPolicy.h": "602284e0697c3746c5c7e204811a79efb84b4fa54a0bbd24c65f3bba90bceb8b",
+  "Gameplay/Combat/Attack.h": "b7a0ec51aef83d18fe80ac3fb00c47c006eb2e9881edd5205ef80d991d53441b",
+  "Gameplay/Combat/Skill.cpp": "cd3c27fcceae6fdc046da2fa4e0d9fd7db4eb948efc4d66b98ac76c485099d32",
+  "Gameplay/Combat/SpellDamagePolicy.h": "e1b3d3512d088182d3cde5949da935cfaf8a536767457b7044d7659d16933eb6",
+  "Gameplay/MapleMap/Mob.cpp": "2c311926f384d9b4666e359e8232178bfa005568a39934f5774acd177379bbde",
+  "Gameplay/MapleMap/Mob.h": "cb9f5b92c211b5ab115a72badda7a8c33d06f4c91ecb3887fb2179202bbbed89",
+  "LICENSE": "10ede613cce81dc5381ec9c1a08dcfdcd425d2a186a3efb25231ee3ba308585a",
+  "Net/Handlers/PlayerHandlers.cpp": "849077351bf49c93c457f64dd35836a7e5f5c881bcca5fdc834e0a2d497f22f4",
+  "Template/EnumMap.h": "98768d79cc54285ab180d83885eaf70c37e0b0b0e239a4f39acec9a6b9fe12f4"
+}

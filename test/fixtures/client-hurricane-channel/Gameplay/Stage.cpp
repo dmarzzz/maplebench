@@ -1,0 +1,580 @@
+//////////////////////////////////////////////////////////////////////////////
+// This file is part of the Journey MMORPG client                           //
+// Copyright © 2015-2016 Daniel Allendorf                                   //
+//                                                                          //
+// This program is free software: you can redistribute it and/or modify     //
+// it under the terms of the GNU Affero General Public License as           //
+// published by the Free Software Foundation, either version 3 of the       //
+// License, or (at your option) any later version.                          //
+//                                                                          //
+// This program is distributed in the hope that it will be useful,          //
+// but WITHOUT ANY WARRANTY; without even the implied warranty of           //
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the            //
+// GNU Affero General Public License for more details.                      //
+//                                                                          //
+// You should have received a copy of the GNU Affero General Public License //
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+//////////////////////////////////////////////////////////////////////////////
+#include "Stage.h"
+
+#include "../Audio/Audio.h"
+#include "../IO/KeyAction.h"
+#include "../IO/Messages.h"
+#include "../Net/Packets/GameplayPackets.h"
+#include "../Net/Packets/AttackAndSkillPackets.h"
+#include "../Util/Misc.h"
+
+#include "nlnx/nx.hpp"
+
+#include <chrono>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <sstream>
+#endif
+
+namespace jrc
+{
+    namespace
+    {
+        constexpr uint32_t PICKUP_INTERVAL_MS = 100;
+    }
+
+    Stage::Stage()
+        : combat(player, chars, mobs, physics)
+        , last_pickup_time(0)
+        , pending_intro_warp_mapid(-1)
+        , pending_intro_warp_delay_ms(0)
+    {
+        state = INACTIVE;
+        mapid = 0;
+    }
+
+    void Stage::init()
+    {
+        drops.init();
+    }
+
+    void Stage::load(int32_t mapid, int8_t portalid)
+    {
+        switch (state)
+        {
+        case INACTIVE:
+            load_map(mapid);
+            respawn(portalid);
+            break;
+        case TRANSITION:
+            respawn(portalid);
+            break;
+        case ACTIVE:
+            break;
+        }
+
+        state = ACTIVE;
+    }
+
+    void Stage::loadplayer(const CharEntry& entry)
+    {
+        player = entry;
+        playable = player;
+    }
+
+    void Stage::clear()
+    {
+        state = INACTIVE;
+        mapid = 0;
+        effect = MapEffect();
+        pending_intro_warp_mapid = -1;
+        pending_intro_warp_delay_ms = 0;
+
+        combat.clear();
+        chars.clear();
+        npcs.clear();
+        mobs.clear();
+        drops.clear();
+        reactors.clear();
+    }
+
+    void Stage::load_map(int32_t mapid)
+    {
+        this->mapid = mapid;
+
+        std::string strid  = string_format::extend_id(mapid, 9);
+        std::string prefix = std::to_string(mapid / 100000000);
+        nl::node src       = nl::nx::map["Map"]["Map" + prefix][strid + ".img"];
+
+        tilesobjs   = MapTilesObjs(src);
+        backgrounds = MapBackgrounds(src["back"]);
+        physics     = Physics(src["foothold"]);
+        mapinfo     = MapInfo(src, physics.get_fht().get_walls(), physics.get_fht().get_borders());
+        portals     = MapPortals(src["portal"], mapid);
+        // Keep any effect injected during the fade transition (e.g. intro Scene packets).
+        // `clear()` already resets stale effects before starting a map change.
+    }
+
+    void Stage::respawn(int8_t portalid)
+    {
+        Music(mapinfo.get_bgm()).play();
+
+        Point<int16_t> spawnpoint = portals.get_portal_by_id(static_cast<uint8_t>(portalid));
+        Point<int16_t> startpos   = physics.get_y_below(spawnpoint);
+
+        player.respawn(startpos, mapinfo.is_underwater());
+        camera.set_position(startpos);
+        camera.set_view(mapinfo.get_walls(), mapinfo.get_borders());
+    }
+
+    void Stage::draw(float alpha) const
+    {
+        if (state != ACTIVE)
+        {
+            return;
+        }
+
+        Point<int16_t> viewpos = camera.position(alpha);
+        Point<double> viewrpos = camera.realposition(alpha);
+        double viewx = viewrpos.x();
+        double viewy = viewrpos.y();
+
+        backgrounds.drawbackgrounds(viewx, viewy, alpha);
+        for (auto id : Layer::IDs)
+        {
+            tilesobjs.draw(id, viewpos, alpha);
+            reactors.draw(id, viewx, viewy, alpha);
+            npcs.draw(id, viewx, viewy, alpha);
+            mobs.draw(id, viewx, viewy, alpha);
+            chars.draw(id, viewx, viewy, alpha);
+            player.draw(id, viewx, viewy, alpha);
+            drops.draw(id, viewx, viewy, alpha);
+        }
+        combat.draw(viewx, viewy, alpha);
+        portals.draw(viewpos, alpha);
+        backgrounds.drawforegrounds(viewx, viewy, alpha);
+        effect.draw();
+    }
+
+    void Stage::update()
+    {
+        if (state != ACTIVE)
+        {
+#ifdef __EMSCRIPTEN__
+            EM_ASM({ Module.MapleBenchObservation = {ready:false}; });
+#endif
+            return;
+        }
+
+        combat.update();
+        backgrounds.update();
+        effect.update();
+        tilesobjs.update();
+
+        reactors.update(physics);
+        npcs.update(physics);
+        mobs.update(physics);
+        chars.update(physics);
+        drops.update(physics);
+        player.update(physics);
+        if (is_intro_input_locked())
+        {
+            // Direction3-style intro scenes present the actor facing left and
+            // should not react to local movement intent while the scene runs.
+            player.set_direction(false);
+        }
+        update_intro_warp();
+        handle_held_actions();
+        update_directional_context();
+
+        portals.update(player.get_position());
+        camera.update(player.get_position());
+#ifdef __EMSCRIPTEN__
+        // Publish read-only state on the game loop; browser callbacks never enter WASM.
+        static unsigned observation_tick = 0;
+        if (++observation_tick % 6 == 0)
+        {
+            const auto& stats = player.get_stats();
+            const auto position = player.get_position();
+            std::ostringstream data;
+            data << "{\"ready\":true,\"source\":\"full-client\",\"character\":{"
+                 << "\"mapId\":" << mapid << ",\"level\":" << player.get_level()
+                 << ",\"hp\":" << stats.get_stat(Maplestat::HP)
+                 << ",\"maxHp\":" << stats.get_total(Equipstat::HP)
+                 << ",\"mp\":" << stats.get_stat(Maplestat::MP)
+                 << ",\"maxMp\":" << stats.get_total(Equipstat::MP)
+                 << ",\"exp\":" << stats.get_exp()
+                 << ",\"alive\":" << (stats.get_stat(Maplestat::HP) > 0 ? "true" : "false")
+                 << ",\"x\":" << position.x() << ",\"y\":" << position.y()
+                 << "},\"monsters\":[";
+            bool first = true;
+            for (const auto& mob : mobs.get_alive_positions())
+            {
+                if (!first) data << ',';
+                first = false;
+                data << "{\"objectId\":" << mob.first << ",\"x\":" << mob.second.x()
+                     << ",\"y\":" << mob.second.y() << '}';
+            }
+            data << "]}";
+            const auto json = data.str();
+            EM_ASM({
+                Module.MapleBenchObservation = JSON.parse(UTF8ToString($0));
+                Module.MapleBenchObservation.capturedAt = Date.now();
+            }, json.c_str());
+        }
+#endif
+
+        if (player.is_invincible())
+        {
+            return;
+        }
+
+        if (int32_t oid_id = mobs.find_colliding(player.get_phobj()))
+        {
+            if (MobAttack attack = mobs.create_attack(oid_id))
+            {
+                MobAttackResult result = player.damage(attack);
+                TakeDamagePacket(result, TakeDamagePacket::TOUCH).dispatch();
+            }
+        }
+    }
+
+    void Stage::handle_held_actions()
+    {
+        if (!playable)
+        {
+            return;
+        }
+
+        // Drive gameplay repeats from the fixed update loop so held jump/attack
+        // behave consistently even when platform key-repeat is absent or uneven.
+        if (player.is_key_down(KeyAction::JUMP))
+        {
+            playable->send_action(KeyAction::JUMP, true);
+        }
+
+        if (player.is_key_down(KeyAction::ATTACK))
+        {
+            combat.use_move(0);
+        }
+
+        // Time-based pickup retry system
+        if (player.is_key_down(KeyAction::PICKUP))
+        {
+            uint64_t current_time =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+
+            if (current_time - last_pickup_time >= PICKUP_INTERVAL_MS)
+            {
+                last_pickup_time = current_time;
+                check_drops();
+            }
+        }
+    }
+
+    void Stage::show_character_effect(int32_t cid, CharEffect::Id effect)
+    {
+        if (auto character = get_character(cid))
+        {
+            character->show_effect_id(effect);
+        }
+    }
+
+    void Stage::check_portals()
+    {
+        if (player.is_attacking())
+        {
+            return;
+        }
+
+        Point<int16_t> playerpos  = player.get_position();
+        Portal::WarpInfo warpinfo = portals.find_warp_at(playerpos);
+        if (warpinfo.intramap)
+        {
+            Point<int16_t> spawnpoint = portals.get_portal_by_name(warpinfo.toname);
+            Point<int16_t> startpos   = physics.get_y_below(spawnpoint);
+            player.respawn(startpos, mapinfo.is_underwater());
+        }
+        else if (warpinfo.valid)
+        {
+            ChangeMapPacket(false, -1, warpinfo.name, false).dispatch();
+            if (warpinfo.has_target_map())
+            {
+                player.get_stats().set_mapid(warpinfo.mapid);
+            }
+            Sound(Sound::PORTAL).play();
+        }
+    }
+
+    void Stage::check_seats()
+    {
+        if (player.is_sitting() || player.is_attacking())
+        {
+            return;
+        }
+
+        Optional<const Seat> seat = mapinfo.findseat(player.get_position());
+        player.set_seat(seat);
+    }
+
+    void Stage::check_ladders(bool up)
+    {
+        if (player.is_climbing() || player.is_attacking())
+        {
+            return;
+        }
+
+        Optional<const Ladder> ladder = mapinfo.findladder(player.get_position(), up);
+        player.set_ladder(ladder);
+    }
+
+    void Stage::handle_directional_context(KeyAction::Id action, bool down)
+    {
+        if (!down)
+        {
+            return;
+        }
+
+        switch (action)
+        {
+        case KeyAction::UP:
+            check_ladders(true);
+            check_portals();
+            break;
+        case KeyAction::DOWN:
+            check_ladders(false);
+            break;
+        case KeyAction::LEFT:
+        case KeyAction::RIGHT:
+            // Re-evaluate ladder attachment using the currently held vertical intent
+            // so mixed directional combos behave the same regardless of press order.
+            if (player.is_key_down(KeyAction::UP))
+            {
+                check_ladders(true);
+            }
+            else if (player.is_key_down(KeyAction::DOWN))
+            {
+                check_ladders(false);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    void Stage::update_directional_context()
+    {
+        if (player.is_key_down(KeyAction::UP))
+        {
+            check_ladders(true);
+        }
+        else if (player.is_key_down(KeyAction::DOWN))
+        {
+            check_ladders(false);
+        }
+    }
+
+    void Stage::check_drops()
+    {
+        Point<int16_t> playerpos = player.get_position();
+        MapDrops::Loot loot      = drops.find_loot_at(playerpos);
+        if (loot.first)
+        {
+            PickupItemPacket(loot.first, loot.second).dispatch();
+        }
+    }
+
+    bool Stage::is_intro_input_locked() const
+    {
+        return effect.blocks_player_input();
+    }
+
+    void Stage::release_intro_locked_actions()
+    {
+        if (!playable)
+        {
+            return;
+        }
+
+        static constexpr std::array<KeyAction::Id, 8> INTRO_LOCKED_ACTIONS =
+        {
+            KeyAction::LEFT,
+            KeyAction::RIGHT,
+            KeyAction::UP,
+            KeyAction::DOWN,
+            KeyAction::JUMP,
+            KeyAction::ATTACK,
+            KeyAction::PICKUP,
+            KeyAction::SIT
+        };
+
+        for (KeyAction::Id action : INTRO_LOCKED_ACTIONS)
+        {
+            if (player.is_key_down(action))
+            {
+                playable->send_action(action, false);
+            }
+        }
+    }
+
+    void Stage::send_key(KeyType::Id type, int32_t action, bool down)
+    {
+        if (state != ACTIVE || !playable)
+        {
+            return;
+        }
+
+        if (is_intro_input_locked())
+        {
+            switch (type)
+            {
+            case KeyType::ACTION:
+            case KeyType::SKILL:
+            case KeyType::ITEM:
+            case KeyType::FACE:
+                return;
+            default:
+                break;
+            }
+        }
+
+        switch (type)
+        {
+        case KeyType::ACTION:
+        {
+            KeyAction::Id keyaction = KeyAction::actionbyid(action);
+            bool repeated_hold = down && player.is_key_down(keyaction);
+
+            handle_directional_context(keyaction, down);
+            if (down && !repeated_hold)
+            {
+                switch (action)
+                {
+                case KeyAction::SIT:
+                    check_seats();
+                    break;
+                case KeyAction::ATTACK:
+                    combat.use_move(0);
+                    break;
+                case KeyAction::PICKUP:
+                    // Immediate pickup on key press
+                    check_drops();
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            if (!repeated_hold || (keyaction != KeyAction::ATTACK && keyaction != KeyAction::JUMP))
+            {
+                playable->send_action(keyaction, down);
+            }
+            break;
+        }
+        case KeyType::SKILL:
+            combat.use_move(action);
+            break;
+        case KeyType::ITEM:
+            player.use_item(action);
+            break;
+        case KeyType::FACE:
+            player.set_expression(action);
+            break;
+        default:
+            break;
+        }
+    }
+
+    Cursor::State Stage::send_cursor(bool pressed, Point<int16_t> position)
+    {
+        return npcs.send_cursor(pressed, position, camera.position());
+    }
+
+    bool Stage::is_player(int32_t cid) const
+    {
+        return cid == player.get_oid();
+    }
+
+    MapNpcs& Stage::get_npcs()
+    {
+        return npcs;
+    }
+
+    MapChars& Stage::get_chars()
+    {
+        return chars;
+    }
+
+    MapMobs& Stage::get_mobs()
+    {
+        return mobs;
+    }
+
+    MapReactors& Stage::get_reactors()
+    {
+        return reactors;
+    }
+
+    MapDrops& Stage::get_drops()
+    {
+        return drops;
+    }
+
+    Player& Stage::get_player()
+    {
+        return player;
+    }
+
+    int32_t Stage::get_mapid() const
+    {
+        return mapid;
+    }
+
+    Combat& Stage::get_combat()
+    {
+        return combat;
+    }
+
+    Optional<Char> Stage::get_character(int32_t cid)
+    {
+        if (is_player(cid))
+        {
+            return player;
+        }
+        else
+        {
+            return chars.get_char(cid);
+        }
+    }
+
+    void Stage::add_effect(const std::string& path)
+    {
+        effect = MapEffect(path);
+        if (is_intro_input_locked())
+        {
+            player.set_direction(false);
+            release_intro_locked_actions();
+        }
+    }
+
+    void Stage::schedule_intro_warp(int32_t target_mapid, int32_t delay_ms)
+    {
+        pending_intro_warp_mapid = target_mapid;
+        pending_intro_warp_delay_ms = std::max<int32_t>(0, delay_ms);
+    }
+
+    void Stage::update_intro_warp()
+    {
+        if (pending_intro_warp_mapid < 0)
+        {
+            return;
+        }
+
+        pending_intro_warp_delay_ms -= Constants::TIMESTEP;
+        if (pending_intro_warp_delay_ms > 0)
+        {
+            return;
+        }
+
+        ChangeMapPacket(false, pending_intro_warp_mapid, "", false).dispatch();
+        pending_intro_warp_mapid = -1;
+        pending_intro_warp_delay_ms = 0;
+    }
+}

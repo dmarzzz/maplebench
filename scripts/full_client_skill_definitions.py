@@ -16,7 +16,7 @@ import struct
 import time
 import xml.etree.ElementTree as ET
 
-from full_client_skill_toolkit import toolkit, fingerprint
+from full_client_skill_toolkit import toolkit, fingerprint, POLICY_ID, POLICY_V2_ID
 
 
 def need(value, code='invalid_native_definition'):
@@ -118,9 +118,9 @@ def xml_values(node):
     return out
 
 
-def inspect(class_id,assets,wz,*,seconds=90):
+def inspect(class_id,assets,wz,*,seconds=90,policy_id=POLICY_ID):
     need(type(seconds) is int and 1<=seconds<=120,'definition_deadline_invalid')
-    deadline=time.monotonic()+seconds;policy=toolkit(class_id);assets=Path(assets);wz=Path(wz)
+    deadline=time.monotonic()+seconds;policy=toolkit(class_id,policy_id=policy_id);assets=Path(assets);wz=Path(wz)
     nx=NX(assets/'Skill.nx',deadline);items=None
     result={'schema_version':1,'status':'nx_xml_scalars_verified_not_live_qualified',
         'toolkit_sha256':fingerprint(policy),'skills':{},'items':{},'source_files':{},
@@ -157,9 +157,11 @@ def inspect(class_id,assets,wz,*,seconds=90):
         items=NX(assets/'Item.nx',deadline)
         ids=[policy['resources']['potion']['item_id']]
         if policy['resources']['ammunition']:ids.append(policy['resources']['ammunition']['item_id'])
+        ids += [item['item_id'] for item in policy['resources'].get('etc_items',[])]
         for iid in ids:
-            stem=f'{iid//10000:04d}';path=f'Consume/{stem}.img/0{iid}'
-            raw=xml(f'Item.wz/Consume/{stem}.img.xml')
+            category = 'Etc' if iid//1000000==4 else 'Consume'
+            stem=f'{iid//10000:04d}';path=f'{category}/{stem}.img/0{iid}'
+            raw=xml(f'Item.wz/{category}/{stem}.img.xml')
             values=items.values(path+'/info');other=xml_values(xml_node(raw,f'0{iid}/info'))
             need({k:v for k,v in values.items() if type(v) in (int,float,list)}==
                  {k:v for k,v in other.items() if type(v) in (int,float,list)},'item_nx_xml_mismatch')
@@ -180,9 +182,10 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--class-id',required=True);parser.add_argument('--assets',type=Path,required=True)
     parser.add_argument('--wz',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--policy-id',choices=(POLICY_ID,POLICY_V2_ID),default=POLICY_ID)
     args=parser.parse_args()
     try:
-        report=inspect(args.class_id,args.assets,args.wz)
+        report=inspect(args.class_id,args.assets,args.wz,policy_id=args.policy_id)
         raw=(json.dumps(report,sort_keys=True,separators=(',',':'),allow_nan=False)+'\n').encode()
         fd=os.open(args.output,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
         with os.fdopen(fd,'wb') as out:out.write(raw);out.flush();os.fsync(out.fileno())

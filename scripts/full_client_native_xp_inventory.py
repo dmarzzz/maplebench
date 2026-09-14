@@ -12,7 +12,8 @@ import re
 import stat
 import time
 
-from full_client_skill_toolkit import NATIVE_PROTOCOL, fingerprint, validate_toolkit
+from full_client_skill_toolkit import (NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL as TOOLKIT_V2_PROTOCOL,
+                                      fingerprint, validate_toolkit)
 from full_client_toolkit_fixture import table
 from full_client_score import parse_json, same_json
 
@@ -34,9 +35,10 @@ def identity(value):
     return type(value) is int and 1 <= value < 2**31
 
 
-def sql(character_id, account_id):
+def sql(character_id, account_id, *, include_etc=False):
     need(identity(character_id) and identity(account_id), 'identity_invalid')
-    return f"""SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+    need(type(include_etc) is bool, 'inventory_scope_invalid')
+    query = f"""SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY;
 SELECT JSON_OBJECT('kind','character','character_id',c.id,'account_id',c.accountid,'job',c.job,'level',c.level,'account_logged_in',a.loggedin,
 'transactional_tables',(SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('accounts','characters','inventoryitems') AND ENGINE='InnoDB'))
@@ -45,13 +47,20 @@ SELECT JSON_OBJECT('kind','use','inventoryitemid',inventoryitemid,'itemid',itemi
 FROM inventoryitems WHERE characterid={character_id} AND type=1 AND inventorytype=2 ORDER BY position,inventoryitemid LIMIT 257;
 COMMIT;
 """.encode()
+    if include_etc:
+        extra = f"""SELECT JSON_OBJECT('kind','etc','inventoryitemid',inventoryitemid,'itemid',itemid,'position',position,'quantity',quantity)
+FROM inventoryitems WHERE characterid={character_id} AND type=1 AND inventorytype=4 ORDER BY position,inventoryitemid LIMIT 257;
+""".encode()
+        query = query.replace(b'COMMIT;\n', extra + b'COMMIT;\n')
+    return query
 
 
 def parse(raw, *, native, run_id, server_instance_id, phase, character_id, account_id,
           runtime_manifest_sha256, captured_at_ms):
     from full_client_native import validate_contract, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL
     native = validate_contract(native)
-    need(native['id'] in (NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL), 'toolkit_owner_required')
+    need(native['id'] in (NATIVE_PROTOCOL, TOOLKIT_V2_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL), 'toolkit_owner_required')
+    extended = native['id'] == TOOLKIT_V2_PROTOCOL
     policy = native['skill_toolkit']
     need(isinstance(raw, bytes) and 0 < len(raw) < MAX_BYTES, 'output_bound')
     need(identity(character_id) and identity(account_id), 'identity_invalid')
@@ -63,7 +72,7 @@ def parse(raw, *, native, run_id, server_instance_id, phase, character_id, accou
         rows = [parse_json(line) for line in raw.splitlines() if line.strip()]
     except (ValueError, UnicodeError):
         raise InventoryError('native_inventory_json_invalid') from None
-    need(1 <= len(rows) <= 257 and all(type(row) is dict for row in rows), 'row_bound')
+    need(1 <= len(rows) <= (513 if extended else 257) and all(type(row) is dict for row in rows), 'row_bound')
     header, items = rows[0], rows[1:]
     need(set(header) == {'kind', 'character_id', 'account_id', 'job', 'level',
                          'account_logged_in', 'transactional_tables'} and header['kind'] == 'character'
@@ -73,25 +82,30 @@ def parse(raw, *, native, run_id, server_instance_id, phase, character_id, accou
     need(header['account_logged_in'] == 0 and header['transactional_tables'] == 3, 'offline_transaction_required')
     for row in items:
         need(set(row) == {'kind', 'inventoryitemid', 'itemid', 'position', 'quantity'}
-             and row['kind'] == 'use' and all(type(row[k]) is int for k in row if k != 'kind'), 'item_row_invalid')
-        need(identity(row['inventoryitemid']) and row['itemid'] // 1000000 == 2
+             and row['kind'] in (('use', 'etc') if extended else ('use',))
+             and all(type(row[k]) is int for k in row if k != 'kind'), 'item_row_invalid')
+        need(identity(row['inventoryitemid']) and row['itemid'] // 1000000 == (2 if row['kind'] == 'use' else 4)
              and 1 <= row['position'] <= 256 and 1 <= row['quantity'] <= 32767, 'item_range_invalid')
-    need(len({r['position'] for r in items}) == len(items)
+    need(len({(r['kind'], r['position']) for r in items}) == len(items)
          and len({r['inventoryitemid'] for r in items}) == len(items), 'duplicate_slot_or_row')
-    need(items == sorted(items, key=lambda r: (r['position'], r['inventoryitemid'])), 'order_invalid')
-    return {'schema_version': 1, 'source': 'ordinary_offline_use_inventory',
+    need(items == sorted(items, key=lambda r: (r['kind'] != 'use', r['position'], r['inventoryitemid'])), 'order_invalid')
+    need(all(sum(r['kind'] == kind for r in items) <= 256 for kind in ('use', 'etc')), 'row_bound')
+    value = {'schema_version': 1, 'source': 'ordinary_offline_use_etc_inventory' if extended else 'ordinary_offline_use_inventory',
         'native_acceptance_id': run_id, 'server_instance_id': server_instance_id,
         'protocol': native['id'], 'class_id': native['class_id'], 'toolkit_sha256': fingerprint(policy),
         'model': None, 'api_calls': 0, 'phase': phase, 'captured_at_ms': captured_at_ms,
         'baseline_sha256': native['baseline_sha256'], 'runtime_manifest_sha256': runtime_manifest_sha256,
-        'character': header, 'use_inventory': items, 'class_accepted': False}
+        'character': header, 'use_inventory': [r for r in items if r['kind'] == 'use'], 'class_accepted': False}
+    if extended:
+        value['etc_inventory'] = [r for r in items if r['kind'] == 'etc']
+    return value
 
 
 def expected(native, baseline_sql, *, character_id, account_id):
     """Read exact frozen SQL rows; never execute them or expose account data."""
     from full_client_native import validate_contract, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL
     native = validate_contract(native)
-    need(native['id'] in (NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL) and identity(character_id) and identity(account_id), 'toolkit_owner_required')
+    need(native['id'] in (NATIVE_PROTOCOL, TOOLKIT_V2_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL) and identity(character_id) and identity(account_id), 'toolkit_owner_required')
     policy = validate_toolkit(native['skill_toolkit'])
     need(isinstance(baseline_sql, bytes) and len(baseline_sql) <= 64 * 1024**2
          and hashlib.sha256(baseline_sql).hexdigest() == native['baseline_sha256'], 'baseline_hash_changed')
@@ -123,9 +137,32 @@ def expected(native, baseline_sql, *, character_id, account_id):
     return items
 
 
+def expected_etc(native, baseline_sql, *, character_id, account_id):
+    """V2 binds the entire ETC tab, including unrelated preexisting items."""
+    expected(native, baseline_sql, character_id=character_id, account_id=account_id)
+    if native['id'] != TOOLKIT_V2_PROTOCOL:
+        return []
+    rows = table(baseline_sql.decode('utf8'), 'inventoryitems')[1]
+    selected = [r for r in rows if r['inventorytype'] == '4']
+    need(all(r['type'] == '1' for r in selected), 'baseline_inventory_type_changed')
+    items = [{'kind': 'etc', **{key: int(row[key]) for key in ('inventoryitemid', 'itemid', 'position', 'quantity')}}
+             for row in selected]
+    items.sort(key=lambda r: (r['position'], r['inventoryitemid']))
+    need(len(items) <= 24 and len({r['position'] for r in items}) == len(items)
+         and len({r['inventoryitemid'] for r in items}) == len(items)
+         and all(identity(r['inventoryitemid']) and r['itemid'] // 1000000 == 4
+                 and 1 <= r['position'] <= 24 and 1 <= r['quantity'] <= 32767 for r in items),
+         'baseline_etc_slots_invalid')
+    for supply in native['skill_toolkit']['resources']['etc_items']:
+        need(sum(r['quantity'] for r in items if r['itemid'] == supply['item_id']) == supply['quantity'],
+             'baseline_etc_supply_changed')
+    return items
+
+
 def check_snapshot(value, *, native, identity, phase, runtime_manifest_sha256):
     need(type(value) is dict, 'snapshot_required')
-    raw = b'\n'.join(json.dumps(row).encode() for row in [value.get('character'), *value.get('use_inventory', [])])
+    raw = b'\n'.join(json.dumps(row).encode() for row in
+                    [value.get('character'), *value.get('use_inventory', []), *value.get('etc_inventory', [])])
     checked = parse(raw, native=native, run_id=identity['run_id'], server_instance_id=identity['server_instance_id'],
         phase=phase, character_id=identity['character_id'], account_id=identity['account_id'],
         runtime_manifest_sha256=runtime_manifest_sha256, captured_at_ms=value.get('captured_at_ms'))
@@ -138,12 +175,15 @@ def verify_restored(value, *, native, baseline_sql, identity, runtime_manifest_s
     check_snapshot(value, native=native, identity=identity, phase='after_restore', runtime_manifest_sha256=runtime_manifest_sha256)
     wanted = expected(native, baseline_sql, character_id=identity['character_id'], account_id=identity['account_id'])
     need(value['use_inventory'] == wanted, 'baseline_restore_changed')
+    if native['id'] == TOOLKIT_V2_PROTOCOL:
+        need(value['etc_inventory'] == expected_etc(native, baseline_sql,
+             character_id=identity['character_id'], account_id=identity['account_id']), 'baseline_etc_restore_changed')
     return {'inventory_restored': True, 'class_accepted': False}
 
 
 def verify_triplet(before, after, restored, *, native, baseline_sql, identity, runtime_manifest_sha256, session, reset, final_db):
     # Productivity controls (including idle) can prove cleanup, never class resources.
-    need(native.get('id') == NATIVE_PROTOCOL, 'toolkit_owner_required')
+    need(native.get('id') in (NATIVE_PROTOCOL, TOOLKIT_V2_PROTOCOL), 'toolkit_owner_required')
     for phase, value in zip(PHASES, (before, after, restored)):
         check_snapshot(value, native=native, identity=identity, phase=phase, runtime_manifest_sha256=runtime_manifest_sha256)
     wanted = expected(native, baseline_sql, character_id=identity['character_id'], account_id=identity['account_id'])
@@ -163,16 +203,29 @@ def verify_triplet(before, after, restored, *, native, baseline_sql, identity, r
         need(ammunition > 0, 'positive_star_consumption_required')
     # Soul Arrow makes zero physical arrow consumption valid; its native buff
     # effect is qualified separately. Counts never stand in for observed hits.
-    return {'protocol': 'native-toolkit-resource-proof-v1', 'toolkit_sha256': fingerprint(policy),
+    proof = {'protocol': 'native-toolkit-resource-proof-v1', 'toolkit_sha256': fingerprint(policy),
         'potions_consumed': potions, 'ammunition_consumed': ammunition, 'inventory_restored': True,
         'native_attack_count': None, 'class_accepted': False, 'model_score': None}
+    if native['id'] == TOOLKIT_V2_PROTOCOL:
+        etc = expected_etc(native, baseline_sql, character_id=identity['character_id'], account_id=identity['account_id'])
+        need(before['etc_inventory'] == etc == restored['etc_inventory'], 'baseline_etc_restore_changed')
+        initial = {(r['position'], r['itemid']): r['quantity'] for r in etc}
+        final = {(r['position'], r['itemid']): r['quantity'] for r in after['etc_inventory']}
+        need(set(final) <= set(initial) and all(q <= initial[k] for k, q in final.items()), 'etc_supply_increased_or_moved')
+        declared = {s['item_id'] for s in policy['resources']['etc_items']}
+        need(all(final.get(k, 0) == q for k, q in initial.items() if k[1] not in declared), 'unrelated_etc_consumed')
+        costs = {str(i): sum(q-final.get(k, 0) for k, q in initial.items() if k[1] == i) for i in sorted(declared)}
+        if native['class_id'] == 'night_lord':
+            need(costs.get('4006001', 0) > 0, 'positive_summon_rock_consumption_required')
+        proof.update(protocol='native-toolkit-resource-proof-v2', etc_items_consumed=costs, etc_inventory_restored=True)
+    return proof
 
 
 def collect_owned(backend, phase):
     """Use existing held-lock authority for one bounded, consistent SQL read."""
     from full_client_native import validate_contract, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL
     native = validate_contract(backend.native)
-    need(native['id'] in (NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL) and phase in PHASES, 'toolkit_owner_required')
+    need(native['id'] in (NATIVE_PROTOCOL, TOOLKIT_V2_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL) and phase in PHASES, 'toolkit_owner_required')
     need(native['baseline_sha256'] == backend.config['baseline']['sha256'], 'baseline_hash_changed')
     backend.safe_boundary()
     reset = backend.state.get('reset', {})
@@ -192,7 +245,7 @@ def collect_owned(backend, phase):
     info = defaults.lstat()
     need(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid in (0, os.geteuid())
          and stat.S_IMODE(info.st_mode) == 0o600, 'private_defaults_required')
-    request = sql(config['character_id'], config['account_id'])
+    request = sql(config['character_id'], config['account_id'], include_etc=native['id'] == TOOLKIT_V2_PROTOCOL)
     backend.safe_boundary()
     original = backend.host.deadline; backend.host.deadline = min(original, time.monotonic() + 5)
     try:

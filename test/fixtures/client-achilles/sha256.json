@@ -1,0 +1,10 @@
+{
+  "Character/CharStats.cpp": "437da1b992f6808e5b69347ee4a355cca3d10dd8e0c79acc2f245fc8b4a99cc3",
+  "Character/CharStats.h": "804c8b65624a92fdf6ce91ceb1c9354c7f2aa7bf3e8bc604134c283f117508f2",
+  "Character/PassiveBuffs.cpp": "6312034e67ba79c7d9f0f20b40f13d94b8187a5ce5cb5490d73b6bd9c03edba7",
+  "Character/Player.cpp": "c499a212d019b1d0b128c74e86b5cec4625aaa97307475b1e073a8cebb712cb8",
+  "Gameplay/Combat/Attack.h": "b7a0ec51aef83d18fe80ac3fb00c47c006eb2e9881edd5205ef80d991d53441b",
+  "LICENSE": "10ede613cce81dc5381ec9c1a08dcfdcd425d2a186a3efb25231ee3ba308585a",
+  "Net/Packets/AttackAndSkillPackets.h": "2f87f76d4eb718b9121e2bfac3bc37f1383ed8888c53182da9dcf7de8045afd4",
+  "server/TakeDamageHandler.java": "fad268b602975e3304c9e7234affdeba7593d26e07523bd3f255cdf314bc8543"
+}

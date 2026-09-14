@@ -1,0 +1,15 @@
+{
+  "Gameplay/MapleMap/Mob.cpp": "2c311926f384d9b4666e359e8232178bfa005568a39934f5774acd177379bbde",
+  "Gameplay/MapleMap/Mob.h": "cb9f5b92c211b5ab115a72badda7a8c33d06f4c91ecb3887fb2179202bbbed89",
+  "Gameplay/MapleMap/MapMobs.cpp": "306e447bff8b4edebd45599b06f62d5f0f073402cc0e32deaa3f695390347f9f",
+  "Gameplay/MapleMap/MapMobs.h": "ebbe1900266d955ae87340358ba70d98799c39fc9b9cd5552bf2bbbdb531a7eb",
+  "Net/Handlers/MapObjectHandlers.cpp": "05bd4ac0c54ecf23ab365ca9b2bda9405299496aae58a5d1246af39f128e458d",
+  "Net/Handlers/MapObjectHandlers.h": "564a56d5e8ff7ed0d2eaf1c17e009f15ef57ea10d744f314ce18a797d4f12851",
+  "Net/Handlers/Helpers/MobTemporaryStatMasks.h": "6417d90d814ba3b9a6819c60d0cbc8824e9e288568005ffc28041881179f034a",
+  "Net/PacketSwitch.cpp": "f352e7326ab105d93e61c534b4c5d3c834df80ff0464680378a1051996c0d4cf",
+  "Net/InPacket.h": "737e703716e4fbda2b7be119d41423d4e7ed59bf0525e8a73c9424dcab8c7574",
+  "Net/InPacket.cpp": "ec09970ea8ac89e2865b5b06fb4ef8977b9311527c75d295d44e9d120b605da6",
+  "Net/PacketError.h": "60f90dd27fda80ba0a8bde503f84e6758e2fe43137b180b2ee537df799cfd447",
+  "PacketCreator.java": "dfee4fb246a6f2b821c103bacc45bfb3bf8ed9aa4c0d9ac12ed129016a84c660",
+  "MonsterStatus.java": "4770f8286f9a5c4c9e8bda4b347977077c19ebfb540ffba24627aadbac001522"
+}
