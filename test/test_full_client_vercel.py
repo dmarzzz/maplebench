@@ -113,10 +113,47 @@ class VercelPublicationTests(unittest.TestCase):
         again=self.publish();self.assertEqual(again['status'],'published');self.assertEqual(len(self.calls),3)
         self.assertFalse(again['deployment_allowed'])
 
+    def test_long_primary_payload_keeps_explicit_video_and_total_size_limits(self):
+        # Sizes are synthetic; fingerprint I/O is mocked to test admission at
+        # exact boundaries without allocating hundreds of megabytes of media.
+        manifest=publication.verify_package(self.package,self.content)
+        video=next(name for name in self.files if name.endswith('.webm'))
+        self.files[video]['bytes']=97*1024**2
+        manifest['content']['files']=copy.deepcopy(self.files)
+        def save():
+            self.inventory.write_text(json.dumps({'files':self.files}))
+            self.inventory_sha=driver.digest(self.inventory.read_bytes())
+        def check():
+            return driver.checked_payload(self.payload,self.inventory,self.inventory_sha,manifest)
+        def measured(path,maximum):
+            expected=self.files[path.relative_to(self.payload).as_posix()]
+            self.assertLessEqual(expected['bytes'],maximum)
+            return expected
+        save()
+        with patch.object(driver,'stable_fingerprint',side_effect=measured):
+            with self.assertRaisesRegex(ValueError,'public_payload_file_limit'):check()
+            manifest['content'].update(protocol='full-client-xp-windows-v1',horizon_seconds=1800)
+            check()
+            self.files[video]['bytes']=driver.MAX_PAYLOAD-sum(ref['bytes'] for name,ref in self.files.items() if name!=video)
+            manifest['content']['files']=copy.deepcopy(self.files);save();check()
+            self.files[video]['bytes']+=1;save()
+            with self.assertRaisesRegex(ValueError,'public_payload_size_limit'):check()
+
     def test_lost_reply_reconciles_existing_metadata_without_resubmission(self):
         self.lose_reply=True
         self.assertEqual(self.publish()['status'],'published')
         self.assertEqual(sum(c[0]=='deploy' for c in self.calls),1)
+
+    def test_long_primary_does_not_extend_unbound_supplemental_video(self):
+        # The supplemental size is synthetic; refusal must precede its hash I/O.
+        manifest=publication.verify_package(self.package,self.content)
+        manifest['content'].update(protocol=publication.XP_PROTOCOL,horizon_seconds=1800)
+        name='recordings/'+'f'*32+'.webm'
+        self.files[name]={'sha256':'0'*64,'bytes':97*1024**2}
+        self.inventory.write_text(json.dumps({'files':self.files}))
+        self.inventory_sha=driver.digest(self.inventory.read_bytes())
+        with self.assertRaisesRegex(ValueError,'public_payload_file_limit'):
+            driver.checked_payload(self.payload,self.inventory,self.inventory_sha,manifest)
 
     def test_uncertain_outcome_can_be_reconciled_later_never_redeployed(self):
         self.lose_reply=True;self.visible=False
@@ -274,3 +311,103 @@ class VercelPublicationTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+class ParallelPublicVerificationTests(unittest.TestCase):
+    """Bounded mock streams; no network or deployment."""
+    def setUp(self):
+        import tempfile
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.stage=Path(self.tmp.name)
+        self.files={}
+        for i in range(8):
+            name=f'{i}.webm';raw=(str(i)*40).encode();(self.stage/name).write_bytes(raw)
+            self.files[name]={'bytes':len(raw),'sha256':driver.digest(raw)}
+
+    def response(self,url,maximum,headers,deadline):
+        name=url.rsplit('/',1)[-1];raw=(self.stage/name).read_bytes()
+        if headers:
+            data=raw[:maximum]
+            return {'status':206,'bytes':len(data),'sha256':driver.digest(data),
+                    'headers':{'content-range':f'bytes 0-{maximum-1}/{len(raw)}'}}
+        return {'status':200,'bytes':len(raw),'sha256':driver.digest(raw),'headers':{}}
+
+    def test_four_streams_overlap_but_receipt_preserves_input_order(self):
+        import threading,time
+        barrier=threading.Barrier(4);lock=threading.Lock();active=0;peak=0;started=[]
+        def fetch(url,maximum,headers,deadline):
+            nonlocal active,peak
+            with lock:active+=1;peak=max(peak,active)
+            try:
+                if not headers:
+                    index=int(url.rsplit('/',1)[-1][0]);started.append(index)
+                    if index<4:barrier.wait(timeout=2)
+                    time.sleep((7-index)*.002)
+                return self.response(url,maximum,headers,deadline)
+            finally:
+                with lock:active-=1
+        proof=driver.verify_public('https://example.test',self.stage,self.files,time.monotonic()+3,fetch)
+        self.assertEqual(peak,4);self.assertEqual(sorted(started),list(range(8)))
+        self.assertEqual([r['path'] for r in proof['files']],list(self.files))
+        self.assertEqual([r['path'] for r in proof['video_ranges']],list(self.files))
+
+    def test_mismatch_stops_unscheduled_files_and_preserves_failure(self):
+        import threading,time
+        barrier=threading.Barrier(4);started=[]
+        def fetch(url,maximum,headers,deadline):
+            name=url.rsplit('/',1)[-1];started.append(name);barrier.wait(timeout=2)
+            if name!='0.webm':time.sleep(.04)
+            result=self.response(url,maximum,headers,deadline)
+            if name=='0.webm':result['sha256']='0'*64
+            return result
+        with self.assertRaisesRegex(ValueError,'public_content_mismatch'):
+            driver.verify_public('https://example.test',self.stage,self.files,time.monotonic()+3,fetch)
+        self.assertEqual(set(started),{'0.webm','1.webm','2.webm','3.webm'})
+
+    def test_deadline_before_and_after_custom_fetch_fails_closed(self):
+        import time
+        calls=[]
+        def fetch(*args):calls.append(args);time.sleep(.03);return self.response(*args)
+        with self.assertRaisesRegex(ValueError,'publication_deadline'):
+            driver.verify_public('https://example.test',self.stage,self.files,time.monotonic()-1,fetch)
+        self.assertEqual(calls,[])
+        with self.assertRaisesRegex(ValueError,'publication_deadline'):
+            driver.verify_public('https://example.test',self.stage,self.files,time.monotonic()+.01,fetch)
+        self.assertLessEqual(len(calls),4)
+
+    def test_transport_error_and_incorrect_range_never_return_receipt(self):
+        import time
+        def unavailable(*args):raise driver.ProjectionError('public_file_unavailable')
+        with self.assertRaisesRegex(ValueError,'public_file_unavailable'):
+            driver.verify_public('https://example.test',self.stage,self.files,time.monotonic()+2,unavailable)
+        def incorrect(*args):
+            result=self.response(*args)
+            if args[2]:result['headers']['content-range']='bytes 1-16/40'
+            return result
+        with self.assertRaisesRegex(ValueError,'public_video_range_mismatch'):
+            driver.verify_public('https://example.test',self.stage,self.files,time.monotonic()+2,incorrect)
+
+    def test_default_fetch_streams_bounded_chunks_and_observes_cancellation(self):
+        import io,threading,time
+        payload=b'x'*(2*1024*1024+3);sizes=[];cancelled=threading.Event()
+        class Response:
+            status=200;headers={}
+            def __init__(self,interrupt=False):self.data=io.BytesIO(payload);self.interrupt=interrupt
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def read(self,size):
+                sizes.append(size)
+                value=self.data.read(size)
+                if self.interrupt:cancelled.set()
+                return value
+        class Opener:
+            def __init__(self,response):self.response=response
+            def open(self,*args,**kwargs):return self.response
+        with patch.object(driver,'build_opener',return_value=Opener(Response())):
+            result=driver.read_public('https://example.test/a.webm',len(payload),{},time.monotonic()+2)
+        self.assertEqual(result['sha256'],driver.digest(payload));self.assertGreater(len(sizes),2)
+        self.assertTrue(all(0<size<=1024*1024 for size in sizes))
+        sizes.clear()
+        with patch.object(driver,'build_opener',return_value=Opener(Response(True))):
+            with self.assertRaisesRegex(ValueError,'public_verification_cancelled'):
+                driver.read_public('https://example.test/a.webm',len(payload),{},time.monotonic()+2,cancelled=cancelled)
+        self.assertEqual(sizes,[1024*1024])

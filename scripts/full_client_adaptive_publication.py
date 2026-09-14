@@ -32,7 +32,7 @@ def checked_profile(plan, scenario_path, public_profile):
             and profile['class_id']!='undeclared' and profile['task_id'] in TASKS,
             'explicit_adaptive_public_profile_required')
     class_names={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Lightning Arch Mage',
-                 'shadower':'Shadower','bishop':'Bishop'}
+                 'night_lord':'Night Lord','shadower':'Shadower','bishop':'Bishop'}
     require(protocol['profile']['class_name']==class_names[profile['class_id']],
             'adaptive_public_class_mismatch')
     return profile,scenario
@@ -76,11 +76,28 @@ def verified_adaptive_score(reader,folder,journal):
 
 def public_cycles(result,checked):
     trace=result['adaptive'];cycles=[]
+    from full_client_adaptive import validate_protocol
+    limits=validate_protocol(trace['limits']);wall_ms=limits['wall_seconds']*1000
+    # Input receipts establish a key press, not that the server cast a spell.
+    skills={key:{'key':key,'name':name,'acknowledged_inputs':0,'held_ms':0}
+            for key,name in trace['limits']['profile']['skill_keys'].items()}
+    if 'skill_toolkit' in limits:
+        for skill in limits['skill_toolkit']['skills']:
+            skills[skill['slot']].update(declared_level=skill['level'],role=skill['route'],
+                                        description=skill['description'])
     allowed_status={'executed','invalid_program','budget_rejected','window_closed','response_saved','not_executed','completed'}
     allowed_reason={'completed','program_complete','program_error','program_timeout','output_limit',
                     'time_limit','action_limit','rpc_limit','death'}
     for cycle in trace['cycles']:
         execution=mapping(cycle.get('execution'))
+        for step in execution.get('steps',[]):
+            if (step.get('kind')=='sdk' and step.get('method')=='pressKeys'
+                    and mapping(step.get('result')).get('accepted') is True):
+                keys,duration=step['args']
+                for key in keys:
+                    if key in skills:
+                        skills[key]['acknowledged_inputs']+=1
+                        skills[key]['held_ms']+=duration
         reason=execution.get('reason')
         row={'index':cycle['index'],'requested_model':model(cycle.get('requested_model')),
              'returned_model':model(cycle.get('returned_model')),
@@ -88,12 +105,12 @@ def public_cycles(result,checked):
              'api_outcome':cycle.get('api_outcome') if cycle.get('api_outcome') in ('confirmed','not_started') else 'unknown',
              'timing':{k:v for k,v in mapping(cycle.get('timing')).items()
                        if k in ('observed_ms','window_closed_ms','api_started_ms','api_ended_ms','program_started_ms','program_ended_ms')
-                       and integer(v,305000) is not None},
+                       and integer(v,wall_ms+5000) is not None},
              'usage':{k:v for k,v in mapping(cycle.get('usage')).items()
-                      if k in ('input_tokens','output_tokens','total_tokens') and integer(v,240000) is not None},
-             'actions':integer(execution.get('actions'),2400),
-             'action_attempts':integer(execution.get('actionAttempts'),2400),
-             'sdk_requests':integer(execution.get('rpcRequests'),10000),
+                      if k in ('input_tokens','output_tokens','total_tokens') and integer(v,limits['max_total_tokens']) is not None},
+             'actions':integer(execution.get('actions'),limits['max_actions']),
+             'action_attempts':integer(execution.get('actionAttempts'),limits['max_actions']),
+             'sdk_requests':integer(execution.get('rpcRequests'),limits['max_sdk_requests']),
              'execution_reason':reason if reason in allowed_reason else None,
              'artifact_sha256':{k:v['sha256'] for k in ('request','response','program','choice','execution_receipt')
                                 if isinstance((v:=cycle.get(k)),dict)}}
@@ -103,11 +120,27 @@ def public_cycles(result,checked):
                 or (k=='alive' and type(v) is bool)}
         cycles.append(row)
     public={'verification':'all_cycle_receipts_rechecked','cycles':cycles,
-        'counters':checked['counters'],'wall_budget_ms':300000,'wall_elapsed_ms':checked['wall_elapsed_ms'],
+        'counters':checked['counters'],'wall_budget_ms':wall_ms,'wall_elapsed_ms':checked['wall_elapsed_ms'],
         'api_ms':checked['api_ms'],'end_reason':trace['reason'],
-        'full_wall_budget_used':checked['wall_elapsed_ms']==300000,
+        'full_wall_budget_used':checked['wall_elapsed_ms']==wall_ms,
         'authoritative_peak_xp_per_minute':None,'ranked':False,
         'class_profile':{k:trace['limits']['profile'][k] for k in ('id','class_name','level','skill_keys')}}
+    public['skill_usage']={'basis':'acknowledged_skill_inputs','skills':list(skills.values()),
+        'successful_casts':None,'server_effects_verified':False}
+    if 'skill_toolkit' in limits:
+        from full_client_skill_toolkit import fingerprint
+        public['skill_usage']['toolkit_sha256']=fingerprint(limits['skill_toolkit'])
+        public['skill_usage']['declared_starting_resources']=limits['skill_toolkit']['resources']
+    public['timing_breakdown']={
+        'basis':'verified_cycle_intervals',
+        'model_wait_ms':checked['api_ms'],
+        'program_ms':sum(c['timing']['program_ended_ms']-c['timing']['program_started_ms']
+                         for c in trace['cycles'] if c.get('execution') is not None),
+        'observation_only_ms':max(0,trace['horizon_wait']['ended_ms']-trace['horizon_wait']['started_ms'])
+                              if trace.get('horizon_wait') else 0}
+    for source,target in zip(trace['cycles'],cycles):
+        for field in ('execution_slot','execution_budget'):
+            if field in source:target[field]=source[field]
     if trace['limits'].get('horizon_policy'):
         public['horizon_policy']=trace['limits']['horizon_policy']
         wait=trace.get('horizon_wait')
@@ -119,19 +152,28 @@ def public_cycles(result,checked):
 
 def playback_cue(result,recording,actions):
     if not actions:return None
+    maximum=335000
+    protocol=mapping(mapping(result.get('controller')).get('adaptiveProtocol'))
+    if protocol.get('wall_seconds')==1800:
+        from full_client_adaptive import validate_protocol
+        from full_client_capture import LONG_ENCODED_FRAME_POLICY
+        try:validate_protocol(protocol)
+        except ValueError:return None
+        if recording.get('capture_duration_policy')!=LONG_ENCODED_FRAME_POLICY:return None
+        maximum=1835000
     timeline=result['timeline'];start=recording.get('start_ms');end=recording.get('end_ms')
     duration=recording.get('duration_ms');uncertainty=recording.get('timing_uncertainty_ms')
     begin=timeline.get('program_started_ms');finish=timeline.get('program_ended_ms')
     target=timeline.get('first_input_started_ms');ack=timeline.get('first_input_acked_ms')
     if (recording.get('timing_method')!='browser_monotonic_duration_with_measured_clock_offset'
-            or not number(start,-335000,335000) or not number(end,0,670000)
-            or not number(duration,1,335000) or not number(uncertainty,0,100)
-            or not number(begin,0,335000) or not number(finish,begin,335000)
+            or not number(start,-maximum,maximum) or not number(end,0,2*maximum)
+            or not number(duration,1,maximum) or not number(uncertainty,0,100)
+            or not number(begin,0,maximum) or not number(finish,begin,maximum)
             or not start<=begin<finish<=end or abs(end-start-duration)>100
             or not number(target,begin,finish) or not number(ack,target,finish)):
         return None
     origin=0
-    if recording.get('capture_duration_policy',{}).get('id')=='post-render-encoded-frame-v1':
+    if recording.get('capture_duration_policy',{}).get('id') in ('post-render-encoded-frame-v1','post-render-encoded-frame-1800-v1'):
         origin=recording.get('first_frame_offset_ms')
         if not number(origin,0,duration):return None
     offset=target-start-origin

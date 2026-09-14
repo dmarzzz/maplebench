@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {PostRenderRecorder,muxWebM,LIMITS} from '../ui/full-client/webcodecs-recorder.js';
+import {readFileSync} from 'node:fs';
+import {PostRenderRecorder,muxWebM,LIMITS,LONG_ENCODED_FRAME_POLICY} from '../ui/full-client/webcodecs-recorder.js';
 
 function harness(behavior={}){
   let time=1000,wallDelta=0;const calls=[],instances=[],frames=[],readbacks=[];
@@ -184,7 +185,7 @@ test('unsupported configuration cannot fall back to MediaRecorder',async()=>{
 test('every submitted frame requires quality mode without changing capture budgets',async()=>{
   const h=harness();await two(h);await h.recorder.stop();
   assert.deepEqual(h.instances[0].config,{codec:'vp8',width:32,height:24,bitrate:2000000,
-    framerate:30,latencyMode:'quality',hardwareAcceleration:'prefer-software'});
+    framerate:60,latencyMode:'quality',hardwareAcceleration:'prefer-software'});
   assert.equal(LIMITS.maxPendingFrames,8);
 });
 test('support that changes or omits quality mode is refused before encoding',async()=>{
@@ -222,4 +223,78 @@ test('muxer refuses gaps, nonzero origin, nonintegral ticks and missing first ke
   for(const frames of [[{...first,timestamp:1000},first],[first,{...first,timestamp:2000}],
     [{...first,duration:1500},first],[{...first,key:false},{...first,timestamp:1000}]])
     assert.throws(()=>muxWebM({width:32,height:24,frames,ledgerBytes:new Uint8Array()}),/invalid_mux_frame/);
+});
+
+test('explicit1800 policy supports finite full-duration mux while legacy refuses',()=>{
+  const canvas={width:32,height:24};
+  assert.throws(()=>new PostRenderRecorder(canvas,{maxDurationMs:1835000}),/invalid_capture_limit/);
+  assert.doesNotThrow(()=>new PostRenderRecorder(canvas,{policy:LONG_ENCODED_FRAME_POLICY,maxDurationMs:1835000}));
+  assert.throws(()=>new PostRenderRecorder(canvas,{policy:{...LONG_ENCODED_FRAME_POLICY,max_frames:120001}}),/invalid_capture_policy/);
+  const frames=Array.from({length:1800},(_,i)=>({timestamp:i*1000000,duration:1000000,key:true,data:new Uint8Array([16,0,0])}));
+  assert.throws(()=>muxWebM({width:32,height:24,frames,ledgerBytes:new Uint8Array()}),/capture_byte_or_duration_limit/);
+  const blob=muxWebM({width:32,height:24,frames,ledgerBytes:new Uint8Array(),policy:LONG_ENCODED_FRAME_POLICY});
+  assert.ok(blob.size>0&&blob.size<LONG_ENCODED_FRAME_POLICY.max_webm_bytes);
+});
+
+// Execute the production controller hook against the real recorder. Only the
+// codec is fake; snapshots, clock quantization, terminal duration and ledger
+// originate in the unchanged production recorder.
+function controllerHook(h){
+  const source=readFileSync(new URL('../ui/full-client/controller.js',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('    const animate = () => {'),source.indexOf('    item.onRendered = animate;'));
+  let now=1010;
+  const item={autoRunId:'native',encodedMode:true,encodedRecorder:h.recorder,recorderStarted:true,frames:0,maxGap:0,lastFrameAt:null};
+  const hooks=[],snapshots=[];
+  const draw=()=>{snapshots.push(now);h.canvasPixels.fill(hooks.length);};
+  const originalNow=Date.now;Date.now=()=>100000+now;
+  const animate=new Function('capture','item','run','performance','draw','notice',body+'return animate;')(
+    item,item,{id:'native'},{now:()=>now},draw,{});
+  return {item,hooks,snapshots,render(at){now=at;h.set(at);hooks.push(at);animate();},restore(){Date.now=originalNow;}};
+}
+test('120Hz selection preserves actual post-render pixels, timestamps and forced final frame',async()=>{
+  const h=harness();await h.recorder.initialize();const c=controllerHook(h);
+  try{
+    for(let i=0;i<12;i++)c.render(1010+i*1000/120);
+    const regular=c.snapshots.length;assert.ok(regular>=4&&regular<=6);
+    assert.equal(c.snapshots[0],1010);
+    for(let i=1;i<regular;i++)assert.ok(c.snapshots[i]-c.snapshots[i-1]>=1000/60);
+    const finalAt=c.hooks.at(-1)+1;let stop;
+    assert.ok(finalAt-c.snapshots.at(-1)<1000/60);
+    c.item.finalFrameRequested=true;c.item.finishOnFrame=()=>{stop=h.recorder.stop();};c.render(finalAt);
+    const result=await stop;
+    assert.equal(c.snapshots.at(-1),finalAt);assert.equal(c.snapshots.length,regular+1);
+    const inputs=h.instances[0].inputs;
+    assert.deepEqual(inputs.map(f=>f.timestamp),c.snapshots.map(at=>Math.floor(at-1010)*1000));
+    assert.deepEqual(inputs.map(f=>f.pixels[0]),c.snapshots.map(at=>c.hooks.indexOf(at)+1));
+    assert.equal(result.measurements.duration_ms,finalAt-1010);
+    assert.equal(result.encoder_receipt.encoded_frames,c.snapshots.length);
+    assert.equal(inputs.at(-1).duration,1000);
+  }finally{c.restore();}
+});
+test('low render cadence retains real gaps and still refuses a stale post-render frame',async()=>{
+  const h=harness();await h.recorder.initialize();const c=controllerHook(h);
+  try{
+    for(const at of [1010,1110,1210])c.render(at);
+    assert.deepEqual(c.snapshots,[1010,1110,1210]);
+    assert.deepEqual(h.instances[0].inputs.map(f=>f.duration),[100000,100000]);
+    assert.throws(()=>c.render(2211),/capture_frame_gap/);
+    await assert.rejects(h.recorder.stop(),/capture_frame_gap/);
+  }finally{c.restore();}
+});
+
+test('cadence selection cannot conceal an invalid clock or already failed recorder',async()=>{
+  for(const at of [1009,NaN,Infinity]){
+    const h=harness();await h.recorder.initialize();const c=controllerHook(h);
+    try{
+      c.render(1010);
+      assert.throws(()=>c.render(at),/capture_clock_or_duration/);
+      await assert.rejects(h.recorder.stop(),/capture_clock_or_duration/);
+    }finally{c.restore();}
+  }
+  const h=harness();await h.recorder.initialize();const c=controllerHook(h);
+  try{
+    c.render(1010);h.recorder.abort('encoder_error');
+    assert.throws(()=>c.render(1011),/encoder_error/);
+    await assert.rejects(h.recorder.stop(),/encoder_error/);
+  }finally{c.restore();}
 });

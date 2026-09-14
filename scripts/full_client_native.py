@@ -4,11 +4,14 @@ import json
 import re
 
 from full_client_capture import CAPTURE_DURATION_POLICY, ENCODED_FRAME_POLICY, validate_duration_policy
+from full_client_skill_toolkit import NATIVE_PROTOCOL as TOOLKIT_NATIVE_PROTOCOL, toolkit, profile as toolkit_profile
 
 PROTOCOL = 'scripted-native-acceptance-v1'
 NATIVE_V2_PROTOCOL = 'scripted-native-acceptance-v2'
 NATIVE_V3_PROTOCOL = 'scripted-native-acceptance-v3'
 NATIVE_V4_PROTOCOL = 'scripted-native-acceptance-v4'
+PRODUCTIVITY_PROTOCOL = 'scripted-native-productivity-v1'
+PRODUCTIVITY_V2_PROTOCOL = 'scripted-native-productivity-v2'
 PROFILES = {
     'hero': {'id':'hero-180','class_name':'Hero','level':180,
              'skill_keys':{'PRIMARY_SKILL':'Brandish','SECONDARY_SKILL':'Combo Attack','BUFF_1':'Booster','BUFF_2':'Maple Warrior'}},
@@ -16,18 +19,44 @@ PROFILES = {
                   'skill_keys':{'PRIMARY_SKILL':'Hurricane','SECONDARY_SKILL':'Arrow Rain','BUFF_1':'Soul Arrow : Bow','BUFF_2':'Sharp Eyes'}},
     'ice_lightning_arch_mage': {'id':'ice-lightning-v1','class_name':'Ice/Lightning Arch Mage','level':180,
                               'skill_keys':{'PRIMARY_SKILL':'Chain Lightning','SECONDARY_SKILL':'Teleport','BUFF_1':'Magic Guard','BUFF_2':'Spell Booster'}},
+    'night_lord': {'id':'night-lord-v1','class_name':'Night Lord','level':180,
+                   'skill_keys':{'PRIMARY_SKILL':'Triple Throw','SECONDARY_SKILL':'Avenger','BUFF_1':'Claw Booster','BUFF_2':'Haste'}},
 }
 
-def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL):
-    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
+def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL, control='active'):
+    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,PRODUCTIVITY_PROTOCOL,PRODUCTIVITY_V2_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
         raise ValueError('invalid_native_fixture')
+    if protocol==PRODUCTIVITY_PROTOCOL:
+        if control not in ('active','idle'):raise ValueError('invalid_native_control')
+        policy=toolkit(class_id)
+        return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
+            'baseline_sha256':baseline_sha256,'control':control,'wall_seconds':120,
+            'max_actions':128,'max_sdk_requests':600,'capture_max_ms':125000,
+            'capture_duration_policy':dict(ENCODED_FRAME_POLICY)}
+    if protocol==PRODUCTIVITY_V2_PROTOCOL:
+        if control not in ('active','idle'):raise ValueError('invalid_native_control')
+        policy=toolkit(class_id)
+        return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
+            'baseline_sha256':baseline_sha256,'control':control,'wall_seconds':180,
+            'max_actions':256,'max_sdk_requests':900,'capture_max_ms':185000,
+            'capture_duration_policy':dict(ENCODED_FRAME_POLICY)}
+    if control!='active':raise ValueError('invalid_native_control')
+    if protocol==TOOLKIT_NATIVE_PROTOCOL:
+        policy=toolkit(class_id)
+        return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
+            'baseline_sha256':baseline_sha256,'wall_seconds':60,'max_actions':32,'max_sdk_requests':180,
+            'capture_max_ms':75000,'capture_duration_policy':dict(ENCODED_FRAME_POLICY)}
+    # This new, scoped fixture has no historical v1/v2/v3 recipe. An explicit
+    # v4 request binds its profile and source without changing prior fixtures.
+    if class_id=='night_lord' and protocol!=NATIVE_V4_PROTOCOL:
+        raise ValueError('night_lord_requires_native_v4')
     return {'id':protocol,'class_id':class_id,'profile':json.loads(json.dumps(PROFILES[class_id])),
             'baseline_sha256':baseline_sha256,'wall_seconds':30,'max_actions':12,'max_sdk_requests':100,
             'capture_max_ms':45000,'capture_duration_policy':dict(CAPTURE_DURATION_POLICY if protocol==PROTOCOL else ENCODED_FRAME_POLICY)}
 
 def validate_contract(value):
     if not isinstance(value,dict):raise ValueError('invalid_native_acceptance')
-    expected=contract(value.get('class_id'),value.get('baseline_sha256'),protocol=value.get('id'))
+    expected=contract(value.get('class_id'),value.get('baseline_sha256'),protocol=value.get('id'),control=value.get('control','active'))
     if json.dumps(value,sort_keys=True,allow_nan=False)!=json.dumps(expected,sort_keys=True):
         raise ValueError('invalid_native_acceptance')
     validate_duration_policy(value['capture_duration_policy'])
@@ -56,6 +85,9 @@ if(nearby.length){const dx=nearby[0].x-first.character.x;
 
 def program(value):
     value=validate_contract(value);class_id=value['class_id']
+    if value['id']==PRODUCTIVITY_PROTOCOL:return _productivity_program(value)
+    if value['id']==PRODUCTIVITY_V2_PROTOCOL:return _productivity_v2_program(value)
+    if value['id']==TOOLKIT_NATIVE_PROTOCOL:return _toolkit_program(value)
     if value['id']==PROTOCOL:return _legacy_program(value)
     if value['id']==NATIVE_V3_PROTOCOL and class_id!='hero':return _targeted_program(value)
     if value['id']==NATIVE_V4_PROTOCOL and class_id!='hero':return _targeted_program(value,horizontal_limit=300)
@@ -96,6 +128,105 @@ for(let step=0;step<4;step++){
     # Keep a short passive tail for end-frame and native-effect inspection.
     code+='await sdk.wait(1500);\nawait sdk.observe();\n'
     return code
+
+
+def _productivity_program(value):
+    """Internal SDK control, never model gameplay or native effect certification.
+
+    A sticky target avoids dividing many small hits across several high-HP mobs.
+    Target disappearance is only an observation; ordinary native XP/save evidence
+    must independently establish productive combat. The paired idle control uses
+    the same duration and observations without a single physical input.
+    """
+    code="""// Scripted productivity control; no model, search, score or hidden game API.
+const end=Date.now()+116000;
+const room=()=>Date.now()+3500<end;
+let actions=0;
+async function input(keys,ms){
+  if(!room()||actions>=128)return false;
+  const result=await sdk.pressKeys(keys,ms);actions++;
+  if(result.accepted!==true)throw new Error('control_input_not_accepted');
+  return true;
+}
+"""
+    if value['control']=='idle':
+        return code+"""while(room()){
+  const scene=await sdk.observe();
+  if(!scene.character.alive)break;
+  await sdk.wait(1000);
+}
+await sdk.observe();
+"""
+    buffs={'hero':['SECONDARY_SKILL','BUFF_1'], 'bowmaster':['BUFF_1','BUFF_2','SKILL_7'],
+           'ice_lightning_arch_mage':['BUFF_1','BUFF_2'], 'night_lord':['BUFF_1','BUFF_2']}
+    code+='for(const key of '+json.dumps(buffs[value['class_id']])+""" ){
+  if(!await input([key],100))break;
+  await sdk.wait(2500);
+  if(!(await sdk.observe()).character.alive)return;
+}
+let targetId=null;
+for(let step=0;step<100&&room()&&actions<125;step++){
+  let scene=await sdk.observe();
+  if(!scene.character.alive)break;
+  if(scene.character.hp<scene.character.maxHp*0.4||scene.character.mp<scene.character.maxMp*0.2){
+    if(!await input(['HP_POTION'],100))break;
+    await sdk.wait(800);continue;
+  }
+  const near=scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=50);
+  let target=near.find(m=>m.objectId===targetId);
+  if(!target)target=near.sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x))[0];
+  if(!target){targetId=null;await sdk.wait(1000);continue;}
+  targetId=target.objectId;
+  let dx=target.x-scene.character.x;
+  const range=__RANGE__;
+  if(!await input([dx<0?'LEFT':'RIGHT'],Math.abs(dx)>range?300:30))break;
+  scene=await sdk.observe();
+  if(!scene.character.alive)break;
+  target=scene.monsters.find(m=>m.objectId===targetId);
+  if(!target||Math.abs(target.y-scene.character.y)>50){await sdk.wait(200);continue;}
+  const afterDx=target.x-scene.character.x;
+  if(Math.abs(afterDx)>range||((afterDx<0)!==(dx<0))){await sdk.wait(200);continue;}
+  if(!await input(['PRIMARY_SKILL'],100))break;
+  await sdk.wait(1500);
+}
+// A quiet tail keeps both controls within the same declared observation horizon.
+while(room()){
+  if(!(await sdk.observe()).character.alive)break;
+  await sdk.wait(1000);
+}
+await sdk.observe();
+"""
+    return code.replace('__RANGE__','100' if value['class_id']=='hero' else '250')
+
+def _productivity_v2_program(value):
+    """Three-minute successor; leave every historical recipe byte unchanged.
+
+    Reuse the frozen combat strategy and expand only its finite allowances.
+    New inputs stop after 172.5 seconds. The observation-only tail targets
+    176 seconds, leaving four seconds for launch/settlement within the executor's
+    180-second ceiling. Actual receipts own elapsed time and early death.
+    """
+    code=_productivity_program(value)
+    for old,new in (
+        ('const end=Date.now()+116000;', 'const end=Date.now()+176000;'),
+        ('actions>=128', 'actions>=256'),
+        ('step<100&&room()&&actions<125', 'step<150&&room()&&actions<253'),
+    ):
+        # Idle never contains the active targeting loop. Every other frozen
+        # substitution must match once, so edits cannot silently widen a loop.
+        expected=0 if value['control']=='idle' and old.startswith('step<') else 1
+        if code.count(old)!=expected:raise ValueError('native_productivity_v1_recipe_changed')
+        code=code.replace(old,new,1)
+    return '// Scripted productivity v2: 180-second ceiling; no model or ranking.\n'+code+"""
+// This final segment observes only; it cannot issue gameplay inputs.
+const tailEnd=end;
+while(Date.now()<tailEnd){
+  if(!(await sdk.observe()).character.alive)break;
+  const remaining=tailEnd-Date.now();
+  if(remaining<1)break;
+  await sdk.wait(Math.min(1000,remaining));
+}
+"""
 
 def _targeted_program(value,*,horizontal_limit=110):
     # This is a distinct, explicitly requested recipe. V1/V2 bytes are retained.
@@ -158,3 +289,64 @@ await sdk.pressKeys([direction,'SECONDARY_SKILL'],300);
 
 def fingerprint(value):
     return hashlib.sha256((json.dumps(validate_contract(value),sort_keys=True,separators=(',',':'))+'\n').encode()).hexdigest()
+
+
+def _toolkit_program(value):
+    """Finite evidence recipe: no successful effect is inferred from a key ACK."""
+    policy=value['skill_toolkit']
+    code="// New toolkit native qualification candidate; no model or score.\n"
+    if value['class_id']=='ice_lightning_arch_mage':
+        # Isolate the movement skill before attack animations, buffs or combat.
+        # Thirty milliseconds limits ordinary walking; paired observations and
+        # the recording still need review for contact, collision and MP use.
+        code+="""const teleportStart=await sdk.observe();
+const teleportNearby=teleportStart.monsters.filter(m=>Math.abs(m.y-teleportStart.character.y)<=50)
+  .sort((a,b)=>Math.abs(a.x-teleportStart.character.x)-Math.abs(b.x-teleportStart.character.x));
+const teleportDirection=teleportNearby.length&&teleportNearby[0].x>=teleportStart.character.x?'LEFT':'RIGHT';
+for(const direction of [teleportDirection,teleportDirection==='LEFT'?'RIGHT':'LEFT']){
+  await sdk.observe();
+  await sdk.pressKeys([direction,'SECONDARY_SKILL'],30);
+  await sdk.observe();
+  await sdk.wait(1100);
+  await sdk.observe();
+}
+"""
+    code+="""
+await sdk.observe();
+await sdk.pressKeys(['JUMP'],300);
+await sdk.observe();
+await sdk.wait(1100);
+await sdk.observe();
+"""
+    # Include Combo before sword attacks and Soul Arrow before any bow attack.
+    for skill in policy['skills']:
+        if skill['route']=='buff':
+            code+=f"await sdk.pressKeys(['{skill['slot']}'],300);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    code+="""let scene=await sdk.observe();
+for(let i=0;i<4;i++){
+  const near=scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=50)
+    .sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x));
+  if(!near.length)break;
+  const dx=near[0].x-scene.character.x;
+  await sdk.pressKeys([dx<0?'LEFT':'RIGHT'],Math.abs(dx)>180?400:60);
+  scene=await sdk.observe();
+  if(Math.abs(dx)<=180)break;
+}
+"""
+    # Three primary casts give Hero ordinary contact opportunities to build
+    # orbs; this does not assert that contact or an orb increase occurred.
+    for _ in range(3):
+        code+="await sdk.pressKeys(['PRIMARY_SKILL'],600);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    code+="await sdk.pressKeys(['ATTACK'],600);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    for skill in sorted(policy['skills'],key=lambda skill:skill['route']=='movement'):
+        if skill['slot']=='PRIMARY_SKILL' or skill['route']=='buff':continue
+        if value['class_id']=='ice_lightning_arch_mage' and skill['route']=='movement':continue
+        if skill['skill_id']==1111003:
+            # Coma spent the previous orbs; give ordinary Brandish contact new
+            # opportunities before Panic. Still require observed native orbs.
+            for _ in range(3):
+                code+="await sdk.pressKeys(['PRIMARY_SKILL'],600);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+        keys=['RIGHT',skill['slot']] if skill['route']=='movement' else [skill['slot']]
+        code+=f"await sdk.pressKeys({json.dumps(keys)},300);\nawait sdk.wait(1100);\nawait sdk.observe();\n"
+    code+="await sdk.pressKeys(['MP_POTION'],100);\nawait sdk.wait(1500);\nawait sdk.observe();\n"
+    return code

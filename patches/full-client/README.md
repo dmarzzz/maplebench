@@ -25,6 +25,12 @@ The first patch:
 - Publishes numeric character and monster state from the game loop for the
   program controller. This is client telemetry, not server-authoritative scoring.
 
+The first patch's eight-update catch-up cap is insufficient at low render FPS.
+Apply the separately versioned `0014-fixed-step-catch-up.patch` for the candidate
+repair, then qualify actual simulation speed. Preserving queued ticks alone
+does not prevent growing time debt. See the
+[timing diagnosis](../../docs/FULL_CLIENT_FIXED_STEP_TIMING.md).
+
 The second patch opens ordinary key configuration when Backslash is pressed and
 has no configured binding. Existing bindings and chat text input retain their
 normal behavior. It changes no action mappings or server state by itself.
@@ -89,3 +95,33 @@ original three generic packets becoming three attack packets, with target and
 effect dispatch, while fixture buffs remain generic skill-use packets. This is
 source verification, not proof of native animation, server damage or class
 qualification. All earlier native failures remain unchanged.
+
+## Expanded training toolkit candidate
+
+For the explicit new skill-toolkit fixture only, apply
+`0006-training-toolkit-attack-flags.patch` after 0005. It adds the ordinary attack
+classification for Strafe, Arrow Bomb, Inferno, Ice Strike, Thunder Spear and
+Blizzard, and marks Drain ranged. It leaves buffs and unknown skills on their
+existing routes. The compiled-method regression exercises the real dispatcher;
+the expanded kits still require a new WASM build and native qualification. See
+[the exact toolkit and resource contract](../../docs/FULL_CLIENT_SKILL_TOOLKITS.md).
+
+## Baseline combat repairs
+
+The next candidate applies `0008-spell-damage.patch`,
+`0009-bow-expert.patch`, and the separately reviewed later numbered patches
+after the existing 0001–0006 source basis. There is no 0007 Flash Jump patch:
+canonical movement remains unverified. Never infer an absent patch is applied.
+
+0008 connects INT/equipment magic, spell power, mastery and explorer
+amplification to the actual magic damage path. See
+[the formula and its limits](../../docs/FULL_CLIENT_SPELL_DAMAGE.md).
+0009 applies Bow Expert's bow-only mastery and WATK bonus without allowing
+ordinary mastery to overwrite it because of passive iteration order.
+0011 reads Arrow Bomb's native `x` damage field only when its `damage` field is
+absent; other skills retain their existing interpretation.
+
+These source regressions do not establish a live-qualified, complete class kit.
+Freeze the exact combined build and pass the
+[baseline release checks](../../docs/BASELINE_RELEASE_CHECKLIST.md) before
+admitting model comparisons. Historical programs and recordings remain unchanged.

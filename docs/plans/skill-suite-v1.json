@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "design_id": "skill-suite-v1-draft-2026-09-14",
+  "status": "proposed_fixture_bindings_pending",
+  "execution_enabled": false,
+  "models": [
+    "gpt-6-astra",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna"
+  ],
+  "worker_lanes": [
+    "A",
+    "B",
+    "C"
+  ],
+  "methodology": "../NEXT_SIMULATION_PLAN.md",
+  "analysis": {
+    "primary_skill_metric": "successes/evaluable_trials",
+    "coverage_metric": "evaluable_trials/planned_trials",
+    "uncertainty": "95_percent_Wilson_descriptive_plus_variant_stratified_paired_bootstrap",
+    "bootstrap_resamples": 10000,
+    "analysis_seed": 20260914,
+    "comparative_trials_per_cell": 24,
+    "pool_development_pilot": false,
+    "overall_score": null
+  },
+  "short_task_contract": {
+    "new_protocol_required": true,
+    "wall_seconds": 120,
+    "max_api_requests": 4,
+    "max_output_tokens": 3000,
+    "aggregate_token_ceiling": 96000,
+    "program_seconds": 10,
+    "max_actions": 600,
+    "max_sdk_requests": 2000,
+    "request_timeout_seconds": 30,
+    "minimum_request_admission_seconds": 15,
+    "request_closeout_reserve_seconds": 10,
+    "settlement_seconds": 5
+  },
+  "extended_task_contract": {
+    "new_protocol_required": true,
+    "wall_seconds": 300,
+    "max_api_requests": 12,
+    "max_output_tokens": 3000,
+    "aggregate_token_ceiling": 240000,
+    "program_seconds": 20,
+    "max_actions": 1600,
+    "max_sdk_requests": 6000,
+    "request_timeout_seconds": 50,
+    "minimum_request_admission_seconds": 15,
+    "request_closeout_reserve_seconds": 10,
+    "settlement_seconds": 5
+  },
+  "tasks": [
+    {
+      "id": "platforming-v1",
+      "website_id": "platforming",
+      "group": "Control",
+      "class_id": "ice_lightning_arch_mage",
+      "level": 180,
+      "wall_seconds": 120,
+      "planned_variants": 3,
+      "native_binding_sha256": null,
+      "scorer_sha256": null,
+      "qualification_status": "required",
+      "result": null
+    },
+    {
+      "id": "native-teleport-v1",
+      "website_id": "teleport",
+      "group": "Control",
+      "class_id": "ice_lightning_arch_mage",
+      "level": 180,
+      "wall_seconds": 120,
+      "planned_variants": 3,
+      "native_binding_sha256": null,
+      "scorer_sha256": null,
+      "qualification_status": "required",
+      "result": null
+    },
+    {
+      "id": "potion-use-v1",
+      "website_id": "potion",
+      "group": "Resources",
+      "class_id": "ice_lightning_arch_mage",
+      "level": 180,
+      "wall_seconds": 120,
+      "planned_variants": 3,
+      "native_binding_sha256": null,
+      "scorer_sha256": null,
+      "qualification_status": "required",
+      "result": null
+    },
+    {
+      "id": "buff-upkeep-v1",
+      "website_id": "buff",
+      "group": "Resources",
+      "class_id": "ice_lightning_arch_mage",
+      "level": 180,
+      "wall_seconds": 300,
+      "planned_variants": 3,
+      "native_binding_sha256": null,
+      "scorer_sha256": null,
+      "qualification_status": "required",
+      "result": null
+    },
+    {
+      "id": "portal-navigation-v1",
+      "website_id": "navigation",
+      "group": "Planning",
+      "class_id": "ice_lightning_arch_mage",
+      "level": 180,
+      "wall_seconds": 300,
+      "planned_variants": 3,
+      "native_binding_sha256": null,
+      "scorer_sha256": null,
+      "qualification_status": "required",
+      "result": null
+    },
+    {
+      "id": "return-to-hunt-v1",
+      "website_id": "recovery",
+      "group": "Planning",
+      "class_id": "ice_lightning_arch_mage",
+      "level": 180,
+      "wall_seconds": 300,
+      "planned_variants": 3,
+      "native_binding_sha256": null,
+      "scorer_sha256": null,
+      "qualification_status": "required",
+      "result": null
+    }
+  ],
+  "phases": [
+    {
+      "id": "skill-development",
+      "task_ids": [
+        "platforming-v1",
+        "native-teleport-v1",
+        "potion-use-v1"
+      ],
+      "variants": 2,
+      "repetitions_per_variant": 4,
+      "trials": 96,
+      "max_control_worker_hours": 3.2,
+      "max_api_requests": 384,
+      "max_aggregate_token_ceiling": 9216000
+    },
+    {
+      "id": "skill-comparative",
+      "task_ids": [
+        "platforming-v1",
+        "native-teleport-v1",
+        "potion-use-v1",
+        "buff-upkeep-v1",
+        "portal-navigation-v1",
+        "return-to-hunt-v1"
+      ],
+      "variants": 3,
+      "repetitions_per_variant": 8,
+      "trials": 576,
+      "max_control_worker_hours": 33.6,
+      "max_api_requests": 4608,
+      "max_aggregate_token_ceiling": 96768000
+    },
+    {
+      "id": "training-qualification",
+      "task_ids": [
+        "training-hero",
+        "training-bowmaster",
+        "training-ice-lightning"
+      ],
+      "variants": 1,
+      "repetitions_per_variant": 1,
+      "trials": 12,
+      "max_control_worker_hours": 1.0,
+      "max_api_requests": 144,
+      "max_aggregate_token_ceiling": 2880000
+    },
+    {
+      "id": "training-long-proposed",
+      "task_ids": [
+        "training-hero",
+        "training-bowmaster",
+        "training-ice-lightning"
+      ],
+      "variants": 1,
+      "repetitions_per_variant": 8,
+      "trials": 96,
+      "max_control_worker_hours": 48.0,
+      "max_api_requests": 6912,
+      "max_aggregate_token_ceiling": 138240000
+    }
+  ],
+  "required_bindings": {
+    "worker_inventories": null,
+    "native_release": null,
+    "observation_schema": null,
+    "task_controller": null,
+    "model_request_configuration": null,
+    "provider_prices_and_spend_cap": null,
+    "recording_storage": null
+  },
+  "run_authorization": null,
+  "publication_plan": {
+    "comparative_task_shards": 6,
+    "attempts_per_comparative_shard": 96,
+    "development_task_shards": 3,
+    "attempts_per_development_shard": 32,
+    "requires_new_skill_publication_adapter": true,
+    "suite_manifest_required": true
+  }
+}

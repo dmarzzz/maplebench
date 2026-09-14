@@ -3,9 +3,10 @@
 This authenticates consistency within trusted collector files, not the host.
 Persisted net XP is verified separately from native logout/database receipts.
 """
-from full_client_adaptive import PROTOCOL, PASSIVE_STOP_REASONS, digest, prompt, validate_protocol
+from full_client_adaptive import PROTOCOL, PASSIVE_STOP_REASONS, digest, prompt, validate_protocol, FINAL_SLOT_POLICY, LONG_FINAL_SLOT_POLICY, final_slot_offer
 from full_client_score import EvidenceError, parse_json, read_artifact_bytes, same_json
 from maple_agent import model_decision, validate_rpc
+from full_client_skill_toolkit import sdk_scenario
 import math
 import json
 
@@ -19,7 +20,7 @@ def references(result):
     """Only the fixed relative cycle layout may be copied from the relay."""
     trace = result['adaptive']
     refs = [(result['adaptiveTrace'], 'adaptive.json'), (trace['instructions'], 'adaptive-prompt.txt')]
-    require(isinstance(trace['cycles'], list) and len(trace['cycles']) <= 16)
+    require(isinstance(trace['cycles'], list) and len(trace['cycles']) <= (72 if trace.get('limits',{}).get('wall_seconds')==1800 else 16))
     for index, cycle in enumerate(trace['cycles']):
         require(cycle.get('index') == index and type(cycle['index']) is int)
         for key, filename in (('request', 'api-request.json'), ('response', 'api-response.json'),
@@ -33,11 +34,58 @@ def references(result):
     return [ref for ref, _ in refs]
 
 
-def verify_result(result, root, *, protocol, model):
+def native_level_check(trace, root, context):
+    """A progression variant needs actual hashed native transaction/save coverage.
+
+    The native bundle caller additionally verifies DB snapshots, ordinary logout,
+    header/session identity, native logs and frozen scenario references. This
+    helper cannot grant a native score or replace that enclosing verification.
+    """
+    from full_client_xp_windows import validate_contract, score_ledger, MAX_LEDGER_BYTES
+    require(isinstance(context,dict) and set(context)=={'contract','identity','initial','final',
+        'window','committed_at_ms','ledger'}
+        and all(isinstance(context[k],dict) for k in ('contract','identity','initial','final','window','ledger')))
+    contract=validate_contract(context['contract']);policy=trace['limits']['progression_policy']
+    require(policy['xp_window_protocol']==contract['id']
+        and context['identity'].get('run_id')==trace['run_id']
+        and context['initial'].get('level')==trace['limits']['profile']['level']
+        and same_json(context['window'],{'start_at_ms':trace['timing']['wall_started_at_ms'],
+            'deadline_at_ms':trace['timing']['wall_deadline_at_ms'],'window_ms':contract['window_ms']}))
+    raw=read_artifact_bytes(root,context['ledger'],'native_progression',maximum=MAX_LEDGER_BYTES)
+    score=score_ledger(raw,identity=context['identity'],initial=context['initial'],final=context['final'],
+        window=context['window'],normalization=contract['normalization'],committed_at_ms=context['committed_at_ms'])
+    require(score['experience_table_sha256']==contract['experience_table_sha256'])
+    changes=[]
+    for line in raw.splitlines():
+        row=parse_json(line)
+        if row['kind']=='header':changes.append((row['wall_ms'],row['level']))
+        elif row['kind']=='xp_transaction':changes.append((row['wall_ms'],row['after_level']))
+    def check(observation,low,high):
+        level=observation.get('character',{}).get('level');initial=context['initial']['level']
+        require(type(level) is int and initial<=level<=policy['maximum_level'])
+        # Render freshness is <1500ms. Native millisecond/monotonic calibration
+        # permits 25ms; SDK receipts have only their enclosing program interval.
+        begin=trace['timing']['wall_started_at_ms']+low-1525
+        end=trace['timing']['wall_started_at_ms']+high+25
+        current=initial;allowed={initial}
+        for at,after in changes:
+            if at<begin:current=after;allowed={after}
+            elif at<=end:allowed.update(range(current,after+1));current=after
+            else:break
+        require(level in allowed)
+    return check
+
+
+def verify_result(result, root, *, protocol, model, native_progression=None):
     p = validate_protocol(protocol)
     trace = result['adaptive']
     horizon=p.get('horizon_policy')
+    wall_ms=p['wall_seconds']*1000
+    progression=p.get('progression_policy')
+    require(progression is not None or native_progression is None)
+    final_policy=horizon in (FINAL_SLOT_POLICY,LONG_FINAL_SLOT_POLICY)
     reserve_ms=(50+p['program_seconds']+5)*1000 if horizon else None
+    final_seen=False
     for ref in references(result):
         read_artifact_bytes(root, ref, 'adaptive', maximum=16 * 1024 * 1024)
     require(same_json(parse_json(read_artifact_bytes(root, result['adaptiveTrace'], 'adaptive')), trace))
@@ -50,7 +98,8 @@ def verify_result(result, root, *, protocol, model):
             and same_json(result['controller'].get('adaptiveProtocol'), p)
             and trace.get('status') == result['controller'].get('status') == 'completed'
             and trace.get('error') is None and trace.get('reason') in
-                ('wall_time_limit', 'action_limit', 'sdk_request_limit', 'token_reservation_limit', 'death', 'api_request_limit', 'request_window_closed'))
+                ('wall_time_limit', 'action_limit', 'sdk_request_limit', 'token_reservation_limit', 'death', 'api_request_limit', 'request_window_closed','final_program_complete'))
+    require(final_policy or trace['reason']!='final_program_complete')
     require(horizon is not None or trace['reason']!='request_window_closed' and 'horizon_wait' not in trace)
     instructions = prompt(p)
     require(read_artifact_bytes(root, trace['instructions'], 'instructions') == instructions.encode())
@@ -58,11 +107,13 @@ def verify_result(result, root, *, protocol, model):
     for key in ('wall_started_at_ms', 'wall_deadline_at_ms', 'wall_ended_at_ms',
                 'controller_ended_ms', 'wall_elapsed_ms', 'cleanup_overrun_ms'):
         require(type(timing.get(key)) is int and 0 <= timing[key] <= 2**53-1)
-    require(timing['wall_deadline_at_ms'] == timing['wall_started_at_ms'] + 300000
+    require(timing['wall_deadline_at_ms'] == timing['wall_started_at_ms'] + wall_ms
             and timing['wall_ended_at_ms'] == timing['wall_started_at_ms'] + timing['controller_ended_ms']
-            and timing['wall_elapsed_ms'] == min(300000, timing['controller_ended_ms'])
-            and timing['cleanup_overrun_ms'] == max(0, timing['controller_ended_ms'] - 300000)
+            and timing['wall_elapsed_ms'] == min(wall_ms, timing['controller_ended_ms'])
+            and timing['cleanup_overrun_ms'] == max(0, timing['controller_ended_ms'] - wall_ms)
             and timing['cleanup_overrun_ms'] <= 5000)
+    check_level=native_level_check(trace,root,native_progression) if progression else None
+    if check_level:check_level(result['initial'],0,0)
     total = {key: 0 for key in ('api_requests_started', 'api_responses_confirmed', 'reserved_tokens',
              'actual_input_tokens', 'actual_output_tokens', 'actual_total_tokens',
              'actions', 'action_attempts', 'sdk_requests')}
@@ -76,9 +127,19 @@ def verify_result(result, root, *, protocol, model):
     stopped_for=wait.get('reason') if isinstance(wait,dict) else trace['reason']
     for index, cycle in enumerate(trace['cycles']):
         t = cycle['timing']
-        require(type(t.get('observed_ms')) is int and last <= t['observed_ms'] <= 300000
+        require(not final_seen)
+        slot=cycle.get('execution_slot')
+        if final_policy:
+            require(isinstance(slot,dict) and set(slot)=={'kind','program_max_seconds','admission_seconds'}
+                    and slot['kind'] in ('ordinary','final'))
+            cycle_reserve_ms=slot['admission_seconds']*1000
+            final_seen=slot['kind']=='final' and cycle.get('api_outcome')=='confirmed'
+        else:
+            cycle_reserve_ms=reserve_ms
+        require(type(t.get('observed_ms')) is int and last <= t['observed_ms'] <= wall_ms
                 and cycle['requested_model'] == model)
         if horizon:observation(cycle['observation'])
+        if check_level:check_level(cycle['observation'],t['observed_ms'],t['observed_ms'])
         if cycle['status'] == 'budget_rejected':
             require(index == len(trace['cycles'])-1 and stopped_for == 'token_reservation_limit'
                     and cycle['api_outcome'] == 'not_started' and cycle['request'] is None and cycle['response'] is None
@@ -93,22 +154,27 @@ def verify_result(result, root, *, protocol, model):
                 and cycle['usage'] is None and cycle['returned_model'] is None
                 and 'api_started_ms' not in t and 'api_ended_ms' not in t
                 and type(t.get('window_closed_ms')) is int
-                and max(t['observed_ms'],300000-reserve_ms)<=t['window_closed_ms']<=timing['controller_ended_ms'])
+                and max(t['observed_ms'],wall_ms-cycle_reserve_ms)<=t['window_closed_ms']<=timing['controller_ended_ms'])
             last=t['window_closed_ms']
             if cycle['request'] is None:continue
         request = parse_json(read_artifact_bytes(root, cycle['request'], 'request'))
         identity = {'maplebench_run_id': trace['run_id'], 'maplebench_cycle_index': str(index)}
         value = parse_json(request['input'])
         require(set(value) == {'observation', 'recent_programs', 'remaining_seconds', 'remaining_actions',
-                               'remaining_sdk_requests', 'cycle_index'}
+                               'remaining_sdk_requests', 'cycle_index'} | ({'execution_slot'} if final_policy else set())
                 and value['cycle_index'] == index and type(value['cycle_index']) is int
                 and same_json(value['observation'], cycle['observation'])
                 and (index != 0 or same_json(value['observation'], result['initial']))
                 and same_json(value['recent_programs'], recent[-2:])
                 and value['remaining_actions'] == p['max_actions'] - total['action_attempts']
                 and value['remaining_sdk_requests'] == p['max_sdk_requests'] - total['sdk_requests']
-                and type(value['remaining_seconds']) in (int, float) and 0 < value['remaining_seconds'] <= 300
+                and type(value['remaining_seconds']) in (int, float) and 0 < value['remaining_seconds'] <= p['wall_seconds']
                 and request.get('metadata') == identity)
+        if final_policy:
+            require(same_json(value['execution_slot'],slot)
+                    and same_json(slot,final_slot_offer(value['remaining_seconds'],p['max_api_requests']-index)))
+            if 'api_started_ms' in t:
+                require(wall_ms-t['api_started_ms']-1<=value['remaining_seconds']*1000<=wall_ms-t['observed_ms']+1)
         if window_closed:
             def unsent_request(_url, body, _key, _timeout):
                 require(same_json(body | {'metadata':identity},request))
@@ -136,11 +202,11 @@ def verify_result(result, root, *, protocol, model):
         reservation = len(json.dumps(request, ensure_ascii=False).encode()) + 1024 + p['max_output_tokens']
         require(cycle['token_reservation'] == reservation
                 and all(type(t.get(k)) is int for k in ('api_started_ms', 'api_ended_ms'))
-                and t['observed_ms'] <= t['api_started_ms'] < 300000
+                and t['observed_ms'] <= t['api_started_ms'] < wall_ms
                 and t['api_started_ms'] <= t['api_ended_ms'] <= timing['controller_ended_ms'])
         if horizon:
             require(type(cycle.get('request_timeout_seconds')) is int and cycle['request_timeout_seconds']==50
-                and t['api_started_ms']<=300000-reserve_ms
+                and t['api_started_ms']<=wall_ms-cycle_reserve_ms
                 and t['api_ended_ms']-t['api_started_ms']<=55000)
         total['api_requests_started'] += 1; total['api_responses_confirmed'] += 1
         total['reserved_tokens'] += reservation
@@ -162,12 +228,20 @@ def verify_result(result, root, *, protocol, model):
             else:
                 require(index == len(trace['cycles'])-1 and trace['reason'] in ('death', 'wall_time_limit'))
             continue
+        program_seconds=p['program_seconds']
+        if final_policy:
+            budget=cycle.get('execution_budget')
+            require(type(t.get('program_started_ms')) is int and isinstance(budget,dict)
+                    and set(budget)=={'program_seconds','deadline_ms'} and budget['deadline_ms']==(wall_ms-5000)
+                    and type(budget['program_seconds']) in (int,float)
+                    and 3<=budget['program_seconds']<=min(slot['program_max_seconds'],((wall_ms-5000)-t['program_started_ms'])/1000)+0.001)
+            program_seconds=budget['program_seconds']
         require(choice is not None and cycle.get('program') and cycle['status'] == 'executed'
                 and same_json(parse_json(read_artifact_bytes(root, cycle['execution_receipt'], 'execution')), execution)
                 and all(type(t.get(k)) is int for k in ('program_started_ms', 'program_ended_ms'))
-                and last <= t['program_started_ms'] < 300000
+                and last <= t['program_started_ms'] < wall_ms
                 and t['program_started_ms'] <= t['program_ended_ms'] <= timing['controller_ended_ms']
-                and t['program_ended_ms'] - t['program_started_ms'] <= p['program_seconds']*1000 + 5000
+                and t['program_ended_ms'] - t['program_started_ms'] <= program_seconds*1000 + 5000
                 and execution.get('reason') in ('completed', 'program_complete', 'program_error', 'program_timeout', 'output_limit', 'time_limit', 'action_limit', 'rpc_limit', 'death'))
         cycle_steps = execution['steps']
         require(isinstance(cycle_steps, list) and all(isinstance(step, dict) for step in cycle_steps))
@@ -180,11 +254,12 @@ def verify_result(result, root, *, protocol, model):
                 and type(execution.get('rpcRequests')) is int and execution['rpcRequests'] >= len(cycle_steps))
         held_ms=0; seen=set()
         observation(cycle['observation']); observation(cycle['pre_execution_observation'])
+        if check_level:check_level(cycle['pre_execution_observation'],t['program_started_ms'],t['program_started_ms'])
         for step_index, step in enumerate(cycle_steps):
             if step.get('kind')=='rejected_rpc':
                 rpc=step.get('rpc'); invalid=False
                 try:
-                    validate_rpc(rpc,{'adapter':'full-client','protocol':PROTOCOL})
+                    validate_rpc(rpc,{'adapter':'full-client',**sdk_scenario(p)})
                     invalid=rpc['id'] in seen
                 except (ValueError,TypeError):invalid=True
                 require(invalid and isinstance(step.get('error'),str) and len(step['error'])<=512)
@@ -193,20 +268,23 @@ def verify_result(result, root, *, protocol, model):
             seen.add(step['rpcId'])
             try:
                 method, argument=validate_rpc({'type':'rpc','id':step['rpcId'],'method':step.get('method'),
-                    'args':step.get('args')},{'adapter':'full-client','protocol':PROTOCOL})
+                    'args':step.get('args')},{'adapter':'full-client',**sdk_scenario(p)})
             except ValueError:raise EvidenceError('adaptive: invalid SDK arguments') from None
             receipt=step.get('result'); require(isinstance(receipt,dict) and receipt.get('error') in (None,''))
             if method=='pressKeys':
                 require(receipt.get('accepted') is True); observation(receipt.get('observation'))
+                if check_level:check_level(receipt['observation'],t['program_started_ms'],t['program_ended_ms'])
                 held_ms+=argument['durationMs']
-            elif method=='observe':observation(receipt)
+            elif method=='observe':
+                observation(receipt)
+                if check_level:check_level(receipt,t['program_started_ms'],t['program_ended_ms'])
             else:
                 waited=receipt.get('waitedMs')
                 require(type(waited) is int and 0<=waited<=argument
                         and (waited==argument or step_index==len(cycle_steps)-1
                              and execution['reason'] in ('time_limit','program_timeout')))
                 held_ms+=waited
-        require(held_ms<=min(p['program_seconds']*1000,300000-t['program_started_ms'])+5
+        require(held_ms<=min(program_seconds*1000,((wall_ms-5000) if final_policy else wall_ms)-t['program_started_ms'])+5
                 and held_ms<=t['program_ended_ms']-t['program_started_ms']+5
                 and execution['actionAttempts']==accepted)
         total['actions'] += accepted; total['action_attempts'] += execution['actionAttempts']
@@ -225,6 +303,7 @@ def verify_result(result, root, *, protocol, model):
             and result['program']['actions'] == total['actions']
             and result['program']['actionAttempts'] == total['action_attempts']
             and result['program']['rpcRequests'] == total['sdk_requests'])
+    if final_policy and trace['reason']=='final_program_complete':require(final_seen)
     if horizon:
         require('horizon_wait' in trace)
         if wait is None:
@@ -232,6 +311,7 @@ def verify_result(result, root, *, protocol, model):
         else:
             require(isinstance(wait,dict) and set(wait)=={'reason','started_ms','ended_ms','counters','samples'}
                 and wait['reason'] in PASSIVE_STOP_REASONS
+                and (final_policy or wait['reason']!='final_program_complete')
                 and trace['reason'] in (wait['reason'],'death')
                 and all(type(wait.get(k)) is int for k in ('started_ms','ended_ms'))
                 and last<=wait['started_ms']<=wait['ended_ms']<=timing['controller_ended_ms']
@@ -248,11 +328,12 @@ def verify_result(result, root, *, protocol, model):
                     and all(type(v) is bool if k=='alive' else type(v) in (int,float) and math.isfinite(v)
                             for k,v in sample['character'].items()))
                 observation(sample|{'ready':True})
+                if check_level:check_level(sample,sample['observed_ms'],sample['observed_ms'])
                 previous=sample['observed_ms'];dead=sample['character']['alive'] is False
             require(wait['ended_ms']-previous<=5000)
             if trace['reason']=='death':require(dead)
-            else:require(not dead and timing['wall_elapsed_ms']==300000 and wait['ended_ms']>=300000)
-            if wait['reason']=='request_window_closed':require(wait['started_ms']>=300000-reserve_ms)
+            else:require(not dead and timing['wall_elapsed_ms']==wall_ms and wait['ended_ms']>=wall_ms)
+            if wait['reason']=='request_window_closed':require(wait['started_ms']>=wall_ms-cycle_reserve_ms)
     timeline = result['timeline']; origin = timing['wall_started_at_ms'] - result['timing']['startedAtMs']
     require(origin >= 0 and timeline['adaptive_started_ms'] == timeline['program_started_ms'] == origin
             and timeline['api_started_ms'] == intervals[0]['started_at_ms'] - result['timing']['startedAtMs']
@@ -261,13 +342,13 @@ def verify_result(result, root, *, protocol, model):
             and timeline['program_ended_ms'] == timeline['adaptive_ended_ms']
             and result['timing']['endedAtMs'] >= result['timing']['startedAtMs'] + timeline['program_ended_ms'] - 5)
     reason=stopped_for
-    if reason=='wall_time_limit':require(timing['wall_elapsed_ms']==300000)
+    if reason=='wall_time_limit':require(timing['wall_elapsed_ms']==wall_ms)
     if reason=='api_request_limit':require(total['api_requests_started']==p['max_api_requests'])
     if reason=='action_limit':require(total['action_attempts']==p['max_actions'])
     if reason=='sdk_request_limit':require(total['sdk_requests']==p['max_sdk_requests'])
     first, ack = timing.get('first_input_started_ms'), timing.get('first_input_acked_ms')
     if total['actions']:
-        require(type(first) is int and type(ack) is int and 0 <= first <= ack <= 300000
+        require(type(first) is int and type(ack) is int and 0 <= first <= ack <= wall_ms
                 and any(c.get('execution') and c['execution']['actions'] > 0
                         and c['timing']['program_started_ms'] <= first <= ack <= c['timing']['program_ended_ms']
                         for c in trace['cycles'])

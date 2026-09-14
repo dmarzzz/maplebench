@@ -108,18 +108,19 @@ assert.equal(view().keys,'Keys: Chain Lightning');
     def run_dispatch(self, checks):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
         dispatch=source[source.index('  const commandDeadline = '):source.index('  const poll=async()=>{')]
+        mappings=source[source.index('  const keyNames = '):source.index('  const held = ')]
         fixture="""
 const assert=require('node:assert/strict');
 let activeCommand=null,acknowledgement=null,clock=100;
 const performance={now:()=>clock};
-const skillKeyNames={PRIMARY_SKILL:'KeyA',BUFF_1:'KeyD'},keyNames={LEFT:'ArrowLeft'}, held=new Map(), cancelledRuns=new Set(['cancelled']);
+const held=new Map(), cancelledRuns=new Set(['cancelled']);
 const document={hidden:false},relayConnected=true,run={id:'cancelled'},game={focus(){}};
 const capture={recorderStarted:true,frames:1,autoRunId:'cancelled',stopping:false};
 const observe=()=>({ready:true}),fresh=()=>true,renderHeader=()=>{};
-const events=[],key=(code,type)=>events.push(type),release=code=>{clearTimeout(held.get(code));held.delete(code);key(code,'keyup');};
+const events=[],keyCodes=[],key=(code,type)=>{events.push(type);keyCodes.push([code,type]);},release=code=>{clearTimeout(held.get(code));held.delete(code);key(code,'keyup');};
 const releaseAll=()=>{};
 """
-        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+dispatch+checks],
+        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+mappings+dispatch+checks],
             capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)
 
@@ -148,6 +149,24 @@ const releaseAll=()=>{};
  assert.equal(acknowledgement.ok,true);assert.equal(events.filter(x=>x==='keydown').length,1);
  await executeInput({id:'native-skill',runId:'native',keys:['PRIMARY_SKILL'],durationMs:30},clock+1000);
  assert.equal(acknowledgement.ok,true);assert.equal(events.filter(x=>x==='keydown').length,2);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
+
+    @unittest.skipUnless(shutil.which('node'),'Node is required for the browser dispatcher regression')
+    def test_toolkit_keys_require_policy_and_declared_slots(self):
+        self.run_dispatch("""
+(async()=>{
+ run.id='toolkit';capture.autoRunId='toolkit';
+ run.adaptiveProtocol={id:'full-client-adaptive-pilot-v1'};
+ await executeInput({id:'old',runId:'toolkit',keys:['SKILL_5'],durationMs:30},clock+1000).catch(()=>{});
+ assert.equal(acknowledgement.ok,false);assert.equal(events.length,0);
+ run.adaptiveProtocol.skill_toolkit={id:'full-client-skill-toolkit-v1',skills:[{slot:'SKILL_5'},{slot:'SKILL_8'}]};
+ await executeInput({id:'new',runId:'toolkit',keys:['SKILL_5','SKILL_8'],durationMs:30},clock+1000);
+ assert.equal(acknowledgement.ok,true);
+ assert.deepEqual(keyCodes.filter(x=>x[1]==='keydown'),[['KeyG','keydown'],['KeyX','keydown']]);
+ const before=keyCodes.length;
+ await executeInput({id:'unmapped',runId:'toolkit',keys:['SKILL_10'],durationMs:30},clock+1000).catch(()=>{});
+ assert.equal(acknowledgement.ok,false);assert.equal(keyCodes.length,before);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)
 

@@ -28,6 +28,7 @@ import uuid
 
 from full_client_score import verify_trial_bundle
 from full_client_freeze import FREEZE_ERROR_CODES
+import full_client_xp_windows as xp_windows
 
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\Z")
@@ -62,6 +63,7 @@ invalid_admin_ancillary_data too_many_guard_descriptors invalid_admin_request_si
 invalid_docker_binding docker_binding_required docker_binding_mismatch docker_executable_changed
 untrusted_docker_executable invalid_docker_socket invalid_docker_command docker_binding_unavailable
 readiness_policy_required invalid_readiness_policy readiness_timeout readiness_state_changed
+invalid_skill_preview_protocol skill_preview_private_contract_required skill_preview_baseline_mismatch
 """.split())
 RUNTIME_ERROR_CODES = frozenset("""
 account_state_unavailable account_still_online actual_api_request_mismatch actual_api_response_mismatch
@@ -109,6 +111,9 @@ unowned_server_cleanup_refused unprivileged_services_required unsupported_progra
 unsupported_runtime_config waiting_browser_required web_entrypoint_mismatch web_interpreter_mismatch
 web_process_missing web_process_predates_frozen_sources web_runtime_paths_mismatch web_uid_mismatch
 world_helper_or_worker_active world_or_queue_lock_not_owned
+xp_window_opt_in_required unsupported_xp_window_protocol invalid_xp_window_contract
+native_xp_ledger_class_missing native_xp_initialization_missing native_xp_header_invalid
+xp_window_evidence_incomplete
 """.split()) | FREEZE_ERROR_CODES | RELAY_ERROR_CODES
 
 
@@ -238,12 +243,14 @@ def read_private_json(path, *, expected_sha256=None):
 
 def validate_spec(spec):
     require(isinstance(spec, dict), "invalid_spec")
-    adaptive = spec.get("schema_version") == 2
-    fields = {"schema_version", "model", "scenario_fingerprint", "baseline_sha256", "budgets"}
+    adaptive = spec.get("schema_version") in (2, 3)
+    long = adaptive and spec.get("horizon_seconds") == 1800 and type(spec.get("horizon_seconds")) is int
+    fields = {"schema_version", "model", "scenario_fingerprint", "baseline_sha256", "budgets"} | ({"horizon_seconds"} if long else set())
     require(set(spec) == fields | ({"protocol"} if adaptive else set()), "invalid_spec_fields")
-    require(type(spec["schema_version"]) is int and spec["schema_version"] in (1, 2), "unsupported_schema")
+    require(type(spec["schema_version"]) is int and spec["schema_version"] in (1, 2, 3), "unsupported_schema")
     if adaptive:
-        require(spec.get("protocol") == "full-client-adaptive-pilot-v1", "unsupported_protocol")
+        require(spec.get("protocol") == (xp_windows.PROTOCOL if spec["schema_version"] == 3 else "full-client-adaptive-pilot-v1"),
+                "unsupported_protocol")
     require(isinstance(spec["model"], str) and ID.fullmatch(spec["model"]), "invalid_model")
     for name in ("scenario_fingerprint", "baseline_sha256"):
         require(isinstance(spec[name], str) and SHA.fullmatch(spec[name]), "invalid_" + name)
@@ -251,6 +258,7 @@ def validate_spec(spec):
               "controller_seconds": (1, 300), "max_actions": (1, 10000),
               "max_api_requests": (1, 16) if adaptive else (1, 1), "max_output_tokens": (1, 48000) if adaptive else (1, 32000),
               "max_total_tokens": (1, 1000000)}
+    if long:bounds.update(total_seconds=(2400,2400),operation_seconds=(1835,2100),controller_seconds=(1800,1800),max_actions=(1,14400),max_api_requests=(1,72),max_output_tokens=(1,216000),max_total_tokens=(1,1440000))
     budgets = spec["budgets"]
     require(isinstance(budgets, dict) and set(budgets) == set(bounds), "invalid_budgets")
     for name, (low, high) in bounds.items():
@@ -259,7 +267,7 @@ def validate_spec(spec):
     require(budgets["controller_seconds"] <= budgets["total_seconds"]
             and budgets["max_output_tokens"] <= budgets["max_total_tokens"], "inconsistent_budgets")
     if adaptive:
-        require(budgets["controller_seconds"] == 300 and budgets["total_seconds"] >= 600, "inconsistent_adaptive_budgets")
+        require(budgets["controller_seconds"] == (1800 if long else 300) and budgets["total_seconds"] >= (2100 if long else 600), "inconsistent_adaptive_budgets")
     return copy.deepcopy(spec)
 
 
@@ -316,7 +324,7 @@ class CommandAdapter:
                 arguments.append(path)
         scorer = Path(sys.modules[verify_trial_bundle.__module__].__file__).resolve()
         self.pinned_files = sorted({str(path.absolute()) for path in
-                                    (executable, Path(__file__), scorer,
+                                    (executable, Path(__file__), scorer, Path(xp_windows.__file__).resolve(),
                                      *arguments, *(Path(path) for path in dependencies))})
         self.fingerprint = self._fingerprint()
 
@@ -335,7 +343,7 @@ class CommandAdapter:
         return hashlib.sha256(encode({"argv": self.argv, "files": files})).hexdigest()
 
     def perform(self, operation, context, *, timeout_seconds):
-        require(type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= 1800,
+        require(type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= (2100 if context.get("request",{}).get("horizon_seconds")==1800 else 1800),
                 "invalid_operation_timeout")
         require(self._fingerprint() == self.fingerprint, "adapter_source_changed")
         context = copy.deepcopy(context)
@@ -545,7 +553,7 @@ class TrialRunner:
                               ("controller_ms", budgets["controller_seconds"] * 1000)):
             require(type(receipt.get(name)) is int and 0 <= receipt[name] <= maximum,
                     "usage_invalid_" + name)
-        require((receipt["api_requests"] >= 1 if spec["schema_version"] == 2 else receipt["api_requests"] == 1)
+        require((receipt["api_requests"] >= 1 if spec["schema_version"] in (2, 3) else receipt["api_requests"] == 1)
                 and (spec["schema_version"] == 1 or receipt.get("protocol") == spec["protocol"])
                 and receipt["total_tokens"] >= receipt["output_tokens"],
                 "usage_inconsistent")
@@ -590,11 +598,17 @@ class TrialRunner:
                         evidence = receipt.get("evidence")
                         require(isinstance(evidence, dict) and evidence.get("run_id") == attempt_id,
                                 "evidence_attempt_mismatch")
-                        require(evidence.get("scenario_fingerprint") == spec["scenario_fingerprint"]
-                                and isinstance(evidence.get("baseline"), dict)
-                                and evidence["baseline"].get("sha256") == spec["baseline_sha256"],
-                                "evidence_baseline_mismatch")
-                        self.state["score"] = self.verify_bundle(evidence, attempt_dir, receipt.get("artifacts"))
+                        if spec["schema_version"] == 3:
+                            require(evidence.get("protocol") == xp_windows.PROTOCOL
+                                    and evidence.get("scenario_fingerprint") == spec["scenario_fingerprint"]
+                                    and evidence.get("baseline_sha256") == spec["baseline_sha256"], "evidence_baseline_mismatch")
+                            self.state["score"] = xp_windows.verify_trial_bundle(evidence, attempt_dir, receipt.get("artifacts"))
+                        else:
+                            require(evidence.get("scenario_fingerprint") == spec["scenario_fingerprint"]
+                                    and isinstance(evidence.get("baseline"), dict)
+                                    and evidence["baseline"].get("sha256") == spec["baseline_sha256"],
+                                    "evidence_baseline_mismatch")
+                            self.state["score"] = self.verify_bundle(evidence, attempt_dir, receipt.get("artifacts"))
                         self._event("evidence_verified")
                     elif operation == "cleanup":
                         require(receipt.get("clean") is True, "cleanup_unconfirmed")
@@ -773,7 +787,7 @@ def adapter_guard(argv):
         request = decode(sys.stdin.buffer.read(MAX_JSON + 1))
         require(isinstance(request, dict) and isinstance(request.get("context"), dict), "invalid_guard_request")
         timeout = request.get("timeout_seconds")
-        require(type(timeout) in (int, float) and 0 < timeout <= 1800, "invalid_guard_timeout")
+        require(type(timeout) in (int, float) and 0 < timeout <= (2100 if request["context"].get("request",{}).get("horizon_seconds")==1800 else 1800), "invalid_guard_timeout")
         request["context"].update(guard_pid=os.getpid(), guard_parent_pid=parent)
         request["context"]["lock_fds"] = dict(zip(("world", "queue"), lock_fds))
         deadline = time.monotonic() + timeout

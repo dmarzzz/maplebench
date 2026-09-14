@@ -110,9 +110,10 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   const keyNames = {LEFT:'ArrowLeft',RIGHT:'ArrowRight',UP:'ArrowUp',DOWN:'ArrowDown',JUMP:'Space',
     ATTACK:'ControlLeft',BRANDISH:'KeyA',COMBO:'KeyS',BOOSTER:'KeyD',MAPLE_WARRIOR:'KeyF',HP_POTION:'KeyQ',MP_POTION:'KeyW'};
   const skillKeyNames={PRIMARY_SKILL:'KeyA',SECONDARY_SKILL:'KeyS',BUFF_1:'KeyD',BUFF_2:'KeyF'};
-  const skillNamesByCode=Object.fromEntries(Object.entries(skillKeyNames).map(([name,code])=>[code,name]));
+  const toolkitKeyNames={...skillKeyNames,SKILL_5:'KeyG',SKILL_6:'KeyH',SKILL_7:'KeyZ',SKILL_8:'KeyX',SKILL_9:'KeyC',SKILL_10:'KeyV'};
+  const skillNamesByCode=Object.fromEntries(Object.entries(toolkitKeyNames).map(([name,code])=>[code,name]));
   const namesByCode = Object.fromEntries(Object.entries(keyNames).map(([name, code]) => [code, name]));
-  const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87};
+  const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87,KeyG:71,KeyH:72,KeyZ:90,KeyX:88,KeyC:67,KeyV:86};
   const held = new Map(), physical = new Set(), manualButtons = [], runButtons = [];
   const cancelledRuns = new Set();
   let run = {status:'idle',mode:'manual',model:null}, baseline = null, baselineScope = 'session';
@@ -149,12 +150,35 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     const node = element('button', '', parent, text); node.type = 'button';
     node.addEventListener('click', action); collection?.push(node); return node;
   };
-  for (const [text, code, ms] of [['← 1s','ArrowLeft',1000],['→ 1s','ArrowRight',1000],['Jump','Space',180],
-    ['Brandish','KeyA',500],['Combo','KeyS',180],['Booster','KeyD',180],['Maple Warrior','KeyF',180],
-    ['HP potion','KeyQ',180],['MP potion','KeyW',180]]) button(text, () => hold(code,ms), manualGroup,manualButtons);
+  const manualSkillBindings = value => {
+    const profile = value.adaptiveProtocol?.profile || value.nativeAcceptance?.profile || value.previewProtocol?.profile;
+    if (profile) return Object.entries(toolkitKeyNames)
+      .filter(([slot]) => typeof profile.skill_keys?.[slot] === 'string' && profile.skill_keys[slot].length > 0)
+      .map(([slot, code]) => ({code, label:`${profile.skill_keys[slot]} (${code.slice(3)})`, ms:slot === 'PRIMARY_SKILL' ? 500 : 180}));
+    return [['Brandish','KeyA',500],['Combo','KeyS',180],['Booster','KeyD',180],['Maple Warrior','KeyF',180]]
+      .map(([label, code, ms]) => ({code, label:`${label} (${code.slice(3)})`, ms}));
+  };
+  for (const [text, code, ms] of [['← 1s','ArrowLeft',1000],['→ 1s','ArrowRight',1000],['Jump','Space',180]])
+    button(text, () => hold(code,ms), manualGroup,manualButtons);
+  const skillButtons = Object.values(toolkitKeyNames).map(code => {
+    const entry = {code, ms:180};
+    entry.node = button('', () => hold(entry.code,entry.ms), manualGroup,manualButtons);
+    entry.node.hidden = true; return entry;
+  });
+  const updateManualSkills = () => {
+    const bindings = manualSkillBindings(run);
+    for (const entry of skillButtons) {
+      const binding = bindings.find(item => item.code === entry.code);
+      entry.node.hidden = !binding;
+      if (binding) { entry.node.textContent = binding.label; entry.ms = binding.ms; }
+    }
+  };
+  updateManualSkills();
+  for (const [text, code] of [['HP potion','KeyQ'],['MP potion','KeyW']])
+    button(text, () => hold(code,180), manualGroup,manualButtons);
   button('Release keys', () => releaseAll(true,'interrupted_operator'), manualGroup);
   for (const type of ['keydown','keyup']) window.addEventListener(type, event => {
-    if (!event.isTrusted || !namesByCode[event.code]) return;
+    if (!event.isTrusted || !Object.hasOwn(codes,event.code)) return;
     // Preserve keyboard activation of toolbar controls without forwarding their
     // Space/arrows to the game's window-level keyboard listener.
     if (event.target !== game && /^(BUTTON|SUMMARY|INPUT|SELECT|TEXTAREA)$/.test(event.target?.tagName)) {
@@ -181,7 +205,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       : held.size || physical.size ? 'Manual controls · no active model' : 'Idle · no active model';
     let state = !relayConnected ? 'Relay disconnected · inputs released'
       : !available ? 'Waiting for fresh client state'
-      : run.status === 'running' && run.adaptivePhase === 'waiting_for_deadline' ? `Waiting for deadline · game remains live · ${run.actions || 0} actions${run.adaptiveStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.adaptiveStartedAtMs)/1000))} / 300s` : ''}`
+      : run.status === 'running' && run.adaptivePhase === 'waiting_for_deadline' ? `Waiting for deadline · game remains live · ${run.actions || 0} actions${run.adaptiveStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.adaptiveStartedAtMs)/1000))} / ${run.adaptiveProtocol?.wall_seconds || 300}s` : ''}`
       : run.status === 'requesting' ? (run.adaptiveProtocol ? `Planning cycle ${(run.cycleNumber || 0)+1} · game remains live` : run.mode === 'api' ? 'Awaiting API program · game remains live' : 'Preparing SDK program')
       : run.status === 'running' ? `Program running · ${run.actions || 0} actions${run.programStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.programStartedAtMs)/1000))} / ${run.programSeconds || 22}s` : ''}`
       : run.id ? `Last ${model || 'scripted SDK'} run: ${run.status}${run.actions != null ? ` · ${run.actions} actions` : ''}${run.reason ? ` · ${run.reason}` : ''}`
@@ -191,7 +215,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       && Number.isFinite(character.exp) && Number.isFinite(baseline.exp) ? character.exp - baseline.exp : null;
     const xp = delta === null ? (available && baseline && character.level !== baseline.level ? 'XP Δ unavailable (level changed)' : 'XP Δ —')
       : `XP Δ ${delta >= 0 ? '+' : ''}${format(delta)} (${baselineScope})`;
-    const skillProfile = run.adaptiveProtocol?.profile || run.nativeAcceptance?.profile;
+    const skillProfile = run.adaptiveProtocol?.profile || run.nativeAcceptance?.profile || run.previewProtocol?.profile;
     const keys = [...new Set([...held.keys(),...physical])].map(code => {const key=(skillProfile?skillNamesByCode[code]:null)||namesByCode[code]||code; return skillProfile?.skill_keys?.[key]||key;}).join(' + ') || 'none';
     return {mode,state,hp:`HP ${available ? format(character.hp)+' / '+format(character.maxHp) : '—'}`,
       mp:`MP ${available ? format(character.mp)+' / '+format(character.maxMp) : '—'}`,xp,keys:`Keys: ${keys}`,
@@ -209,6 +233,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     captureStatus.textContent = capture ? `● REC ${((performance.now()-capture.startedAt)/1000).toFixed(1)}s`
       : saving ? 'SAVING' : !relayConnected || data.stale ? 'WAITING'
       : activeRun() ? 'RUNNING' : held.size || physical.size ? 'MANUAL' : 'IDLE';
+    updateManualSkills();
     manualButtons.forEach(node => { node.disabled = busy(); });
     runButtons.forEach(node => { node.disabled = busy() || !relayConnected || !fresh(observe()) || saving || Boolean(pendingUpload) || Boolean(capture); });
     recordButton.disabled = Boolean(capture) || saving || Boolean(pendingUpload); stopButton.disabled = !capture || capture.stopping;
@@ -222,7 +247,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       const response = await fetch('/demo-recording', {method:'POST',
         headers:{'Content-Type':'video/webm','X-MapleBench-Client':clientId,
           ...(item.runId ? {'X-MapleBench-Run':item.runId,'X-MapleBench-Capture':btoa(JSON.stringify(item.metadata))} : {})},
-        body:item.blob, signal:AbortSignal.timeout(65000)});
+        body:item.blob, signal:AbortSignal.timeout(item.metadata?.capture_duration_policy?.id==='post-render-encoded-frame-1800-v1'?185000:65000)});
       if (!response.ok) throw Error('Upload rejected');
       const receipt = await response.json();
       if (receipt.status !== 'saved' || receipt.runId !== item.runId) throw Error('Upload receipt mismatch');
@@ -240,9 +265,9 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   const retainCaptureFailure = (item, code) => {
     if(!item?.encodedMode || item.autoRunId!==run.id || !/^[a-f0-9]{32}$/.test(item.autoRunId) || captureFailure?.run_id===item.autoRunId) return;
     const recorder=item.encodedRecorder, start=recorder?.startedAt ?? item.startedAt;
-    const offset=at=>Number.isFinite(at)&&Number.isFinite(start)?Math.max(0,Math.min(350000,Math.round(at-start))):null;
-    const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=20000?value:0;
-    captureFailure={schema_version:1,run_id:item.autoRunId,policy_id:'post-render-encoded-frame-v1',
+    const offset=at=>Number.isFinite(at)&&Number.isFinite(start)?Math.max(0,Math.min(item.durationPolicy?.id==='post-render-encoded-frame-1800-v1'?1850000:350000,Math.round(at-start))):null;
+    const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=(item.durationPolicy?.max_frames||20000)?value:0;
+    captureFailure={schema_version:1,run_id:item.autoRunId,policy_id:item.durationPolicy?.id||'post-render-encoded-frame-v1',
       code:captureFailureCodes.has(code)?code:'encoder_failure_unknown',
       clock_origin:Number.isFinite(recorder?.startedAt)?'encoder_start':'capture_request',elapsed_ms:offset(performance.now()) ?? 0,
       first_frame_offset_ms:offset(recorder?.firstFrameAt),last_frame_offset_ms:offset(recorder?.lastFrameAt),
@@ -254,7 +279,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     const output = document.createElement('canvas'), headerHeight = 120;
     output.width = game.width; output.height = game.height + headerHeight;
     const ctx = output.getContext('2d');
-    const durationPolicy=run.nativeAcceptance?.capture_duration_policy || run.adaptiveProtocol?.capture_duration_policy;
+    const durationPolicy=run.nativeAcceptance?.capture_duration_policy || run.adaptiveProtocol?.capture_duration_policy || run.previewProtocol?.capture_duration_policy;
     const item = {autoRunId,startedAt:performance.now(),startedWall:Date.now(),recorderStarted:false,
       frames:0,firstFrameWall:null,lastFrameWall:null,firstFrameAt:null,lastFrameAt:null,maxGap:0,hidden:document.hidden,
       errors:0,relayLost:false,clock:null,clockVerified:false,terminalToken:null,
@@ -300,6 +325,13 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     const animate = () => {
       if(capture!==item||(item.encodedMode&&item.autoRunId!==run.id)) { item.failFinalFrame?.(Error('capture_owner_changed')); return; }
       if(item.stopping && !item.finalFrameRequested) return;
+      // Select real post-render hooks at at most 60 FPS. The first and final
+      // hooks are always captured; skipped hooks never snapshot stale pixels
+      // or invent media timestamps. The simulation continues on every hook.
+      if(item.encodedRecorder && !item.encodedRecorder.failed && item.frames && !item.finalFrameRequested) {
+        const since=performance.now()-item.lastFrameAt;
+        if(since>=0 && since<1000/60) return;
+      }
       draw();
       if(item.recorderStarted) {
         if(item.encodedRecorder) {
@@ -317,14 +349,14 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       if(item.finalFrameRequested) item.finishOnFrame();
     };
     item.onRendered = animate;
-    const encoded = durationPolicy?.id === 'post-render-encoded-frame-v1';
+    const encoded = ['post-render-encoded-frame-v1','post-render-encoded-frame-1800-v1'].includes(durationPolicy?.id);
     if(encoded) {
       item.encodedMode=true;item.durationPolicy=durationPolicy;capture=item;
-      const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:335000;
+      const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:run.previewProtocol?run.previewProtocol.capture_max_ms:run.adaptiveProtocol?.wall_seconds===1800&&durationPolicy?.id==='post-render-encoded-frame-1800-v1'?1835000:335000;
       item.captureDeadlineAt=item.startedAt+encodedLimit;
       item.maxTimer=setTimeout(()=>{retainCaptureFailure(item,'capture_duration_limit');item.errors++;stopRecording();},encodedLimit);
       try {
-        item.encoderPromise=createPostRenderRecorder(output,{maxDurationMs:encodedLimit,onFailure:code=>{
+        item.encoderPromise=createPostRenderRecorder(output,{policy:durationPolicy,maxDurationMs:encodedLimit,onFailure:code=>{
           retainCaptureFailure(item,code);
           item.failFinalFrame?.(Error(code));
           if(capture!==item) return;
@@ -494,10 +526,35 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     // not agree. Recheck this local deadline immediately before keydown.
     return receivedAt+command.remainingMs-Math.max(elapsed,wallElapsed);
   };
+  const ackFrame = (ack, runId) => {
+    const observation=observe(),clientSentAtMs=Date.now();
+    return {client:clientId,observation,ageMs:Date.now()-(observation.capturedAt||0),renderAgeMs:Date.now()-(Module.MapleBenchRenderedAt||0),renderedHud:Module.MapleBenchHud||null,ack,
+          page:'game',sessionAck,releaseAck,clientSentAtMs,captureClockAck:capture?.clock?.id,
+          captureClockReceivedAtMs:capture?.clock?.client_received_ms,
+          capture:capture?{runId:capture.autoRunId,started:capture.recorderStarted,renderedFrames:capture.frames,
+            interrupted:capture.hidden||capture.errors>0||capture.relayLost||capture.stopping}:null,
+          captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle',captureFailure};
+  };
+  const sendUrgentAck = async (ack, runId, startedAt) => {
+    const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),2000);
+    try {
+      // One attempt only. The normal poll retains the same ACK on any reply.
+      const body={...ackFrame(ack,runId),ackRunId:runId};
+      ack.timing.urgent_post_after_ms=Math.round(performance.now()-startedAt);
+      await fetch('/control/ack',{method:'POST',headers:{'Content-Type':'application/json'},
+        signal:abort.signal,body:JSON.stringify(body)});
+    } catch {} finally {clearTimeout(timer);}
+  };
   const executeInput = async (command, deadline) => {
     if(activeCommand) return;
     const item={interrupted:false,failure:null,keydown:false,startedAt:performance.now()}; activeCommand=item;
-    const keys=Array.isArray(command.keys)?command.keys.map(name=>(run.adaptiveProtocol||run.nativeAcceptance)?(skillKeyNames[name]||keyNames[name]):keyNames[name]):[];
+    const toolkit=run.adaptiveProtocol?.skill_toolkit||run.nativeAcceptance?.skill_toolkit||run.previewProtocol?.skill_toolkit;
+    const skillMap=toolkit?.id==='full-client-skill-toolkit-v1'?toolkitKeyNames:skillKeyNames;
+    const declared=toolkit?new Set(toolkit.skills?.map(skill=>skill.slot)||[]):null;
+    const keys=Array.isArray(command.keys)?command.keys.map(name=>{
+      if(toolkitKeyNames[name]&&declared&&!declared.has(name))return undefined;
+      return(run.adaptiveProtocol||run.nativeAcceptance||run.previewProtocol)?(skillMap[name]||keyNames[name]):keyNames[name];
+    }):[];
     let ok=false;
     const reject=code=>{item.failure ??= code;throw Error(code);};
     try {
@@ -514,7 +571,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       if(performance.now()+command.durationMs>deadline) reject('deadline_before_input');
       releaseAll(false); game.focus();
       if(performance.now()+command.durationMs>deadline) reject('deadline_before_keydown');
-      item.keydown=true;
+      item.keydown=true; item.keydownAt=performance.now();
       for(const code of keys) { key(code,'keydown'); held.set(code,setTimeout(()=>release(code),command.durationMs)); }
       renderHeader();
       await new Promise(resolve=>setTimeout(resolve,command.durationMs));
@@ -529,7 +586,12 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
           elapsed_ms:Number.isSafeInteger(elapsed)&&elapsed>=0&&elapsed<=350000?elapsed:null,
           remaining_ms:Number.isSafeInteger(remaining)&&remaining>=-350000&&remaining<=3000?remaining:null};
       }
+      const done=performance.now();
+      acknowledgement.timing={schema_version:1,handler_started_monotonic_ms:Math.round(item.startedAt),
+        keydown_after_ms:item.keydown?Math.round(item.keydownAt-item.startedAt):null,
+        finished_after_ms:Math.round(done-item.startedAt),urgent_post_after_ms:Math.round(done-item.startedAt)};
       activeCommand=null; renderHeader();
+      sendUrgentAck(acknowledgement,command.runId,item.startedAt).catch(()=>{});
     }
   };
   const poll=async()=>{

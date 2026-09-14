@@ -184,7 +184,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self.trusted_request():
             return
-        if self.path in {'/control/frame', '/control/start'}:
+        if self.path in {'/control/frame', '/control/ack', '/control/start'}:
             try:
                 if self.headers.get_content_type() != 'application/json':
                     self.send_error(415); return
@@ -196,11 +196,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if not isinstance(body, dict): raise ValueError('Invalid request')
                 if self.path == '/control/start' and self.headers.get('Origin') and not body.get('client'):
                     raise ValueError('Missing renderer owner')
-                if self.path == '/control/frame':
+                if self.path in {'/control/frame','/control/ack'}:
                     with BRIDGE.lock:
                         if SESSION is not None: SESSION.validate_frame(body)
-                        value = BRIDGE.frame(body)
-                        if SESSION is not None: value.update(SESSION.frame(body))
+                        value = BRIDGE.frame(body, acknowledgement_only=True) if self.path == '/control/ack' else BRIDGE.frame(body)
+                        if SESSION is not None and self.path == '/control/frame': value.update(SESSION.frame(body))
                 else:
                     value = BRIDGE.start(body.get('mode'),body.get('model'),body.get('durationSeconds',22),client=body.get('client'))
                 self.json_response(value)
@@ -221,7 +221,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try:
             if self.headers.get_content_type() != 'video/webm':
                 self.send_error(415); return
-            size = self.body_size(MAX_UPLOAD_BYTES)
             run_id, client = self.headers.get('X-MapleBench-Run'), self.headers.get('X-MapleBench-Client')
             capture=None
             encoded_capture=self.headers.get('X-MapleBench-Capture')
@@ -232,12 +231,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if self.headers.get('Origin') and not client:
                     raise ValueError('Missing recording owner')
                 BRIDGE.recording_owner(run_id, client)
+            maximum,upload_seconds=BRIDGE.recording_upload_limits(run_id,client) if run_id else (MAX_UPLOAD_BYTES,60)
+            size=self.body_size(maximum)
             if shutil.disk_usage(OUTPUT).free < size + 64*1024*1024:
                 self.send_error(507); return
             descriptor, name = tempfile.mkstemp(prefix='.recording-',suffix='.part',dir=OUTPUT)
             temporary = Path(name)
             digest = hashlib.sha256()
-            deadline = time.monotonic()+60
+            deadline = time.monotonic()+upload_seconds
             self.connection.settimeout(10)
             with os.fdopen(descriptor,'wb') as out:
                 remaining = size
