@@ -11,6 +11,7 @@ NATIVE_V2_PROTOCOL = 'scripted-native-acceptance-v2'
 NATIVE_V3_PROTOCOL = 'scripted-native-acceptance-v3'
 NATIVE_V4_PROTOCOL = 'scripted-native-acceptance-v4'
 PRODUCTIVITY_PROTOCOL = 'scripted-native-productivity-v1'
+PRODUCTIVITY_V2_PROTOCOL = 'scripted-native-productivity-v2'
 PROFILES = {
     'hero': {'id':'hero-180','class_name':'Hero','level':180,
              'skill_keys':{'PRIMARY_SKILL':'Brandish','SECONDARY_SKILL':'Combo Attack','BUFF_1':'Booster','BUFF_2':'Maple Warrior'}},
@@ -23,7 +24,7 @@ PROFILES = {
 }
 
 def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL, control='active'):
-    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,PRODUCTIVITY_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
+    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,PRODUCTIVITY_PROTOCOL,PRODUCTIVITY_V2_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
         raise ValueError('invalid_native_fixture')
     if protocol==PRODUCTIVITY_PROTOCOL:
         if control not in ('active','idle'):raise ValueError('invalid_native_control')
@@ -31,6 +32,13 @@ def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL, control=
         return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
             'baseline_sha256':baseline_sha256,'control':control,'wall_seconds':120,
             'max_actions':128,'max_sdk_requests':600,'capture_max_ms':125000,
+            'capture_duration_policy':dict(ENCODED_FRAME_POLICY)}
+    if protocol==PRODUCTIVITY_V2_PROTOCOL:
+        if control not in ('active','idle'):raise ValueError('invalid_native_control')
+        policy=toolkit(class_id)
+        return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
+            'baseline_sha256':baseline_sha256,'control':control,'wall_seconds':180,
+            'max_actions':256,'max_sdk_requests':900,'capture_max_ms':185000,
             'capture_duration_policy':dict(ENCODED_FRAME_POLICY)}
     if control!='active':raise ValueError('invalid_native_control')
     if protocol==TOOLKIT_NATIVE_PROTOCOL:
@@ -78,6 +86,7 @@ if(nearby.length){const dx=nearby[0].x-first.character.x;
 def program(value):
     value=validate_contract(value);class_id=value['class_id']
     if value['id']==PRODUCTIVITY_PROTOCOL:return _productivity_program(value)
+    if value['id']==PRODUCTIVITY_V2_PROTOCOL:return _productivity_v2_program(value)
     if value['id']==TOOLKIT_NATIVE_PROTOCOL:return _toolkit_program(value)
     if value['id']==PROTOCOL:return _legacy_program(value)
     if value['id']==NATIVE_V3_PROTOCOL and class_id!='hero':return _targeted_program(value)
@@ -188,6 +197,36 @@ while(room()){
 await sdk.observe();
 """
     return code.replace('__RANGE__','100' if value['class_id']=='hero' else '250')
+
+def _productivity_v2_program(value):
+    """Three-minute successor; leave every historical recipe byte unchanged.
+
+    Reuse the frozen combat strategy and expand only its finite allowances.
+    New inputs stop after 172.5 seconds. The observation-only tail targets
+    176 seconds, leaving four seconds for launch/settlement within the executor's
+    180-second ceiling. Actual receipts own elapsed time and early death.
+    """
+    code=_productivity_program(value)
+    for old,new in (
+        ('const end=Date.now()+116000;', 'const end=Date.now()+176000;'),
+        ('actions>=128', 'actions>=256'),
+        ('step<100&&room()&&actions<125', 'step<150&&room()&&actions<253'),
+    ):
+        # Idle never contains the active targeting loop. Every other frozen
+        # substitution must match once, so edits cannot silently widen a loop.
+        expected=0 if value['control']=='idle' and old.startswith('step<') else 1
+        if code.count(old)!=expected:raise ValueError('native_productivity_v1_recipe_changed')
+        code=code.replace(old,new,1)
+    return '// Scripted productivity v2: 180-second ceiling; no model or ranking.\n'+code+"""
+// This final segment observes only; it cannot issue gameplay inputs.
+const tailEnd=end;
+while(Date.now()<tailEnd){
+  if(!(await sdk.observe()).character.alive)break;
+  const remaining=tailEnd-Date.now();
+  if(remaining<1)break;
+  await sdk.wait(Math.min(1000,remaining));
+}
+"""
 
 def _targeted_program(value,*,horizontal_limit=110):
     # This is a distinct, explicitly requested recipe. V1/V2 bytes are retained.

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, safe_request_failure, validate_rpc
 from full_client_capture import capture_receipt
-from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL, NATIVE_V4_PROTOCOL, PRODUCTIVITY_PROTOCOL, validate_contract as validate_native, program as native_program
+from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL, NATIVE_V4_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL, validate_contract as validate_native, program as native_program
 from full_client_docker import DockerBindingError, validate_binding
 from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
 from full_client_adaptive import AdaptiveError, PROTOCOL as ADAPTIVE_PROTOCOL, run_adaptive, validate_protocol
@@ -878,7 +878,7 @@ class FullClientBridge:
                 SCENARIO | (sdk_scenario(self.run['nativeAcceptance']) if self.run.get('nativeAcceptance')
                     else sdk_scenario(self.run['adaptiveProtocol']) if self.run.get('adaptiveProtocol')
                     else sdk_scenario(self.run['previewProtocol']) if self.run.get('previewProtocol')
-                    else {'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,PRODUCTIVITY_PROTOCOL) else {}))
+                    else {'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,PRODUCTIVITY_PROTOCOL,PRODUCTIVITY_V2_PROTOCOL) else {}))
             if self.pending:
                 raise ValueError('Another input is in flight')
             requested=time.monotonic()

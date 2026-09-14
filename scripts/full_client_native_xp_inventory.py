@@ -49,9 +49,9 @@ COMMIT;
 
 def parse(raw, *, native, run_id, server_instance_id, phase, character_id, account_id,
           runtime_manifest_sha256, captured_at_ms):
-    from full_client_native import validate_contract, PRODUCTIVITY_PROTOCOL
+    from full_client_native import validate_contract, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL
     native = validate_contract(native)
-    need(native['id'] in (NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL), 'toolkit_owner_required')
+    need(native['id'] in (NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL), 'toolkit_owner_required')
     policy = native['skill_toolkit']
     need(isinstance(raw, bytes) and 0 < len(raw) < MAX_BYTES, 'output_bound')
     need(identity(character_id) and identity(account_id), 'identity_invalid')
@@ -89,9 +89,9 @@ def parse(raw, *, native, run_id, server_instance_id, phase, character_id, accou
 
 def expected(native, baseline_sql, *, character_id, account_id):
     """Read exact frozen SQL rows; never execute them or expose account data."""
-    from full_client_native import validate_contract, PRODUCTIVITY_PROTOCOL
+    from full_client_native import validate_contract, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL
     native = validate_contract(native)
-    need(native['id'] in (NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL) and identity(character_id) and identity(account_id), 'toolkit_owner_required')
+    need(native['id'] in (NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL) and identity(character_id) and identity(account_id), 'toolkit_owner_required')
     policy = validate_toolkit(native['skill_toolkit'])
     need(isinstance(baseline_sql, bytes) and len(baseline_sql) <= 64 * 1024**2
          and hashlib.sha256(baseline_sql).hexdigest() == native['baseline_sha256'], 'baseline_hash_changed')
@@ -170,9 +170,9 @@ def verify_triplet(before, after, restored, *, native, baseline_sql, identity, r
 
 def collect_owned(backend, phase):
     """Use existing held-lock authority for one bounded, consistent SQL read."""
-    from full_client_native import validate_contract, PRODUCTIVITY_PROTOCOL
+    from full_client_native import validate_contract, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL
     native = validate_contract(backend.native)
-    need(native['id'] in (NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL) and phase in PHASES, 'toolkit_owner_required')
+    need(native['id'] in (NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL) and phase in PHASES, 'toolkit_owner_required')
     need(native['baseline_sha256'] == backend.config['baseline']['sha256'], 'baseline_hash_changed')
     backend.safe_boundary()
     reset = backend.state.get('reset', {})

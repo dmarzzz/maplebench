@@ -342,9 +342,11 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS, duration_policy=None
     def require(condition, reason):
         if not condition:
             raise EvidenceError(reason)
-    require(type(maximum_ms) is int and maximum_ms in (VIDEO_MAX_MS, 335000, 1835000),
+    require(type(maximum_ms) is int and maximum_ms in (VIDEO_MAX_MS, 185000, 335000, 1835000),
             "video: unsupported protocol duration limit")
-    from full_client_capture import LONG_ENCODED_FRAME_POLICY
+    from full_client_capture import ENCODED_FRAME_POLICY, LONG_ENCODED_FRAME_POLICY
+    require(maximum_ms!=185000 or duration_policy==ENCODED_FRAME_POLICY,
+            "video: 185-second native capture requires encoded frames")
     require((maximum_ms==1835000)==(duration_policy==LONG_ENCODED_FRAME_POLICY), "video: duration policy mismatch")
     require(isinstance(probe, dict) and isinstance(probe.get("streams"), list)
             and len(probe["streams"]) == 1, "video: require one selected decoded video stream")
@@ -409,9 +411,11 @@ def _measure_video_probe(probe, *, maximum_ms=VIDEO_MAX_MS, duration_policy=None
 def _probe_video(path, expected_sha256, *, maximum_ms=VIDEO_MAX_MS, duration_policy=None):
     """Inspect the actual video stream under a bounded, read-only subprocess."""
     try:
-        if type(maximum_ms) is not int or maximum_ms not in (VIDEO_MAX_MS, 335000, 1835000):
+        if type(maximum_ms) is not int or maximum_ms not in (VIDEO_MAX_MS, 185000, 335000, 1835000):
             raise EvidenceError("video: unsupported protocol duration limit")
-        from full_client_capture import LONG_ENCODED_FRAME_POLICY
+        from full_client_capture import ENCODED_FRAME_POLICY, LONG_ENCODED_FRAME_POLICY
+        if maximum_ms==185000 and duration_policy!=ENCODED_FRAME_POLICY:
+            raise EvidenceError("video: 185-second native capture requires encoded frames")
         long=maximum_ms==1835000
         if long!=(duration_policy==LONG_ENCODED_FRAME_POLICY):raise EvidenceError("video: duration policy mismatch")
         json_limit=96*1024**2 if long else JSON_LIMIT
@@ -806,9 +810,9 @@ def verify_capture_bundle(manifest, artifact_root):
             "capture: invalid terminal server receipt")
     require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
     from full_client_native import (PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL,
-                                    NATIVE_V4_PROTOCOL, TOOLKIT_NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL)
+                                    NATIVE_V4_PROTOCOL, TOOLKIT_NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL)
     native = result.get("protocol") in (NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,
-                                        NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,PRODUCTIVITY_PROTOCOL)
+                                        NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,PRODUCTIVITY_PROTOCOL,PRODUCTIVITY_V2_PROTOCOL)
     owner = {"id": run_id, "client": result["controller"]["client"], "startedAtMs": started,
              "protocol": result.get("protocol"), "adaptiveProtocol":result.get('adaptive',{}).get('limits',{})}
     if native:
