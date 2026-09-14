@@ -228,10 +228,15 @@ class Host:
         return rows[0][0]
 
     def snapshot(self, config, run_id):
-        return collect(mysql_command=config["command"], database=config["database"],
-                       defaults_file=config.get("defaults_file"), run_id=run_id,
-                       character_id=config["character_id"], account_id=config["account_id"],
-                       timeout=min(10, self.remaining()))
+        try:
+            return collect(mysql_command=config["command"], database=config["database"],
+                           defaults_file=config.get("defaults_file"), run_id=run_id,
+                           character_id=config["character_id"], account_id=config["account_id"],
+                           timeout=min(10, self.remaining()))
+        except ValueError as error:
+            if str(error) == "account_still_online":
+                raise RuntimeErrorCode("account_still_online") from None
+            raise
 
 
 class CosmicRuntime:

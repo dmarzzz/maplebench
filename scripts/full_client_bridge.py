@@ -829,7 +829,15 @@ class FullClientBridge:
         readiness_sha256 = None
 
         def run_request(url, payload=None, timeout=3):
-            return self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
+            sent_ms = round((time.monotonic()-started)*1000)
+            reply = self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
+            if (url.endswith('/v1/action') and isinstance(reply,dict) and reply.get('accepted') is True
+                    and 'first_input_started_ms' not in timeline):
+                # Anchor playback to an input that actually received a reply,
+                # using the same monotonic origin as the program timeline.
+                timeline['first_input_started_ms'] = sent_ms
+                timeline['first_input_acked_ms'] = round((time.monotonic()-started)*1000)
+            return reply
 
         try:
             if run.get('trialContext'):

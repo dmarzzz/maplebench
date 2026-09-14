@@ -13,6 +13,13 @@ settled waiting browser. Missing prerequisites cause an explicit refusal.
 
 ## Invocation and private inputs
 
+Current `check/start/reconcile` commands additionally require the shared
+[operations authority](FULL_CLIENT_OPERATIONS.md#gate-and-authority), with its
+flags before the subcommand. `check` holds the gate without consuming a claim.
+`reconcile` must identify the exact pending claim. The composed operations wrapper
+holds this admission in process through restoration. The earlier invocation
+examples below omit these new required authority flags.
+
 Run the command as root on the Linux runtime host under the shared-host resource
 policy. The private JSON configuration supplies all paths, service identities,
 source hashes and limits; never copy it into the repository. The command applies

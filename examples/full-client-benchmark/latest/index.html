@@ -10,7 +10,8 @@
 </head>
 <body>
   <main>
-    <p class="note">Recorded benchmark results · September 2026. The latest verified run is featured; failed and incomplete attempts remain in history. These preliminary results are unranked.</p>
+    <p class="note">Selected verified recording · September 2026. This page features one successful run, not the complete attempt history or a model ranking.</p>
+    <p class="note"><a href="/">View all recorded attempts</a></p>
     <header>
       <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 15 7 20 5 18 11 23 13 15 18 13 17 13 23 11 23 11 17 9 18 1 13 6 11 4 5 9 7Z" fill="currentColor"/></svg><div><strong>Maple<b>Bench</b></strong><span>Full-client results</span></div></div>
       <p id="connection" role="status">Waiting for results</p>
@@ -18,7 +19,7 @@
     <section class="live" aria-labelledby="live-title">
       <div class="live-heading"><span id="live-badge" class="pill">No active attempt</span><span id="live-id"></span></div>
       <h1 id="live-title">The next run starts here.</h1>
-      <div id="featured-recording"></div><p class="note"><a href="/latest/">Share the featured Astra recording</a></p>
+      <div id="featured-recording"></div>
       <p class="note">Playback skips the initial model wait. The complete original recording remains available in the player.</p>
       <p id="live-description">This page shows actual full-client attempts as their evidence arrives.</p>
       <ol id="phases" aria-label="Trial phases"></ol>
@@ -30,13 +31,13 @@
       </dl>
     </section>
     <section aria-labelledby="comparison-title">
-      <div class="section-heading"><div><h2 id="comparison-title">Results by frozen inputs</h2><p>Matching inputs do not prove identical live monster scenes. A fresh four-model comparison is still in progress.</p></div><span class="pill">Unranked</span></div>
+      <div class="section-heading"><div><h2 id="comparison-title">Results by frozen inputs</h2><p>One verified run is shown. A four-model comparison is still in progress.</p></div><span class="pill">Unranked</span></div>
       <p id="comparison-empty" class="empty">Verified persisted results appear here after normal logout.</p>
       <div id="comparison-groups"></div>
       <p class="note">Persisted XP includes penalties and is measured after normal logout. Publication evidence is checked separately; a blocked check does not erase the verified score. All displayed runs remain unranked.</p>
     </section>
     <section aria-labelledby="history-title">
-      <div class="section-heading"><div><h2 id="history-title">Recorded attempts</h2><p>Failures, recoveries, and unscored attempts remain visible.</p></div><span id="count">0 attempts</span></div>
+      <div class="section-heading"><div><h2 id="history-title">Included recording</h2><p>This sharing page contains the selected verified Astra run.</p></div><span id="count">0 attempts</span></div>
       <div class="table-wrap"><table><caption class="visually-hidden">Full-client attempt history</caption><thead><tr><th>Attempt / exact model</th><th>Status</th><th>Persisted XP</th><th>Diagnostic XP</th><th>Input actions</th><th>Publication evidence</th><th>Recording</th></tr></thead><tbody id="history"></tbody></table></div>
       <p id="history-empty" class="empty">No attempts have been exported yet.</p>
     </section>

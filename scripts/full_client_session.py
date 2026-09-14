@@ -96,8 +96,10 @@ class SessionCoordinator:
             self.page = body['page']
             self.last_seen = time.monotonic()
             self.capture_state = body['captureState']
-            if self.transition and body.get('sessionAck') == self.transition and self.page == self.desired:
-                self.acknowledged = True
+            if self.transition:
+                # History navigation can reopen an old game after ordinary
+                # logout. An earlier acknowledgment cannot authorize that page.
+                self.acknowledged = body.get('sessionAck') == self.transition and self.page == self.desired
             if self.owner is None or self.transition is None or self.acknowledged:
                 return {'session':self.status(), 'navigation':None}
             # A navigation goal can request finishing capture, but never drop an
@@ -107,6 +109,20 @@ class SessionCoordinator:
                 target = '/control/wait' if self.desired=='waiting' else '/web/index.html'
                 navigation = {'id':self.transition,'page':self.desired,'url':target+'?transition='+self.transition}
             return {'session':self.status(),'navigation':navigation}
+
+    def game_entry_redirect(self, transition):
+        """Keep stale game URLs from reopening the native account after logout."""
+        with self.bridge.lock:
+            if self.owner is None:
+                return None
+            if self.desired == 'game' and transition == self.transition:
+                return None
+            target = '/web/index.html' if self.desired == 'game' else '/control/wait'
+            return target + '?transition=' + self.transition
+
+    def login_allowed(self):
+        with self.bridge.lock:
+            return self.owner is None or self.desired == 'game'
 
     def navigate(self, desired):
         with self.bridge.lock:

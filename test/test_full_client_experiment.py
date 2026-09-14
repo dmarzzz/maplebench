@@ -114,7 +114,7 @@ class ExperimentTests(unittest.TestCase):
     def coordinator(self, plan, **kwargs):
         return experiment.Experiment(plan, self.root / "experiment", launcher=kwargs.get("launcher", self.launcher),
             inspector=self.inspect, verify=kwargs.get("verify", lambda _: None),
-            wall_time=self.clock, monotonic=self.clock)
+            wall_time=self.clock, monotonic=self.clock, entry_admission=kwargs.get("entry_admission"))
 
     def test_rotations_are_exact_within_each_fixture_and_input_unchanged(self):
         config = self.config(models=list(experiment.MODELS), repetitions=4, fixtures=2)
@@ -265,6 +265,127 @@ class ExperimentTests(unittest.TestCase):
         value = experiment.report(plan, self.root / "experiment", inspector=self.inspect)
         self.assertEqual([r["status"] for r in value["attempts"]], ["submitted_unresolved", "unsubmitted"])
 
+    def journal_bytes(self):
+        return (self.root / "experiment/coordinator.json").read_bytes()
+
+    def seal(self, plan):
+        return self.coordinator(plan).seal(hashlib.sha256(self.journal_bytes()).hexdigest())
+
+    def test_completed_seal_permanently_refuses_resume_without_rewriting_evidence(self):
+        plan = self.plan()
+        self.coordinator(plan).run()
+        before = json.loads(self.journal_bytes())
+        result = self.seal(plan)
+        sealed = self.journal_bytes()
+        after = json.loads(sealed)
+        self.assertTrue(result["sealed"])
+        self.assertEqual(after["schema_version"], 2)
+        self.assertEqual(result["status"], "completed")
+        for key in ("submissions", "settled", "deadline_at_ms", "started_at_ms"):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(after["events"][:-1], before["events"])
+        for operation in (lambda:self.coordinator(plan).run(resume=True), lambda:self.seal(plan)):
+            with self.assertRaisesRegex(experiment.ExperimentError, "experiment_sealed"):
+                operation()
+            self.assertEqual(self.journal_bytes(), sealed)
+        self.assertEqual(self.calls, [entry["attempt_id"] for entry in plan["entries"]])
+
+    def test_seal_clean_partial_group_after_deadline_preserves_unsubmitted_and_score(self):
+        plan = self.plan()
+        def clean_failure(*args):
+            self.launcher(*args)
+            return 1
+        with self.assertRaisesRegex(experiment.ExperimentError, "child_failed"):
+            self.coordinator(plan, launcher=clean_failure).run()
+        before = json.loads(self.journal_bytes())
+        self.clock.value += 1000  # Closing cannot create extra execution time.
+        self.assertEqual(self.seal(plan)["status"], "stopped")
+        value = experiment.report(plan, self.root / "experiment", inspector=self.inspect,
+            metrics=lambda *args: {"net_xp": -100, "no_op": False})
+        self.assertTrue(value["sealed"])
+        self.assertEqual([row["status"] for row in value["attempts"]], ["completed", "unsubmitted"])
+        self.assertEqual(value["attempts"][0]["metrics"]["net_xp"], -100)
+        self.assertEqual(json.loads(self.journal_bytes())["deadline_at_ms"], before["deadline_at_ms"])
+        self.assertEqual(self.calls, [plan["entries"][0]["attempt_id"]])
+
+    def test_seal_uncertain_submission_or_changed_settlement_refuses_without_journal_write(self):
+        plan = self.plan()
+        def crash(*args):
+            raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.coordinator(plan, launcher=crash).run()
+        before = self.journal_bytes()
+        with self.assertRaisesRegex(experiment.ExperimentError, "submitted_attempt_unresolved"):
+            self.seal(plan)
+        self.assertEqual(self.journal_bytes(), before)
+        self.completed(plan["entries"][0], "recovered")
+        self.seal(plan)  # Exact explicit recovery can close; never runs the next ID.
+        self.assertEqual(self.calls, [])
+        self.assertEqual(json.loads(self.journal_bytes())["settled"][plan["entries"][0]["attempt_id"]]["status"], "recovered")
+
+    def test_seal_checks_exact_journal_and_all_attempt_ids(self):
+        plan = self.plan()
+        self.coordinator(plan).run()
+        before = self.journal_bytes()
+        with self.assertRaisesRegex(experiment.ExperimentError, "coordinator_journal_changed"):
+            self.coordinator(plan).seal("0" * 64)
+        self.assertEqual(self.journal_bytes(), before)
+        self.observed[plan["entries"][0]["attempt_id"]]["backend_sha256"] = "c" * 64
+        with self.assertRaisesRegex(experiment.ExperimentError, "settled_attempt_changed"):
+            self.seal(plan)
+        self.assertEqual(self.journal_bytes(), before)
+
+    def test_seal_retirement_preserves_reservation_and_rejects_later_unowned_directories(self):
+        plan = self.plan()
+        before = self.retire_after_slow_intent(plan)
+        extra = self.attempts / plan["entries"][1]["attempt_id"]
+        extra.mkdir(mode=0o700)
+        with self.assertRaisesRegex(experiment.ExperimentError, "unsubmitted_attempt_already_exists"):
+            self.seal(plan)
+        self.assertEqual(json.loads(self.journal_bytes()), before)
+        extra.rmdir()
+        self.seal(plan)
+        after = json.loads(self.journal_bytes())
+        self.assertEqual(after["submissions"], before["submissions"])
+        self.assertEqual(after["settled"], {})
+        self.assertEqual(self.calls, [])
+
+    def test_seal_lost_write_reply_keeps_durable_closure_and_prevents_replay(self):
+        plan = self.plan()
+        self.retire_after_slow_intent(plan)
+        original = experiment.write_json
+        def lost_reply(path, value, **kwargs):
+            original(path, value, **kwargs)
+            if value.get("closure"):
+                raise OSError("synthetic lost write reply")
+        with patch.object(experiment, "write_json", side_effect=lost_reply):
+            with self.assertRaises(OSError):
+                self.seal(plan)
+        before = self.journal_bytes()
+        experiment.validate_state(json.loads(before), plan)
+        with self.assertRaisesRegex(experiment.ExperimentError, "experiment_sealed"):
+            self.coordinator(plan).run(resume=True)
+        self.assertEqual(self.journal_bytes(), before)
+        self.assertEqual(self.calls, [])
+
+    def test_closure_schema_rejects_downgrade_missing_receipt_and_later_events(self):
+        plan = self.plan()
+        self.coordinator(plan).run()
+        self.seal(plan)
+        state = json.loads(self.journal_bytes())
+        def append_event(value):
+            value["events"].append({"kind":"explicit_resume", "at_ms":value["updated_at_ms"],
+                                     "sequence":len(value["events"])})
+        mutations = [lambda s:s.update(schema_version=1), lambda s:s.pop("closure"),
+                     lambda s:s["events"].pop(), append_event,
+                     lambda s:s["settled"].pop(plan["entries"][0]["attempt_id"]),
+                     lambda s:s["closure"].update(policy="resume_allowed")]
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                changed = copy.deepcopy(state); mutate(changed)
+                with self.assertRaises(experiment.ExperimentError):
+                    experiment.validate_state(changed, plan)
+
     def retire_after_slow_intent(self, plan, *, seconds=130):
         write = experiment.write_json
         def slow_intent(path, value, **kwargs):
@@ -275,6 +396,61 @@ class ExperimentTests(unittest.TestCase):
             with self.assertRaisesRegex(experiment.ExperimentError, "insufficient_time_for_full_trial"):
                 self.coordinator(plan).run()
         return json.loads((self.root / "experiment/coordinator.json").read_text())
+
+    def test_entry_admission_follows_durable_intent_and_remains_held_through_child(self):
+        plan = self.plan()
+        active, closed = [], []
+        dispatch = {"envelope": {"path": str(self.root / "synthetic.json"), "sha256": "a" * 64},
+                    "pass_fds": (42,)}
+        @contextlib.contextmanager
+        def admission(plan, entry, request):
+            state = json.loads((self.root / "experiment/coordinator.json").read_bytes())
+            self.assertEqual(state["events"][-1]["kind"], "submission_intent")
+            self.assertEqual(state["submissions"][-1]["attempt_id"], entry["attempt_id"])
+            active.append(entry["attempt_id"])
+            try:
+                yield dispatch
+            finally:
+                closed.append(active.pop())
+        def launch(plan, entry, request, timeout, *, operation_join):
+            self.assertEqual(active, [entry["attempt_id"]])
+            self.assertIs(operation_join, dispatch)
+            return self.launcher(plan, entry, request, timeout)
+        result = self.coordinator(plan, launcher=launch, entry_admission=admission).run()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(closed, [entry["attempt_id"] for entry in plan["entries"]])
+        self.assertEqual(active, [])
+
+    def test_slow_admission_is_charged_before_launch_and_closes_on_known_retirement(self):
+        plan = self.plan(models=[experiment.MODELS[0]])
+        closed = []
+        @contextlib.contextmanager
+        def admission(*_):
+            self.clock.value += 5
+            try:
+                yield None
+            finally:
+                closed.append(True)
+        with self.assertRaisesRegex(experiment.ExperimentError, "insufficient_time_for_full_trial"):
+            self.coordinator(plan, entry_admission=admission).run()
+        state = json.loads((self.root / "experiment/coordinator.json").read_bytes())
+        self.assertEqual(self.calls, [])
+        self.assertEqual(closed, [True])
+        self.assertFalse(state["submissions"][0]["retirement"]["launcher_invoked"])
+
+    def test_uncertain_admission_publication_never_infers_unlaunched_retirement(self):
+        plan = self.plan()
+        @contextlib.contextmanager
+        def admission(*_):
+            raise OSError("synthetic lost entry-publication reply")
+            yield
+        with self.assertRaises(OSError):
+            self.coordinator(plan, entry_admission=admission).run()
+        state = json.loads((self.root / "experiment/coordinator.json").read_bytes())
+        self.assertNotIn("retirement", state["submissions"][0])
+        with self.assertRaisesRegex(experiment.ExperimentError, "submitted_attempt_unresolved"):
+            self.coordinator(plan).run(resume=True)
+        self.assertEqual(self.calls, [])
 
     def test_known_prelaunch_refusal_retires_id_and_resume_only_advances(self):
         # A shorter later fixture can still fit the original wall deadline.
