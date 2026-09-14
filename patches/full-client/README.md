@@ -25,6 +25,12 @@ The first patch:
 - Publishes numeric character and monster state from the game loop for the
   program controller. This is client telemetry, not server-authoritative scoring.
 
+The first patch's eight-update catch-up cap is insufficient at low render FPS.
+Apply the separately versioned `0014-fixed-step-catch-up.patch` for the candidate
+repair, then qualify actual simulation speed. Preserving queued ticks alone
+does not prevent growing time debt. See the
+[timing diagnosis](../../docs/FULL_CLIENT_FIXED_STEP_TIMING.md).
+
 The second patch opens ordinary key configuration when Backslash is pressed and
 has no configured binding. Existing bindings and chat text input retain their
 normal behavior. It changes no action mappings or server state by itself.

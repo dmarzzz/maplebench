@@ -1,5 +1,11 @@
 # Native baseline readiness
 
+**Timing qualification failed on subsequent review.** These recordings run at
+about 8.5 FPS, and the shipped eight-update cap limits the client to roughly
+54% of real-time simulation. The saved-XP and restoration checks below remain
+valid, but they do not qualify normal-speed gameplay. See the
+[timing diagnosis and candidate repair](FULL_CLIENT_FIXED_STEP_TIMING.md).
+
 As of September 13, 2026, the combined repaired client has completed
 productive/idle control pairs for all four classes: Ice/Lightning Arch Mage,
 Bowmaster, Hero and Night Lord. Productive controls saved **+14,000 XP**,
@@ -106,6 +112,9 @@ Arrow Bomb power, and Lucky Seven/Triple Throw base-range repairs. Successful
 productive controls do not isolate every repaired mechanic.
 
 ## Remaining admission work
+
+Rebuild with the timing repair and verify simulation time against wall time,
+including the recording overhead, before promoting replacement controls.
 
 All four productive/idle pairs are complete. Offline fixtures and mapped skill
 definitions still do not establish each skill's effects.

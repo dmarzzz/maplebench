@@ -55,6 +55,10 @@ XP-window ledger.
 
 ## Before model admission
 
+- [ ] Rebuild with the fixed-step timing repair and prove real-time simulation
+  during actual recorded gameplay. The September 13 controls' old eight-update
+  cap caused roughly half-speed simulation; capture integrity did not detect it.
+  See [the timing audit](FULL_CLIENT_FIXED_STEP_TIMING.md).
 - [ ] Verify actual native attacks, movement, buffs and resources on each fixture.
 - [x] Every class's productive control earns positive native XP and saves it
   through ordinary logout.
