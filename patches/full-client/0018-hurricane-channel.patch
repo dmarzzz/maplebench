@@ -1,0 +1,226 @@
+--- a/src/client/Gameplay/Combat/Combat.h
++++ b/src/client/Gameplay/Combat/Combat.h
+@@ -42,6 +42,8 @@
+ 
+         // Make the player use a special move. Returns true if the move was used.
+         bool use_move(int32_t move_id);
++        void send_skill_key(int32_t move_id, bool down);
++        void cancel_channel();
+         // Reset transient state (e.g. on map change).
+         void clear();
+ 
+@@ -72,6 +74,8 @@
+ 
+         void apply_attack(const AttackResult& attack);
+         void apply_move(const SpecialMove& move);
++        void update_channel();
++        bool channel_permitted();
+         void apply_use_movement(const SpecialMove& move);
+         void apply_result_movement(const SpecialMove& move, const AttackResult& result);
+         void apply_rush(const AttackResult& result);
+@@ -95,6 +99,9 @@
+         std::unordered_map<int32_t, Skill> skills;
+         RegularAttack regularattack;
+         int16_t teleport_cooldown = 0;
++        bool hurricane_key_down = false;
++        bool hurricane_active = false;
++        int32_t hurricane_until_shot_ms = 0;
+ 
+         TimedQueue<AttackResult> attackresults;
+         TimedQueue<BulletEffect> bulleteffects;
+--- a/src/client/Gameplay/Combat/Combat.cpp
++++ b/src/client/Gameplay/Combat/Combat.cpp
+@@ -26,6 +26,7 @@
+ #include "nlnx/nx.hpp"
+ 
+ #include <algorithm>
++#include "../../Constants.h"
+ 
+ namespace jrc
+ {
+@@ -72,6 +73,7 @@
+ 
+     void Combat::update()
+     {
++        update_channel();
+         if (teleport_cooldown > 0)
+             teleport_cooldown--;
+ 
+@@ -103,11 +105,81 @@
+ 
+     void Combat::clear()
+     {
++        cancel_channel();
+         teleport_cooldown = 0;
+     }
+ 
++    // Hurricane reconstruction v1: fixed 120ms packet cadence (LazyBui's
++    // 2008 packet-tick experiment), independent of weapon animation speed.
++    // Startup uses pinned Skill/312.img/skill/3121004/prepare/time = 960ms.
++    // The preparation FX frame durations are NOT the projectile clock.
++    bool Combat::channel_permitted()
++    {
++        return !player.is_dead() && !player.is_climbing() && !player.is_sitting()
++            && !player.is_key_down(KeyAction::LEFT) && !player.is_key_down(KeyAction::RIGHT)
++            && !player.is_key_down(KeyAction::UP) && !player.is_key_down(KeyAction::DOWN)
++            && !player.is_key_down(KeyAction::JUMP) && !player.is_key_down(KeyAction::ATTACK)
++            && player.get_stats().get_weapontype() == Weapon::BOW
++            && player.can_use(get_move(3121004)) == SpecialMove::FBR_NONE;
++    }
++
++    void Combat::cancel_channel()
++    {
++        hurricane_active = false;
++        hurricane_until_shot_ms = 0;
++        // Keep the physical-key latch until keyup. Repeated keydown events
++        // must not restart a cancelled channel or cross a map transition.
++    }
++
++    void Combat::send_skill_key(int32_t move_id, bool down)
++    {
++        if (move_id != 3121004)
++        {
++            if (down)
++            {
++                cancel_channel();
++                use_move(move_id);
++            }
++            return;
++        }
++        if (!down)
++        {
++            hurricane_key_down = false;
++            cancel_channel();
++            return;
++        }
++        if (hurricane_key_down)
++            return;
++        hurricane_key_down = true;
++        if (!player.can_attack() || !channel_permitted())
++            return;
++        hurricane_active = true;
++        hurricane_until_shot_ms = 960;
++        player.attack(std::string("shoot1"));
++    }
++
++    void Combat::update_channel()
++    {
++        if (!hurricane_active)
++            return;
++        if (!channel_permitted())
++        {
++            cancel_channel();
++            return;
++        }
++        hurricane_until_shot_ms -= Constants::TIMESTEP;
++        if (hurricane_until_shot_ms > 0)
++            return;
++        hurricane_until_shot_ms += 120;
++        // The channel owns this animation; can_attack() would reject its own
++        // previous pose. Admission/resources are still checked every update.
++        // Every pulse uses the ordinary ranged packet and server cost path.
++        apply_move(get_move(3121004));
++    }
++
+     bool Combat::use_move(int32_t move_id)
+     {
++        cancel_channel();
+         if (!player.can_attack())
+             return false;
+ 
+@@ -136,7 +208,10 @@
+             Attack attack = player.prepare_attack(move.is_skill());
+ 
+             move.apply_useeffects(player);
+-            move.apply_actions(player, attack.type);
++            if (move.get_id() == 3121004)
++                player.attack(std::string("shoot1"));
++            else
++                move.apply_actions(player, attack.type);
+ 
+             player.set_afterimage(move.get_id());
+ 
+--- a/src/client/Gameplay/Stage.cpp
++++ b/src/client/Gameplay/Stage.cpp
+@@ -416,6 +416,14 @@
+ 
+     void Stage::send_key(KeyType::Id type, int32_t action, bool down)
+     {
++        // Releases must reach the latch even while a transition blocks inputs.
++        if (type == KeyType::SKILL && !down)
++        {
++            combat.send_skill_key(action, false);
++            return;
++        }
++        if (down && type == KeyType::ACTION)
++            combat.cancel_channel();
+         if (state != ACTIVE || !playable)
+         {
+             return;
+@@ -469,7 +477,7 @@
+             break;
+         }
+         case KeyType::SKILL:
+-            combat.use_move(action);
++            combat.send_skill_key(action, down);
+             break;
+         case KeyType::ITEM:
+             player.use_item(action);
+--- a/src/client/IO/UI.cpp
++++ b/src/client/IO/UI.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "UI.h"
++#include "../Gameplay/Stage.h"
+ 
+ #include "UIStateLogin.h"
+ #include "UIStateGame.h"
+@@ -67,11 +68,13 @@
+ 
+     void UI::disable()
+     {
++        Stage::get().get_combat().cancel_channel();
+         enabled = false;
+     }
+ 
+     void UI::change_state(State id)
+     {
++        Stage::get().get_combat().cancel_channel();
+         switch (id)
+         {
+         case LOGIN:
+@@ -160,6 +163,8 @@
+ 
+     void UI::send_focus(int focused)
+     {
++        if (!focused)
++            Stage::get().get_combat().cancel_channel();
+         if (focused)
+         {
+             Sound::set_sfxvolume(Setting<SFXVolume>::get().load());
+@@ -194,6 +199,16 @@
+ 
+     void UI::send_key(int32_t keycode, bool pressed)
+     {
++        // Dialog/text focus must not swallow a skill's release. This path
++        // cannot admit a cast; normal keydown continues through UI routing.
++        if (!pressed)
++        {
++            const auto mapping = keyboard.get_mapping(keycode);
++            if (mapping.type == KeyType::SKILL)
++                Stage::get().get_combat().send_skill_key(mapping.action, false);
++        }
++        else if (keycode == GLFW_KEY_ESCAPE)
++            Stage::get().get_combat().cancel_channel();
+         bool escape = keycode == GLFW_KEY_ESCAPE;
+ 
+         if (escape)
+@@ -293,6 +308,7 @@
+ 
+     void UI::focus_textfield(Textfield* tofocus)
+     {
++        Stage::get().get_combat().cancel_channel();
+         if (focusedtextfield)
+         {
+             focusedtextfield->set_state(Textfield::NORMAL);

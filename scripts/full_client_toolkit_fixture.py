@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import stat
 
-from full_client_skill_toolkit import toolkit, validate_toolkit, fingerprint, SLOTS, profile
+from full_client_skill_toolkit import toolkit, validate_toolkit, fingerprint, SLOTS, profile, POLICY_ID, POLICY_V2_ID
 
 TOKEN=re.compile(r"NULL|-?[0-9]+|'(?:\\.|[^'\\])*'")
 MAX_SQL=64*1024*1024
@@ -95,9 +95,37 @@ def resource_stacks(policy,definitions):
     return stacks
 
 
+def etc_resource_stacks(policy,definitions):
+    """Exact finite ETC contents for v2; never borrow capacity from USE."""
+    stacks=[]
+    for item in policy['resources'].get('etc_items',[]):
+        entry=definitions.get('items',{}).get(str(item['item_id']),{})
+        need(item['item_id']//1000000==4 and entry.get('nx_xml_scalar_match') is True,
+             'etc_definition_not_verified')
+        # Cosmic ItemInformationProvider.getSlotMax defaults non-equips to100
+        # only when the verified item exists and its slotMax field is absent.
+        maximum=entry.get('info',{}).get('slotMax',100)
+        need(type(maximum) is int and 1<=maximum<=32767
+             and 0<item['quantity']<=maximum,'etc_stack_too_large')
+        stacks.append((item['item_id'],item['quantity']))
+    need(len(stacks)<=24,'fixture_etc_inventory_capacity_exceeded')
+    return stacks
+
+
 def transform(raw,policy,definitions):
     policy=validate_toolkit(policy);need(len(raw)<=MAX_SQL,'fixture_sql_limit')
     learned=learned_skills(policy,definitions);stacks=resource_stacks(policy,definitions)
+    etc_stacks=etc_resource_stacks(policy,definitions)
+    if policy['id']==POLICY_V2_ID and policy['class_id']=='hero':
+        need(definitions['skills']['1120004']['level_values'].get('x')==850,
+             'achilles_definition_not_verified')
+    if policy['id']==POLICY_V2_ID and policy['class_id']=='night_lord':
+        partner=definitions['skills']['4111002']['level_values']
+        need(partner.get('itemCon')==4006001 and partner.get('itemConNo')==1
+             and etc_stacks==[(4006001,10)],'shadow_partner_resource_not_verified')
+        fee=definitions['skills']['4121006']['level_values'].get('bulletConsume')
+        need(type(fee) is int and fee==200 and any(item//10000==207 and count>=fee
+             for item,count in stacks),'shadow_stars_resource_not_verified')
     text=raw.decode('utf8');names=('accounts','characters','skills','keymap','inventoryitems')
     tables={name:table(text,name) for name in names}
     accounts=tables['accounts'][1];characters=copy.deepcopy(tables['characters'][1])
@@ -143,12 +171,19 @@ def transform(raw,policy,definitions):
     olditems=tables['inventoryitems'][1]
     use=[row for row in olditems if row['inventorytype']=='2']
     need(use,'consumable_template_required')
-    items=[copy.deepcopy(row) for row in olditems if row['inventorytype']!='2']
+    replaced_types=('2','4') if policy['id']==POLICY_V2_ID else ('2',)
+    items=[copy.deepcopy(row) for row in olditems if row['inventorytype'] not in replaced_types]
     start=max(int(row['inventoryitemid']) for row in olditems)+1
     for i,(item_id,quantity) in enumerate(stacks):
         row=copy.deepcopy(use[0]);row.update(inventoryitemid=str(start+i),itemid=str(item_id),
             position=str(i+1),quantity=str(quantity))
         # New ordinary consumables must not inherit expiry, ownership or flags.
+        for key,value in {'owner':"''",'flag':'0','expiration':'-1','petid':'-1','giftFrom':"''"}.items():
+            if key in row:row[key]=value
+        items.append(row)
+    for i,(item_id,quantity) in enumerate(etc_stacks):
+        row=copy.deepcopy(use[0]);row.update(inventoryitemid=str(start+len(stacks)+i),itemid=str(item_id),
+            inventorytype='4',position=str(i+1),quantity=str(quantity))
         for key,value in {'owner':"''",'flag':'0','expiration':'-1','petid':'-1','giftFrom':"''"}.items():
             if key in row:row[key]=value
         items.append(row)
@@ -171,6 +206,8 @@ def transform(raw,policy,definitions):
         'keymap':sorted([[int(row[k]) for k in ('key','type','action')] for row in keys]),
         'use_inventory':[[i+1,item_id,quantity] for i,(item_id,quantity) in enumerate(stacks)],
         'equipment_replaced':False,'api_calls':0,'database_connections':0,'runtime_mutations':0}
+    if policy['id']==POLICY_V2_ID:
+        expected['etc_inventory']=[[i+1,item_id,quantity] for i,(item_id,quantity) in enumerate(etc_stacks)]
     return text.encode(),expected
 
 
@@ -188,11 +225,12 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('source','source-sha256','definitions','definitions-sha256','class-id','output-directory'):
         parser.add_argument('--'+name,required=True)
+    parser.add_argument('--policy-id',choices=(POLICY_ID,POLICY_V2_ID),default=POLICY_ID)
     args=parser.parse_args()
     try:
         source=read(args.source,args.source_sha256,MAX_SQL)
         definitions=read(args.definitions,args.definitions_sha256,1024*1024)
-        policy=toolkit(args.class_id);sql,expected=transform(source,policy,json.loads(definitions))
+        policy=toolkit(args.class_id,policy_id=args.policy_id);sql,expected=transform(source,policy,json.loads(definitions))
         out=Path(args.output_directory)
         need(out.is_absolute() and out.parent.resolve(strict=True)==out.parent and not os.path.lexists(out),'new_private_output_required')
         out.mkdir(mode=0o700);refs={}

@@ -1,0 +1,23 @@
+{
+  "ActiveBuffs.cpp": "12350df6c208a31a54ee595cc9bcf273ee57de451e6b7d69ea4b5bbd8130d516",
+  "ActiveBuffs.h": "79e3dbf64336651a2cd0fad240026288cbfaa7c19c3d505761686fdff050356d",
+  "Buff.cpp": "9a20354d036ded052ecb1157580060b08c1d2725fe97bda451d691d844884148",
+  "Buff.h": "38fd16157eaeafb300426a6b40dae6b0bbdd6d7fb57d924ffced97fcf4af7939",
+  "BuffStat.java": "4ca08309e63bec726f47f6cc92ca8bb728f730507b013aaa2b8c45bdba6d2fa7",
+  "CharStats.cpp": "437da1b992f6808e5b69347ee4a355cca3d10dd8e0c79acc2f245fc8b4a99cc3",
+  "EnumMap.h": "98768d79cc54285ab180d83885eaf70c37e0b0b0e239a4f39acec9a6b9fe12f4",
+  "Enumeration.h": "d128d524ed6744ecb5c88fc381fad96df9d9c5b7fb353e0f1efa0365d867fd24",
+  "EquipStat.cpp": "e590b65a1be75e4cf8af0978fe89c1ce48947b690272456896e38f705f11e8b1",
+  "EquipStat.h": "4890483439329f9986577cbfa4abf8054c12a02367ee53a80f3c6ee4de35e68f",
+  "InPacket.cpp": "ec09970ea8ac89e2865b5b06fb4ef8977b9311527c75d295d44e9d120b605da6",
+  "InPacket.h": "737e703716e4fbda2b7be119d41423d4e7ed59bf0525e8a73c9424dcab8c7574",
+  "LICENSE": "10ede613cce81dc5381ec9c1a08dcfdcd425d2a186a3efb25231ee3ba308585a",
+  "PacketCreator.java": "dfee4fb246a6f2b821c103bacc45bfb3bf8ed9aa4c0d9ac12ed129016a84c660",
+  "PacketError.h": "60f90dd27fda80ba0a8bde503f84e6758e2fe43137b180b2ee537df799cfd447",
+  "Player.cpp": "c499a212d019b1d0b128c74e86b5cec4625aaa97307475b1e073a8cebb712cb8",
+  "PlayerHandlers.cpp": "849077351bf49c93c457f64dd35836a7e5f5c881bcca5fdc834e0a2d497f22f4",
+  "PlayerHandlers.h": "fef5a816e7692f5b12039500cff43b8534c24ccda54e367cccee4bc099f47b2e",
+  "Point.h": "adaf4f8a111dd231abf2f9e2f5aa7466b4d47b84058c143a7ad0d2df5a17091a",
+  "StatCaps.h": "7bb5c54723181827d8bf16adb31027ede5f4d5885b1c8377f9b982ced0e0cc10",
+  "StatEffect.java": "831af0e619bffde6fddfcb25ed6b8f9414e02d7d578ffbaceefed318fce690b4"
+}

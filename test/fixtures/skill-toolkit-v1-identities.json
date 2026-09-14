@@ -1,0 +1,174 @@
+{
+  "base_revision": "0d615f62f3e7b066f44b8c7bb1d2427a776eb37a",
+  "classes": {
+    "bowmaster": {
+      "expected_fixture": "8551a8d46218fe4c0f358fce77fd3f5e86bb7fa99a208042b0cce440bf44cd0b",
+      "named_prompt": "1fda6f602bff393fa1753931bfafaa581a67877fd35ef278642090072013ee99",
+      "native": {
+        "scripted-native-acceptance-v1|active": [
+          "9a19ff3aac64522c217b64c31f4b2cdea557dfcbc5b24b15eb2d66b6396654e2",
+          "f9746c8db2fa69028ce7fb89fcf775b75f24e6b53178146b91206a421b6a6124"
+        ],
+        "scripted-native-acceptance-v2|active": [
+          "6755d9533aa59c8b7c5d2d6f8116a5e4a4c5e90329fd8888bcf62b3f48d77c4a",
+          "e605d3b65e1caa0554e55c9aef5d9a026ae17538bcd79aed8115dbb0d70aa01b"
+        ],
+        "scripted-native-acceptance-v3|active": [
+          "3fec0be3d6dc6d4e7b09e0afe7ef7f6756c85779a284eb726d3549b6f52afb76",
+          "7cdc0f151a2eb35782b0788358af208699b2cc9d256c71e9795514afed9c858d"
+        ],
+        "scripted-native-acceptance-v4|active": [
+          "6780a90a6b6b78f90cdbc8364133c7dac387f5621c3281ce5ddc039ee41d4e62",
+          "ef1048a8a1f73f6bd357d95ac4ff254296aba7b04155379f5eeb1cdc6be3b65d"
+        ],
+        "scripted-native-productivity-v1|active": [
+          "2e27327580faa5b941e8f7bbeece41eb8b697ce43d767055a4c7dc49e4ff37b4",
+          "1f989f30d08bf4bdcfecb63c20ae418caa7eeb8490604aca6346bee5459b14ab"
+        ],
+        "scripted-native-productivity-v1|idle": [
+          "688ed0271e401797ba8457724b70f8f490bc37b6f8f72d11386bfe9c5ffc21ae",
+          "f2866cf2f287cd3c025b0c82662901439a1b54239ce18cad24f3de1a242e1400"
+        ],
+        "scripted-native-productivity-v2|active": [
+          "1e3eaf1a1295db1c5af0f8a414486f0438e82b11fa6cf289327636ddf0fbdc2a",
+          "190735644dd15f8e00762b9a1fa9b1c7a289b2b6418318fd396b6d5b46fb485b"
+        ],
+        "scripted-native-productivity-v2|idle": [
+          "64ba53b77aef618ab154ab0d53e18bdb9fde5bedd642d3597eab89517c978f3b",
+          "70df3801a851dec9a23d41812d3ca74c7a8cba7aae39ed41f71dff1762fcdc2e"
+        ],
+        "scripted-native-toolkit-acceptance-v1|active": [
+          "2224b79a57f970756417f7f3fe30f442ac398b75be00c079c91e160a27694779",
+          "bbab3eaf4d4bac5af0eefb03760c46f49782dd0e4361bfa2ac32b558cdd630b2"
+        ]
+      },
+      "prompt": "96c165d43b8fe53a9564da79f008b8e66ea3831bef6341a0a1253d90f5a4cb76",
+      "sql": "966580ede5546264fd708f5f64c8c1ac1152b35b27526a32b9c8c76084c6b50b",
+      "toolkit": "fa6c14e7adc76ff73fc4d0a91d4455b2accef7d0f7d62361af6246633b50ba82"
+    },
+    "hero": {
+      "expected_fixture": "a78b6254a9dcaec6e31984955a6187c3f5affff2c1d38c8bb18fbf5f97313299",
+      "named_prompt": "9c29cb2c4c249a5cc898ac2c6e6bef6ec3592b5fa9a242d1b07625d11c52ec4d",
+      "native": {
+        "scripted-native-acceptance-v1|active": [
+          "e56b457adfb65b2717ee3fa3926b9af325b258e173571ed8a71bf3b0d51e9229",
+          "01d2efa4d4d5768a17cc52824ce4e91fa2eb82f7378214053c587d5d9e790086"
+        ],
+        "scripted-native-acceptance-v2|active": [
+          "e8fae2e4ca27fba9313f58330d5528d922a728f01860b202ba9038d2e5129670",
+          "35dce2d10d8ded8af2ab8ec4ce5ef07e2f28fbbc8e554f0bdfa381e01a05df11"
+        ],
+        "scripted-native-acceptance-v3|active": [
+          "2302ab8759e4923ae8d6bb2ee3facad45ff3ed110357678869871ddc057e7bb5",
+          "35dce2d10d8ded8af2ab8ec4ce5ef07e2f28fbbc8e554f0bdfa381e01a05df11"
+        ],
+        "scripted-native-acceptance-v4|active": [
+          "f17a8751b0aa476b0d9f148fb82967e1e24dd2ecd2c3bbca3433e3cbc20b1304",
+          "35dce2d10d8ded8af2ab8ec4ce5ef07e2f28fbbc8e554f0bdfa381e01a05df11"
+        ],
+        "scripted-native-productivity-v1|active": [
+          "91a6f537b561a1e15d613b952699ca247a9dfac23ae077742760b229f720c506",
+          "ecd43a1d490797ab50c40caf931bf3781bae9964653e221206d780a2fcc6cfeb"
+        ],
+        "scripted-native-productivity-v1|idle": [
+          "4a2ea364a4cde20c72c280c9f1b7290d2c71910a7a67a32597b20ba9b0d416c5",
+          "f2866cf2f287cd3c025b0c82662901439a1b54239ce18cad24f3de1a242e1400"
+        ],
+        "scripted-native-productivity-v2|active": [
+          "47e719655b97901fc0399ffd6e5df96649a3e2e71a9fb3d97e9d5f6db8cb03c4",
+          "252fdc7b8c574fd2fc480268fb8198f9d05efb777edb7cd977efac3d1712d5f6"
+        ],
+        "scripted-native-productivity-v2|idle": [
+          "7825cabf9fc1c820399cbf81f358b11e217fde6cf3d5110cee6533dea8afddd5",
+          "70df3801a851dec9a23d41812d3ca74c7a8cba7aae39ed41f71dff1762fcdc2e"
+        ],
+        "scripted-native-toolkit-acceptance-v1|active": [
+          "1b15dd7c8afa44f8781ebebeb434df19819df56916ff1ff7575b3f47303e4a89",
+          "968604896c75bfbd3b25f9a0076e937a9324552d7653b2c08517e15a37702909"
+        ]
+      },
+      "prompt": "beb2adf7964cf27c42f5b59b069a317d96730d7e3e67f0ed8b8a7a31d24bf9d4",
+      "sql": "30f9b4a14400e2843824773c0a46c5f513a5a31884a1b1b84e466afaa193499f",
+      "toolkit": "cd71aa142a49c18328b93287d42ecc1264b336d2d7180f5e6072d6c6b95459a1"
+    },
+    "ice_lightning_arch_mage": {
+      "expected_fixture": "12f1e0999724a5b0b03e0c0b1e88188ed68e1ab619f6d00bfc8bc1ca4daf5a65",
+      "named_prompt": "bc8dc02206713dd4a57eadf4972b75420e76c430a0a8567bcaf2371d29f1c38d",
+      "native": {
+        "scripted-native-acceptance-v1|active": [
+          "8ffc472276a3daa9161d525ceb97fcbbd0504bc77ea303fe76ddad51ab919cbd",
+          "8dc03f0185e3059ad577c68d6b35ea716796b4b59defdd717d5ec447142408f0"
+        ],
+        "scripted-native-acceptance-v2|active": [
+          "6f86d9e806f25ff90ee8493d618afd438986a5bd80a1f8c644c527348448545e",
+          "38a26e497857b9852e02cb3cc90faefd6770e713654d2c76e6e7ab4073f45158"
+        ],
+        "scripted-native-acceptance-v3|active": [
+          "59fafc4cb60e709bb7488f8de1fe7a43771ee749301d0dfc4b0993f45fc2efb0",
+          "b8127a06cda14bb1ab815b35d8f057df9c55c7c97232376c6df733c0338dba74"
+        ],
+        "scripted-native-acceptance-v4|active": [
+          "8ecf5ad1f3c703918258ab9bc8f146c9bedf49ff878df8c1dafddfe978eb6658",
+          "697daf15459f4011fd8a9c7a859131ed1cca9397a44acc7b759382c707fb3dd0"
+        ],
+        "scripted-native-productivity-v1|active": [
+          "522275e804e51c3759fab942041e938936370360f952af24081e5ba58cf945a2",
+          "dd9af4c8ba22411ab8e17ed273ebff52cc76bb40470ea0cf458f16b2f627d1b1"
+        ],
+        "scripted-native-productivity-v1|idle": [
+          "2313486286cb6f76a8a6e3917d452163b1bdacfbc2a58fee776b191965c04ea6",
+          "f2866cf2f287cd3c025b0c82662901439a1b54239ce18cad24f3de1a242e1400"
+        ],
+        "scripted-native-productivity-v2|active": [
+          "b8842692c7759a9ff5573df64b254b87cd2c02fd450592e4d2a5edefe0dd342a",
+          "a80c3ce401741e712cca8d94a2dbf9748147e21606ce8b6d56a318ef57f17761"
+        ],
+        "scripted-native-productivity-v2|idle": [
+          "0b35201b8d552e719c6aaf1968f6682b6bc0b7a961d921578eb46c139c4afdb8",
+          "70df3801a851dec9a23d41812d3ca74c7a8cba7aae39ed41f71dff1762fcdc2e"
+        ],
+        "scripted-native-toolkit-acceptance-v1|active": [
+          "f0342e559f5a3940e5dec16cfb9aa6e23c44e9a6bb8b4ba91cdb835740c02ec2",
+          "b54e4cacd433551043d1f6594f5de2580737e307eea57a2cb5c24ff24b68851c"
+        ]
+      },
+      "prompt": "46c8c613fc9224134ef70d284b94b2b0b130d571edcffc191a5f1334a61c1456",
+      "sql": "dccb7413efc490b92f98e933c1eb4621a107bd5abe351dbc263425f273b10e23",
+      "toolkit": "7751d649db7ec8f3873fe0a3756dc1e805a0f9c32d479d39ed37983303b087f3"
+    },
+    "night_lord": {
+      "expected_fixture": "ad8ad26522bbcfcd68b00f04315e1f8f01bc1bccfdb823463c46a6aca106e460",
+      "named_prompt": "fb9b0a1228e8f17ef89c149cab901ad1da00ec3f0b54508ffce11e9a22b2ae0f",
+      "native": {
+        "scripted-native-acceptance-v4|active": [
+          "c3969bd1960849346f5c8b6c56bdeac4fe68ecfbb39ed702869f50a67e86932f",
+          "ef1048a8a1f73f6bd357d95ac4ff254296aba7b04155379f5eeb1cdc6be3b65d"
+        ],
+        "scripted-native-productivity-v1|active": [
+          "735e96772af08d00443e2f89e29474e224454c8fc513abe1f820b72068ea42a4",
+          "dd9af4c8ba22411ab8e17ed273ebff52cc76bb40470ea0cf458f16b2f627d1b1"
+        ],
+        "scripted-native-productivity-v1|idle": [
+          "7859de4b95e577dabfc81c566682e0045bbe392db9455fccaf85d8d03ab6c278",
+          "f2866cf2f287cd3c025b0c82662901439a1b54239ce18cad24f3de1a242e1400"
+        ],
+        "scripted-native-productivity-v2|active": [
+          "77d6f27d6a363b05344a477d4ddd36af2866006b4711363f1c31cc12247e1be1",
+          "a80c3ce401741e712cca8d94a2dbf9748147e21606ce8b6d56a318ef57f17761"
+        ],
+        "scripted-native-productivity-v2|idle": [
+          "8cba661f0bff2a222327ed9690c0046897b032d249f0db05b41d175020aec9f6",
+          "70df3801a851dec9a23d41812d3ca74c7a8cba7aae39ed41f71dff1762fcdc2e"
+        ],
+        "scripted-native-toolkit-acceptance-v1|active": [
+          "d4fdc3e61dffaf0ffe2f6c83452e005d062c3f67a5473615b7c086a7df08535a",
+          "3d47c6e13675afd85016ffee80c84b0b91c0a7562027bdbde09cc1c4e1e7c153"
+        ]
+      },
+      "prompt": "ab078e14f4366209f39bf67cf5ed609351fca04695e3b426329ed4305a11bda5",
+      "sql": "1c34ac865479117f585f72d3479057822ce3c28ec4245a856f6839095c3fe717",
+      "toolkit": "3908125e5f1d328483a156593aac4ba03a44109d45cf86e18fac196a44880867"
+    }
+  },
+  "schema_version": 1
+}

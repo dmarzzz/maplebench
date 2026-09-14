@@ -1,0 +1,73 @@
+--- a/src/client/Character/PassiveBuffs.cpp
++++ b/src/client/Character/PassiveBuffs.cpp
+@@ -72,7 +72,8 @@
+ 
+     void AchillesBuff::apply_to(CharStats& stats, nl::node level) const
+     {
+-        float reducedamage = static_cast<float>(level["x"]) / 1000;
++        // WZ x is damage remaining in thousandths, not the reduction.
++        float reducedamage = (1000.0f - static_cast<float>(level["x"])) / 1000.0f;
+         stats.set_reducedamage(reducedamage);
+     }
+ 
+--- a/src/client/Character/CharStats.h
++++ b/src/client/Character/CharStats.h
+@@ -51,6 +51,8 @@
+         void change_job(uint16_t id);
+ 
+         int32_t calculate_damage(int32_t mobatk) const;
++        int32_t calculate_damage_before_passives(int32_t mobatk) const;
++        int32_t mitigate_damage(int32_t damage) const;
+ 
+         bool is_damage_buffed() const;
+         uint16_t get_stat(Maplestat::Id stat) const;
+--- a/src/client/Character/CharStats.cpp
++++ b/src/client/Character/CharStats.cpp
+@@ -222,9 +222,21 @@
+ 
+     int32_t CharStats::calculate_damage(int32_t mobatk) const
+     {
+-        // random stuff, need to find the actual formula somewhere
+-        int32_t reduceatk = mobatk / 2 + mobatk / get_total(Equipstat::WDEF);
+-        return reduceatk - static_cast<int32_t>(reduceatk * reducedamage);
++        return mitigate_damage(calculate_damage_before_passives(mobatk));
++    }
++
++    int32_t CharStats::calculate_damage_before_passives(int32_t mobatk) const
++    {
++        // Existing contact estimate; original-client defense/RNG remains unqualified.
++        return mobatk / 2 + mobatk / get_total(Equipstat::WDEF);
++    }
++
++    int32_t CharStats::mitigate_damage(int32_t damage) const
++    {
++        // Local display prediction only. Cosmic owns persisted passive mitigation.
++        // Achilles is the sole producer: recover its exact asset thousandths.
++        int32_t remaining = 1000 - static_cast<int32_t>(reducedamage * 1000.0f + 0.5f);
++        return static_cast<int32_t>(damage * (remaining / 1000.0));
+     }
+ 
+     bool CharStats::is_damage_buffed() const
+--- a/src/client/Character/Player.cpp
++++ b/src/client/Character/Player.cpp
+@@ -453,7 +453,10 @@
+ 
+     MobAttackResult Player::damage(const MobAttack& attack)
+     {
+-        int32_t damage = stats.calculate_damage(attack.watk);
++        // Compute the contact base once. The server applies Achilles exactly once
++        // to this wire value; a local display estimate must not reduce it again.
++        int32_t wire_damage = stats.calculate_damage_before_passives(attack.watk);
++        int32_t damage = stats.mitigate_damage(wire_damage);
+         show_damage(damage);
+ 
+         bool fromleft = attack.origin.x() > phobj.get_x();
+@@ -468,7 +471,7 @@
+         }
+ 
+         uint8_t direction = fromleft ? 0 : 1;
+-        return { attack, damage, direction };
++        return { attack, wire_damage, direction };
+     }
+ 
+     void Player::die()

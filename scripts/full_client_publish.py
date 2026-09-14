@@ -810,9 +810,11 @@ def verify_capture_bundle(manifest, artifact_root):
             "capture: invalid terminal server receipt")
     require(_text(result["controller"].get("client")), "capture: controller renderer identity missing")
     from full_client_native import (PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, NATIVE_V3_PROTOCOL,
-                                    NATIVE_V4_PROTOCOL, TOOLKIT_NATIVE_PROTOCOL, PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL)
+                                    NATIVE_V4_PROTOCOL, TOOLKIT_NATIVE_PROTOCOL, TOOLKIT_NATIVE_V2_PROTOCOL,
+                                    PRODUCTIVITY_PROTOCOL, PRODUCTIVITY_V2_PROTOCOL)
     native = result.get("protocol") in (NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,
-                                        NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,PRODUCTIVITY_PROTOCOL,PRODUCTIVITY_V2_PROTOCOL)
+                                        NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,TOOLKIT_NATIVE_V2_PROTOCOL,
+                                        PRODUCTIVITY_PROTOCOL,PRODUCTIVITY_V2_PROTOCOL)
     owner = {"id": run_id, "client": result["controller"]["client"], "startedAtMs": started,
              "protocol": result.get("protocol"), "adaptiveProtocol":result.get('adaptive',{}).get('limits',{})}
     if native:

@@ -4,7 +4,9 @@ import json
 import re
 
 from full_client_capture import CAPTURE_DURATION_POLICY, ENCODED_FRAME_POLICY, validate_duration_policy
-from full_client_skill_toolkit import NATIVE_PROTOCOL as TOOLKIT_NATIVE_PROTOCOL, toolkit, profile as toolkit_profile
+from full_client_skill_toolkit import (NATIVE_PROTOCOL as TOOLKIT_NATIVE_PROTOCOL,
+    NATIVE_V2_PROTOCOL as TOOLKIT_NATIVE_V2_PROTOCOL, POLICY_V2_ID,
+    toolkit, profile as toolkit_profile)
 
 PROTOCOL = 'scripted-native-acceptance-v1'
 NATIVE_V2_PROTOCOL = 'scripted-native-acceptance-v2'
@@ -24,7 +26,7 @@ PROFILES = {
 }
 
 def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL, control='active'):
-    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,PRODUCTIVITY_PROTOCOL,PRODUCTIVITY_V2_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
+    if protocol not in (PROTOCOL,NATIVE_V2_PROTOCOL,NATIVE_V3_PROTOCOL,NATIVE_V4_PROTOCOL,TOOLKIT_NATIVE_PROTOCOL,TOOLKIT_NATIVE_V2_PROTOCOL,PRODUCTIVITY_PROTOCOL,PRODUCTIVITY_V2_PROTOCOL) or class_id not in PROFILES or not isinstance(baseline_sha256,str) or not re.fullmatch('[a-f0-9]{64}',baseline_sha256):
         raise ValueError('invalid_native_fixture')
     if protocol==PRODUCTIVITY_PROTOCOL:
         if control not in ('active','idle'):raise ValueError('invalid_native_control')
@@ -41,6 +43,11 @@ def contract(class_id, baseline_sha256, *, protocol=NATIVE_V2_PROTOCOL, control=
             'max_actions':256,'max_sdk_requests':900,'capture_max_ms':185000,
             'capture_duration_policy':dict(ENCODED_FRAME_POLICY)}
     if control!='active':raise ValueError('invalid_native_control')
+    if protocol==TOOLKIT_NATIVE_V2_PROTOCOL:
+        policy=toolkit(class_id,policy_id=POLICY_V2_ID)
+        return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
+            'baseline_sha256':baseline_sha256,'wall_seconds':120,'max_actions':128,'max_sdk_requests':600,
+            'capture_max_ms':125000,'capture_duration_policy':dict(ENCODED_FRAME_POLICY)}
     if protocol==TOOLKIT_NATIVE_PROTOCOL:
         policy=toolkit(class_id)
         return {'id':protocol,'class_id':class_id,'profile':toolkit_profile(policy),'skill_toolkit':policy,
@@ -88,6 +95,7 @@ def program(value):
     if value['id']==PRODUCTIVITY_PROTOCOL:return _productivity_program(value)
     if value['id']==PRODUCTIVITY_V2_PROTOCOL:return _productivity_v2_program(value)
     if value['id']==TOOLKIT_NATIVE_PROTOCOL:return _toolkit_program(value)
+    if value['id']==TOOLKIT_NATIVE_V2_PROTOCOL:return _toolkit_v2_program(value)
     if value['id']==PROTOCOL:return _legacy_program(value)
     if value['id']==NATIVE_V3_PROTOCOL and class_id!='hero':return _targeted_program(value)
     if value['id']==NATIVE_V4_PROTOCOL and class_id!='hero':return _targeted_program(value,horizontal_limit=300)
@@ -127,6 +135,109 @@ for(let step=0;step<4;step++){
         code+=f"await sdk.observe();\nawait sdk.pressKeys(['{key}'],{duration});\nawait sdk.wait(1100);\nawait sdk.observe();\n"
     # Keep a short passive tail for end-frame and native-effect inspection.
     code+='await sdk.wait(1500);\nawait sdk.observe();\n'
+    return code
+
+
+def _toolkit_v2_program(value):
+    """Finite input opportunities; independent native effects decide qualification.
+
+    Every damage input gets a fresh approach/facing check. Failed alignment is
+    skipped, never asserted to be a hit. Budget exhaustion stops new inputs;
+    the ordinary save/restore lifecycle still records what actually happened.
+    """
+    class_id=value['class_id']
+    code="""// Scripted toolkit v2 verification candidate; no model, ranking or game-state edits.
+// Acknowledgements prove delivery only. Review casts, hits, buffs and resources separately.
+const end=Date.now()+112000;
+let actions=0;
+const room=()=>Date.now()<end&&actions<120;
+async function input(keys,ms){
+  if(!room())return false;
+  const ack=await sdk.pressKeys(keys,ms);actions++;
+  if(ack.accepted!==true)throw new Error('toolkit_input_not_accepted');
+  return true;
+}
+async function probe(keys,ms=100,settle=1600){
+  if(!room())return false;
+  const before=await sdk.observe();
+  if(before.character.alive===false)return false;
+  if(!await input(keys,ms))return false;
+  await sdk.observe();
+  await sdk.wait(settle);
+  await sdk.observe();
+  return true;
+}
+async function faceTarget(range){
+  for(let step=0;step<4&&room();step++){
+    const scene=await sdk.observe();
+    if(scene.character.alive===false)return false;
+    const near=scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=50)
+      .sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x));
+    if(!near.length)return false;
+    const target=near[0],dx=target.x-scene.character.x;
+    const inRange=Math.abs(dx)<=range;
+    if(!await input([dx<0?'LEFT':'RIGHT'],inRange?30:250))return false;
+    const after=await sdk.observe();
+    const current=after.monsters.find(m=>m.objectId===target.objectId);
+    if(after.character.alive===false)return false;
+    if(inRange&&current&&Math.abs(current.y-after.character.y)<=50&&
+      Math.abs(current.x-after.character.x)<=range&&((current.x-after.character.x<0)===(dx<0)))return true;
+    await sdk.wait(120);
+  }
+  return false;
+}
+async function cast(key,hold=100,settle=1800){
+  if(!room()||!await faceTarget(__RANGE__))return false;
+  return probe([key],hold,settle);
+}
+await sdk.wait(1000);
+await probe(['JUMP'],300,1600);
+""".replace('__RANGE__','100' if class_id=='hero' else '240')
+    if class_id=='ice_lightning_arch_mage':
+        code+="""// Two isolated Teleport inputs: immediate and settled observations retain collision constraints.
+for(const direction of ['LEFT','RIGHT'])await probe([direction,'SECONDARY_SKILL'],30,1400);
+"""
+    buffs=[s['slot'] for s in value['skill_toolkit']['skills'] if s['route']=='buff']
+    if class_id=='night_lord':
+        # Preserve a real pre-partner/pre-exemption comparison opportunity.
+        code+="await cast('PRIMARY_SKILL');\nawait cast('ATTACK');\n"
+        buffs=[slot for slot in buffs if slot not in ('SKILL_9','SKILL_10')]
+    code+='for(const key of '+json.dumps(buffs)+")await probe([key]);\n"
+    if class_id=='hero':
+        code+="""// Server-owned orbs are built by actual hit opportunities, never granted or inferred here.
+for(let hit=0;hit<3;hit++)await cast('PRIMARY_SKILL');
+await cast('ATTACK');
+await cast('SKILL_5');
+for(const finisher of ['SKILL_6','SKILL_7']){
+  // The preceding finisher consumes orbs on the server. Rebuild before EACH new finisher.
+  for(let hit=0;hit<4;hit++)await cast('PRIMARY_SKILL');
+  await cast(finisher);
+}
+"""
+    elif class_id=='night_lord':
+        code+="""await probe(['SKILL_9']);
+await cast('PRIMARY_SKILL');
+await cast('ATTACK');
+await probe(['SKILL_10']);
+await cast('PRIMARY_SKILL');
+for(const key of ['SECONDARY_SKILL','SKILL_5','SKILL_6'])await cast(key);
+"""
+    else:
+        attacks=[s['slot'] for s in value['skill_toolkit']['skills']
+                 if s['route'] in ('attack','attack_movement','channel_attack')]
+        code+="await cast('ATTACK');\n"
+        for slot in attacks:
+            # 1500 is the existing SDK maximum, covering 960 ms preparation
+            # and several 120 ms firing intervals without extending authority.
+            hold=1500 if class_id=='bowmaster' and slot=='PRIMARY_SKILL' else 100
+            settle=2800 if class_id=='ice_lightning_arch_mage' and slot=='SKILL_7' else 1800
+            code+=f"await cast('{slot}',{hold},{settle});\n"
+    code+="""// Both keys share one finite supply; receipts decide actual consumption.
+await probe(['HP_POTION'],100,1600);
+await probe(['MP_POTION'],100,1600);
+await sdk.wait(2000);
+await sdk.observe();
+"""
     return code
 
 

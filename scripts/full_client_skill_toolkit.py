@@ -9,8 +9,10 @@ import hashlib
 import json
 
 POLICY_ID = 'full-client-skill-toolkit-v1'
+POLICY_V2_ID = 'full-client-skill-toolkit-v2'
 RECIPE_ID = 'full-client-training-v2'
 NATIVE_PROTOCOL = 'scripted-native-toolkit-acceptance-v1'
+NATIVE_V2_PROTOCOL = 'scripted-native-toolkit-acceptance-v2'
 SLOTS = {
     'PRIMARY_SKILL': ('KeyA', 30), 'SECONDARY_SKILL': ('KeyS', 31),
     'BUFF_1': ('KeyD', 32), 'BUFF_2': ('KeyF', 33),
@@ -92,8 +94,12 @@ _CLASSES = {
 }
 
 
-def toolkit(class_id):
+def toolkit(class_id, *, policy_id=POLICY_ID):
     """Return a new value; callers cannot mutate the canonical policy."""
+    if policy_id == POLICY_V2_ID:
+        return _toolkit_v2(class_id)
+    if policy_id != POLICY_ID:
+        raise ValueError('invalid_skill_toolkit_policy')
     if class_id not in _CLASSES:
         raise ValueError('invalid_skill_toolkit_class')
     cls = _CLASSES[class_id]
@@ -115,6 +121,49 @@ def toolkit(class_id):
         'unsupported':copy.deepcopy(cls['unsupported'])}
 
 
+def _toolkit_v2(class_id):
+    """Opt-in repaired-port candidate; the historical v1 value stays exact."""
+    value = toolkit(class_id)
+    value['id'] = POLICY_V2_ID
+    value['fixture_id'] = class_id.replace('_','-')+'-toolkit-v2'
+    value['resources']['etc_items'] = []
+    if class_id == 'hero':
+        value['skills'][1]['description'] = ('Activate before combat; only server-confirmed hits build orbs. '
+            'The repaired port uses received orbs and learned Combo/Advanced Combo for damage.')
+        for index in (5,6):
+            value['skills'][index]['description'] += (' The repaired port rejects zero-orb casts; '
+                'the server consumes orbs, so rebuild before the next finisher.')
+        value['passives'].append({'skill_id':1120004,'level':30})
+        value['unsupported'].append('The original-client contact defense/RNG formula and combined defensive-buff display prediction remain unqualified.')
+    elif class_id == 'bowmaster':
+        value['skills'][0]['route'] = 'channel_attack'
+        value['skills'][0]['description'] = ('Hold PRIMARY_SKILL for more than 960 ms: this repaired port '
+            'prepares for 960 ms, then fires at 120 ms simulation intervals while held. Release stops future shots. '
+            'This is a versioned port timing policy, not fully qualified original-client timing.')
+        value['skills'][3]['description'] = ('Received physical critical buff: at this level adds 15 percentage points '
+            'of critical chance and 140 points of damage to the critical coefficient; live effects still require review.')
+        value['unsupported'] = [item for item in value['unsupported']
+            if not item.startswith('Hurricane continuous')]
+        value['unsupported'].append('Hurricane original preparation/end animation fidelity and remote presentation remain unqualified.')
+    elif class_id == 'night_lord':
+        added = [
+            _skill(4111002,30,'Shadow Partner','buff',
+                'Consumes one finite Summoning Rock from ETC. The repaired port duplicates normal and skill '
+                'attack lines at their separate asset ratios; verify actual lines and resource consumption.'),
+            _skill(4121006,30,'Shadow Stars','buff',
+                'Requires and consumes 200 stars from one real stack to activate. The server exempts '
+                'subsequent per-attack star consumption while the received buff is active.'),
+        ]
+        for slot,skill in zip(('SKILL_9','SKILL_10'),added):
+            code,scancode=SLOTS[slot]
+            value['skills'].append(dict(skill,slot=slot,code=code,key=scancode,key_type=1))
+        value['resources']['etc_items'] = [{'item_id':4006001,'quantity':10}]
+        value['unsupported'] = [item for item in value['unsupported']
+            if not item.startswith(('Shadow Partner','Shadow Stars'))]
+        value['unsupported'].append('Shadow Partner follow-along visual presentation and complete Night Lord mechanics remain unqualified.')
+    return value
+
+
 def profile(value):
     value = validate_toolkit(value)
     return {'id':value['fixture_id'],'class_name':value['class_name'],'level':value['level'],
@@ -127,7 +176,7 @@ def fingerprint(value):
 
 def validate_toolkit(value, expected_profile=None):
     try:
-        expected = toolkit(value['class_id'])
+        expected = toolkit(value['class_id'],policy_id=value['id'])
         if fingerprint(value) != fingerprint(expected):
             raise ValueError('invalid_skill_toolkit')
         if expected_profile is not None:
@@ -166,6 +215,10 @@ def prompt_reference(value, *, include_physical_keys=True):
                      f"({ammo['stacks'] * ammo['quantity_per_stack']} total).")
     else:
         lines.append('This fixture has no ammunition supply or ammunition requirement.')
+    if value['id'] == POLICY_V2_ID:
+        etc = resources['etc_items']
+        lines.append('Starting ETC inventory: '+(', '.join(
+            f"{item['quantity']} Summoning Rocks (item {item['item_id']})" for item in etc) if etc else 'empty')+'.')
     for skill in value['skills']:
         physical_key = f" ({skill['code'][3:]})" if include_physical_keys else ''
         lines.append(f"  {skill['slot']}{physical_key}: {skill['name']} level {skill['level']} — {skill['description']}")

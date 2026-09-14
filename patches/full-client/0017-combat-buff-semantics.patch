@@ -1,0 +1,198 @@
+--- a/src/client/Character/Player.cpp
++++ b/src/client/Character/Player.cpp
+@@ -17,6 +17,9 @@
+ //////////////////////////////////////////////////////////////////////////////
+ #include "Player.h"
+ #include "../Gameplay/Combat/AmmunitionPolicy.h"
++#include "../Gameplay/Combat/CombatBuffPolicy.h"
++#include "nlnx/node.hpp"
++#include "nlnx/nx.hpp"
+ #include "PlayerStates.h"
+ 
+ #include "../Constants.h"
+@@ -299,6 +302,13 @@
+         {
+             return SpecialMove::FBR_COOLDOWN;
+         }
++
++        // The server grants and consumes orbs. A buff cast alone has count1,
++        // so it cannot admit Panic/Coma until an orb update has arrived.
++        if (is_combo_finisher(move.get_id())
++            && (buffs[Buffstat::COMBO].skillid != 1111002
++                || buffs[Buffstat::COMBO].value <= 1))
++            return SpecialMove::FBR_OTHER;
+ 
+         int32_t level       = skillbook.get_level(move.get_id());
+         Weapon::Type weapon = get_weapontype();
+@@ -380,7 +390,6 @@
+         // Critical Shot/Throw apply to projectile attacks, including ordinary
+         // shots. Resolve from current learned skills on every attack: removing
+         // a skill or changing weapons cannot leave a cached critical profile.
+-        // Sharp Eyes is deliberately excluded until its stacking is verified.
+         attack.critical = 0.0f;
+         attack.critical_bonus_percent = 0;
+         if (attacktype == Attack::RANGED)
+@@ -399,6 +408,39 @@
+                     static_cast<int32_t>(std::lround(critical.damage * 100.0f)) - 100);
+             }
+         }
++        // Sharp Eyes is authoritative received state, including party buffs.
++        // Physical critical damage uses the low byte as an additive percent;
++        // the high byte adds chance. No cached stat mutation or local timer.
++        const Buff& sharp_eyes = buffs[Buffstat::SHARP_EYES];
++        if (attacktype != Attack::MAGIC && sharp_eyes.stat == Buffstat::SHARP_EYES
++            && (sharp_eyes.skillid == 3121002 || sharp_eyes.skillid == 3221002))
++        {
++            const uint16_t packed = static_cast<uint16_t>(sharp_eyes.value);
++            attack.critical = std::clamp(attack.critical + (packed >> 8) / 100.0f, 0.0f, 1.0f);
++            attack.critical_bonus_percent += packed & 0xff;
++        }
++
++        // Combo multiplies the physical skill coefficient, not the stat-panel
++        // range or the critical bonus. Re-read learned state on every attack.
++        const Weapon::Type weapon = get_weapontype();
++        const bool combo_weapon = weapon == Weapon::SWORD_1H || weapon == Weapon::SWORD_2H
++            || weapon == Weapon::AXE_1H || weapon == Weapon::AXE_2H;
++        const Buff& combo = buffs[Buffstat::COMBO];
++        const int32_t combo_level = get_skilllevel(1111002);
++        if (attacktype == Attack::CLOSE && combo_weapon && combo.stat == Buffstat::COMBO
++            && combo.skillid == 1111002 && combo.value > 1 && combo_level > 0)
++        {
++            const int32_t advanced_level = get_skilllevel(1120003);
++            const bool advanced = advanced_level > 0 && combo_level >= 30;
++            const std::string id = advanced ? "1120003" : "1111002";
++            const int32_t level = advanced ? advanced_level : combo_level;
++            const nl::node data = nl::nx::skill[id.substr(0, 3) + ".img"]
++                ["skill"][id]["level"][std::to_string(level)];
++            const ComboDamage damage = combo_damage(combo.value, combo_level,
++                data["damage"], data["x"]);
++            attack.combo_orbs = damage.orbs;
++            attack.weapon_damage_multiplier = damage.percent / 100.0;
++        }
+         attack.ignoredef   = stats.get_ignoredef();
+         attack.accuracy    = stats.get_total(Equipstat::ACC);
+         attack.playerlevel = stats.get_stat(Maplestat::LEVEL);
+--- a/src/client/Gameplay/Combat/Attack.h
++++ b/src/client/Gameplay/Combat/Attack.h
+@@ -49,6 +49,8 @@
+         float critical      = 0.0f;
+         int32_t critical_bonus_percent = 0;
+         int32_t weapon_damage_percent = 100;
++        double weapon_damage_multiplier = 1.0;
++        int32_t combo_orbs = 0;
+         int32_t weaponattack = 0;
+         bool claw_projectile = false;
+         float ignoredef     = 0.0f;
+--- a/src/client/Gameplay/Combat/Skill.cpp
++++ b/src/client/Gameplay/Combat/Skill.cpp
+@@ -17,6 +17,7 @@
+ //////////////////////////////////////////////////////////////////////////////
+ #include "Skill.h"
+ #include "SpellDamagePolicy.h"
++#include "CombatBuffPolicy.h"
+ #include <cmath>
+ 
+ #include "../../Character/SkillId.h"
+@@ -236,6 +237,8 @@
+             {
+                 attack.weapon_damage_percent = percent;
+             }
++            if (is_combo_finisher(skillid) && attack.combo_orbs > 0)
++                attack.weapon_damage_multiplier *= combo_finisher_percent(attack.combo_orbs) / 100.0;
+             attack.damagetype = Attack::DMG_WEAPON;
+         }
+         attack.critical  += stats.critical;
+--- a/src/client/Gameplay/MapleMap/Mob.cpp
++++ b/src/client/Gameplay/MapleMap/Mob.cpp
+@@ -720,7 +720,8 @@
+         std::generate(result.begin(), result.end(), [&](){
+             return next_damage(mindamage, maxdamage, hitchance, critical,
+                 damagetype == Attack::DMG_WEAPON ? attack.weapon_damage_percent : 100,
+-                attack.critical_bonus_percent);
++                attack.critical_bonus_percent,
++                damagetype == Attack::DMG_WEAPON ? attack.weapon_damage_multiplier : 1.0);
+         });
+ 
+         update_movement();
+@@ -729,7 +730,7 @@
+         return result;
+     }
+ 
+-    std::pair<int32_t, bool> Mob::next_damage(double mindamage, double maxdamage, float hitchance, float critical, int32_t weapon_damage_percent, int32_t critical_bonus_percent) const
++    std::pair<int32_t, bool> Mob::next_damage(double mindamage, double maxdamage, float hitchance, float critical, int32_t weapon_damage_percent, int32_t critical_bonus_percent, double weapon_damage_multiplier) const
+     {
+         bool hit = randomizer.below(hitchance);
+         if (!hit)
+@@ -743,7 +744,9 @@
+         bool iscritical = critical > 0.0f && randomizer.below(critical);
+         // A 150% attack with +100% critical deals 250% of the defended base,
+         // not 300%. Default attacks use weapon_damage_percent=100.
+-        const int32_t percent = weapon_damage_percent
++        // Combo/finishers multiply Skill before the additive critical bonus.
++        // Keep fractional coefficients until the final ordinary truncation.
++        const double percent = weapon_damage_percent * weapon_damage_multiplier
+             + (iscritical ? critical_bonus_percent : 0);
+         damage = damage * percent / 100.0;
+ 
+--- a/src/client/Gameplay/MapleMap/Mob.h
++++ b/src/client/Gameplay/MapleMap/Mob.h
+@@ -126,7 +126,8 @@
+                                              float  hitchance,
+                                              float  critical,
+                                              int32_t weapon_damage_percent,
+-                                             int32_t critical_bonus_percent) const;
++                                             int32_t critical_bonus_percent,
++                                             double weapon_damage_multiplier) const;
+ 
+         /// Return the current 'head' position.
+         Point<int16_t> get_head_position(Point<int16_t> position) const;
+--- /dev/null
++++ b/src/client/Gameplay/Combat/CombatBuffPolicy.h
+@@ -0,0 +1,47 @@
++// MapleBench native combat buff policy, AGPL-3.0-or-later.
++// Formula provenance and qualification limits: FULL_CLIENT_COMBAT_BUFFS.md.
++#pragma once
++#include <algorithm>
++#include <cstdint>
++
++namespace jrc
++{
++    inline bool is_combo_finisher(int32_t skill)
++    {
++        return skill == 1111003 || skill == 1111004
++            || skill == 1111005 || skill == 1111006;
++    }
++
++    struct ComboDamage
++    {
++        int32_t orbs = 0;
++        int32_t percent = 100;
++    };
++
++    // Count is the server's COMBO value: 1 means active with zero orbs.
++    // Damage and capacity are from the current learned skill's NX level.
++    inline ComboDamage combo_damage(int32_t count, int32_t combo_level,
++        int32_t first_orb_percent, int32_t capacity)
++    {
++        if (count <= 1 || combo_level <= 0 || first_orb_percent <= 0 || capacity <= 0)
++            return {};
++
++        const int32_t orbs = std::min(count - 1, capacity);
++        const int32_t extra = orbs <= 5
++            ? (orbs - 1) * combo_level / 6
++            : 20 + (orbs - 5) * 4;
++        return {orbs, first_orb_percent + extra};
++    }
++
++    inline int32_t combo_finisher_percent(int32_t orbs)
++    {
++        switch (orbs)
++        {
++        case 0: case 1: return 100;
++        case 2: return 120;
++        case 3: return 154;
++        case 4: return 200;
++        default: return 250;
++        }
++    }
++}
