@@ -56,6 +56,23 @@ XP-window ledger.
 
 ## Before model admission
 
+The expanded-toolkit build and offline fixture preparation are now complete on
+source `d2fe0671db0bf4932b44fc117e581c0258f65dbb`, using matched client build B
+and server build C. The server passed seven XP-ledger and five persistence tests;
+two inert Linux ownership/socket tests passed, also with zero skips. All four
+immutable v2 fixtures retain their parent hashes and toolkit fingerprints, with
+NX/XML parity verified for the declared skill levels, prerequisites and resources.
+The [v2 release record](FULL_CLIENT_TOOLKIT_V2.md#release-gates) lists the exact
+binaries and fixture hashes.
+
+Only the first two v2 release gates are complete. The first Night Lord native
+check saved and restored correctly but exposed swapped Haste speed/jump values.
+The [native evidence record](FULL_CLIENT_TOOLKIT_V2.md#first-native-check) keeps
+that failed skill check separate from the subsequent decoder repair. All four
+classes still require complete skill and simulation-timing qualification.
+The completed controls retain their historical build and fixture identities;
+their results do not qualify the new v2 fixtures or authorize model admission.
+
 - [x] Rebuild with the fixed-step timing repair and prove real-time simulation
   during recorded gameplay. The [four three-minute controls](FULL_CLIENT_3_MINUTE_CHECKS.md)
   have completed this gate on their pinned build. Repeat the timing measurement

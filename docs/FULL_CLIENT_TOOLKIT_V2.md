@@ -85,8 +85,47 @@ observation and verify inactive-state clearing.
 
 ## Release gates
 
-- [ ] Freeze reviewed source, matching client/server binaries and definition hashes.
-- [ ] Prepare and retain each new immutable class fixture and toolkit fingerprint.
+The build and offline preparation gates below are complete on source
+`d2fe0671db0bf4932b44fc117e581c0258f65dbb`. Client build B includes patches
+0017–0022 on the retained production base; server build C includes the matching
+`0002-monster-status-order.patch`. The build receipts confirm that original
+source, caches and binaries were preserved.
+
+| Matched artifact | SHA-256 |
+| --- | --- |
+| Client JavaScript | `52b2c236b7c936e3169872219b2baef3161fd3ad2d8c354d25db18d4712aac66` |
+| Client WebAssembly | `916e5260aae8e3ce4b29534c8f4bdf1adbf11dabb267a61b6b0bb037b1b592f8` |
+| Server JAR | `394c2afee55f3affee0bc7df720ec972a2bb36a96b0386b637fb113e87e9942c` |
+
+The server's seven XP-ledger and five persistence tests passed with zero errors,
+failures or skips. Two focused Linux tests also passed with zero skips: actual
+inherited-lock admission and an inert private Unix-socket handoff retaining those
+locks. The latter verified 171 committed Python files and made no Docker or API
+calls. These checks establish source and ownership behavior, not native gameplay.
+
+All four new offline fixtures were derived in 3.158 seconds. For every toolkit,
+the definition reader verified all declared skills at their frozen levels,
+transitive prerequisites and finite resources against matching NX and XML.
+Account/credential bytes and ordinary equipment were preserved. Each output
+retains its parent hash, definition report, expected fixture and exact toolkit
+fingerprint; no database was changed by this preparation.
+
+| Class | Offline fixture SHA-256 | Toolkit fingerprint |
+| --- | --- | --- |
+| Night Lord | `63b02968f75acf6f510d7170261ac9c6a0c2d680a9987d1ff3451a302d13d43d` | `365149bc132a5a3862236a15b3dc5d689dae27487002d5b74aed4e1c9cda4125` |
+| Ice/Lightning Arch Mage | `4e475c68c67a2ed01ce5b9f11e4ffb3072ad6fc890b0f4298783d5deb99e59e0` | `9f349fc7795201fcbf63c569814a26471bb20d760d8f5111ed19c6929a2537f9` |
+| Hero | `9850f297330233ecf7b4a4bae93b6855d5df852124dcdb86dc0699e3347154e3` | `3b24693c0c2024e3bbb33030fb4ab33ab10b630dbf60cb9c2f98f7d02d047a1c` |
+| Bowmaster | `64f3fd3dd6e5dcd7ede3184617d8407ed508dce6977ede2c1992d8261cd89e43` | `64b1de945214743557981fd81134798b86812d75847e4c749af72e46d0e2e09e` |
+
+The fixture completion receipt is
+`379cfecc0dfc84277bdfa58ee081c3af559532900b6a0065171cbde4c6ac4932`;
+the inert Linux test receipt is
+`dbd00d668cab7ff589069b08e870de1b2a1baf8a89480b593413257bbc9d9cda`.
+The first Night Lord native check below did not qualify this pair; it exposed a
+player-buff decoding defect. A repaired client needs fresh native verification.
+
+- [x] Freeze reviewed source, matching client/server binaries and definition hashes.
+- [x] Prepare and retain each new immutable class fixture and toolkit fingerprint.
 - [ ] Run each bounded native recipe through ordinary login, with fresh rendered state.
 - [ ] Review every declared skill's native effect; a delivered key is insufficient.
 - [ ] Verify real-time simulation, post-render recording and accurate scripted labels.
@@ -105,3 +144,47 @@ Related: [baseline checklist](BASELINE_RELEASE_CHECKLIST.md),
 [Shadow Partner](FULL_CLIENT_SHADOW_PARTNER.md),
 [monster statuses](monster-movement-status.md), and
 [matrix integration](MATRIX_INTEGRATION_REVIEW.md).
+
+## First native check
+
+Run `26fa40f7215145209a4943add35891a0` exercised the Night Lord v2 fixture
+with client B and server C. It was a scripted native acceptance check with
+**zero model/API calls**, not a model result or a ranked trial. The 120-second
+limit was a ceiling; actual capture lasted **38.899810 seconds**.
+
+| Observed result | Value |
+| --- | --- |
+| Input actions / RPC requests | 28 / 124 |
+| Captured frames / average capture FPS | 1,253 / 32.210797 |
+| Diagnostic persisted XP | 0 |
+| Final state | Alive; HP 11,492 |
+| Persisted resource consumption | 6 Power Elixirs, 209 Ilbi stars, 1 Summoning Rock |
+| Ordinary disconnect persistence | Verified |
+| Character, keymap, USE and ETC baseline restoration | Exact match |
+
+The closed browser trace contains 866 records and no collector failure. All ten
+bindings were attempted. The trace records the six expected buff skill IDs and
+a Drain use costing 24 MP, with HP rising from 10,547 to 12,000 before the later
+potion. These observations do not establish every advertised effect. The
+pre-Partner Triple Throw was skipped during movement, so this check supplies no
+clean before/after Shadow Partner damage comparison.
+
+Haste exposed an actual client defect: its speed-40/jump-20 payload became
+speed-20/jump-40, yielding native totals 120/123 instead of 140/120. The decoder
+iterated unordered stat maps and could consume shared Combo/Summon bits twice.
+The [ordinary buff decoder repair](FULL_CLIENT_BUFF_WIRE_ORDER.md) addresses
+that source defect; its tests do not retroactively qualify this recording.
+
+The recording duration and transport clock were verified. Independent
+simulation/wall timing was not collected here and remains required on the
+repaired build. Native skill qualification and model admission remain open.
+
+| Retained evidence | SHA-256 |
+| --- | --- |
+| Outer completion | `1a4ce2a06ab886ac26cb51e7db833d14891739dba0521f5f2078c7349067b9ed` |
+| Inner completion | `e8126576d990c7fd0d7c19d687ada3b843115d4e227bac3b8c53b440ff8582f3` |
+| Original recording | `0bcbdbe07f5cafa4bafd4b7f14c37793e38c3e1667ac603bb3d1e908ae0de92f` |
+| Closed browser trace | `beca2d84cecc346562c73a5f22caba71ee3f455d7ad9a117873a6edf581ffe83` |
+
+The original recording, trace and runtime evidence remain in private operational
+storage; this source record publishes their identities and reviewed conclusions.
