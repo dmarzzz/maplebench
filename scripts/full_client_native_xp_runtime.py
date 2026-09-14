@@ -122,7 +122,7 @@ class NativeXpRuntime(CosmicRuntime):
     def capture_toolkit_inventory(self, phase):
         if 'skill_toolkit' not in self.native:
             return None
-        from full_client_native_xp_inventory import collect_owned, expected, verify_restored
+        from full_client_native_xp_inventory import collect_owned, expected, expected_etc, verify_restored, TOOLKIT_V2_PROTOCOL
         try:
             value = collect_owned(self, phase)
             baseline_sql = ref_bytes(self.config['baseline'], MAX_SQL)
@@ -130,6 +130,10 @@ class NativeXpRuntime(CosmicRuntime):
                 wanted = expected(self.native, baseline_sql,
                     character_id=self.config['mysql']['character_id'], account_id=self.config['mysql']['account_id'])
                 require(same_json(value['use_inventory'], wanted), 'native_xp_inventory_baseline_mismatch')
+                if self.native['id'] == TOOLKIT_V2_PROTOCOL:
+                    wanted_etc = expected_etc(self.native, baseline_sql,
+                        character_id=self.config['mysql']['character_id'], account_id=self.config['mysql']['account_id'])
+                    require(same_json(value['etc_inventory'], wanted_etc), 'native_xp_inventory_baseline_mismatch')
             if phase == 'after_restore':
                 verify_restored(value, native=self.native, baseline_sql=baseline_sql, identity=self.identity(),
                     runtime_manifest_sha256=self.config['runtime_manifest']['sha256'])

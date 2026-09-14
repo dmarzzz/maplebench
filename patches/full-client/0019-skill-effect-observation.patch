@@ -1,0 +1,110 @@
+--- a/src/client/Character/Player.h
++++ b/src/client/Character/Player.h
+@@ -105,6 +105,9 @@
+         /// Return wether the buff is active.
+         bool has_buff(Buffstat::Id stat) const;
+ 
++        /// Read-only server-received buffs for diagnostics; no effects are inferred.
++        const EnumMap<Buffstat::Id, Buff>& get_received_buffs() const { return buffs; }
++
+         /// Change a skill.
+         void change_skill(int32_t skill_id, int32_t level, int32_t masterlevel, int64_t expiration);
+         /// Put a skill on cooldown.
+--- a/src/client/Gameplay/Stage.cpp
++++ b/src/client/Gameplay/Stage.cpp
+@@ -30,6 +30,7 @@
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten.h>
+ #include <sstream>
++#include "SkillEvidence.h"
+ #endif
+ 
+ namespace jrc
+@@ -157,7 +158,10 @@
+         if (state != ACTIVE)
+         {
+ #ifdef __EMSCRIPTEN__
+-            EM_ASM({ Module.MapleBenchObservation = {ready:false}; });
++            EM_ASM({
++                Module.MapleBenchObservation = {ready:false};
++                Module.MapleBenchSkillState = {schemaVersion:1, ready:false};
++            });
+ #endif
+             return;
+         }
+@@ -217,6 +221,13 @@
+                 Module.MapleBenchObservation = JSON.parse(UTF8ToString($0));
+                 Module.MapleBenchObservation.capturedAt = Date.now();
+             }, json.c_str());
++            // Separate diagnostic stream: the agent observation contract is unchanged.
++            const auto skill_json = skill_evidence_json(player, mapid);
++            EM_ASM({
++                Module.MapleBenchSkillState = JSON.parse(UTF8ToString($0));
++                Module.MapleBenchSkillState.capturedAt = Module.MapleBenchObservation.capturedAt;
++                if (Module.MapleBenchRecordSkillState) Module.MapleBenchRecordSkillState();
++            }, skill_json.c_str());
+         }
+ #endif
+ 
+--- /dev/null
++++ b/src/client/Gameplay/SkillEvidence.h
+@@ -0,0 +1,59 @@
++// MapleBench diagnostic state, licensed under AGPL-3.0 like the Journey client.
++// This snapshot never applies gameplay effects or grants qualification.
++#pragma once
++#include "../Character/Buff.h"
++#include "../Character/EquipStat.h"
++#include <locale>
++#include <sstream>
++#include <string>
++
++namespace jrc
++{
++    template <typename PlayerType>
++    std::string skill_evidence_json(const PlayerType& player, int32_t mapid)
++    {
++        const auto& stats = player.get_stats();
++        const auto position = player.get_position();
++        std::ostringstream data;
++        data.imbue(std::locale::classic());
++        data << "{\"schemaVersion\":1,\"ready\":true,"
++             << "\"source\":\"native-client-diagnostic\","
++             << "\"mapId\":" << mapid
++             << ",\"x\":" << position.x() << ",\"y\":" << position.y()
++             << ",\"hp\":" << stats.get_stat(Maplestat::HP)
++             << ",\"mp\":" << stats.get_stat(Maplestat::MP)
++             << ",\"localDead\":" << (player.is_dead() ? "true" : "false")
++             << ",\"attackSpeed\":" << static_cast<int>(player.get_integer_attackspeed())
++             << ",\"totals\":{";
++        const Equipstat::Id ids[] = {Equipstat::STR, Equipstat::DEX,
++            Equipstat::INT, Equipstat::LUK, Equipstat::HP, Equipstat::MP,
++            Equipstat::WATK, Equipstat::MAGIC, Equipstat::WDEF, Equipstat::MDEF,
++            Equipstat::SPEED, Equipstat::JUMP};
++        const char* names[] = {"str", "dex", "int", "luk", "maxHp", "maxMp",
++            "weaponAttack", "magic", "weaponDefense", "magicDefense", "speed", "jump"};
++        for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); ++i)
++        {
++            if (i) data << ',';
++            data << '"' << names[i] << "\":" << stats.get_total(ids[i]);
++        }
++        data << "},\"receivedBuffs\":[";
++        bool first = true;
++        // Iterate a fixed enum-sized array; zero/negative numeric buff values
++        // are meaningful. Only an actual stored skill identity denotes a row.
++        for (const auto entry : player.get_received_buffs())
++        {
++            const auto& buff = entry.second;
++            if (buff.stat == Buffstat::NONE || buff.stat != entry.first || buff.skillid <= 0)
++                continue;
++            if (!first) data << ',';
++            first = false;
++            data << "{\"stat\":" << static_cast<int>(buff.stat)
++                 << ",\"skillId\":" << buff.skillid
++                 << ",\"value\":" << buff.value
++                 << ",\"receivedDurationMs\":" << buff.duration << '}';
++        }
++        // Durations above are the last received values, not remaining timers.
++        data << "]}";
++        return data.str();
++    }
++}

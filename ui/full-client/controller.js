@@ -1,4 +1,60 @@
 import { createPostRenderRecorder } from './webcodecs-recorder.js';
+// Private native-check diagnostics. No SDK, recording, score or admission fields.
+function createSkillDiagnosticTrace(module, now = () => performance.now()) {
+  const maxRecords=8192, maxBytes=12*1024*1024;
+  let trace=null, bytes=0;
+  const stop = reason => { if(trace && !trace.closed) { trace.closed=true; trace.closedReason=reason; } };
+  const append = record => {
+    if(!trace || trace.closed || trace.failure) return;
+    try {
+      const raw=JSON.stringify({...record,seq:trace.records.length});
+      if(trace.records.length>=maxRecords || bytes+raw.length>maxBytes) {
+        trace.failure='diagnostic_limit'; return;
+      }
+      trace.records.push(JSON.parse(raw)); bytes+=raw.length;
+    } catch { trace.failure='diagnostic_serialization'; }
+  };
+  const update = run => {
+    const native=run?.nativeAcceptance;
+    const matches=run?.mode==='script' && run?.model===null
+      && /^[a-f0-9]{32}$/.test(run?.id||'')
+      && native?.id==='scripted-native-toolkit-acceptance-v2'
+      && native?.skill_toolkit?.id==='full-client-skill-toolkit-v2';
+    if(trace && (!matches || run.id!==trace.runId)) stop('owner_changed');
+    if(matches && ['requesting','running'].includes(run.status) && trace?.runId!==run.id) {
+      bytes=0; trace={schemaVersion:1,source:'native-client-diagnostic',runId:run.id,
+        protocol:native.id,classId:native.class_id,toolkitId:native.skill_toolkit.id,
+        model:null,apiCalls:0,score:null,closed:false,closedReason:null,failure:null,records:[]};
+      module.MapleBenchSkillTrace=trace;
+    }
+  };
+  const sample = () => {
+    if(!trace || trace.closed || trace.failure) return;
+    try {
+    const state=module.MapleBenchSkillState, observation=module.MapleBenchObservation;
+    if(state?.ready!==true || state.schemaVersion!==1 || state.source!=='native-client-diagnostic'
+      || !Number.isSafeInteger(state.capturedAt) || state.capturedAt!==observation?.capturedAt) return;
+    // State was serialized by the native game loop. Copy it so subsequent
+    // updates cannot rewrite history. This trace never enters agent.observe().
+    append({kind:'state',monotonicMs:now(),capturedAt:state.capturedAt,state,
+      monsters:(observation.monsters||[]).map(m=>({objectId:m.objectId,x:m.x,y:m.y}))});
+    } catch { trace.failure='diagnostic_serialization'; }
+  };
+  const mark = (command, phase, handlerStarted, ok=null) => {
+    try {
+    if(!trace || !command || trace.runId!==command.runId || !/^[a-f0-9]{32}$/.test(command.id||'')
+      || !Array.isArray(command.keys) || command.keys.length>3
+      || command.keys.some(key=>typeof key!=='string'||!(/^[A-Z_0-9]{1,24}$/).test(key))
+      || !['before_keydown','after_release'].includes(phase)) return;
+    append({kind:'input',commandId:command.id,phase,monotonicMs:now(),
+      handlerStartedMonotonicMs:handlerStarted,ok,
+      keys:command.keys.slice(),durationMs:command.durationMs,
+      capturedAt:module.MapleBenchSkillState?.capturedAt ?? null});
+    } catch { if(trace) trace.failure='diagnostic_serialization'; }
+  };
+  return {update,sample,mark,stop};
+}
+
 // Live controls and honest canvas capture for the unscored full-client adapter.
 (() => {
   fetch('/demo-session').then(r => { if (!r.ok) throw Error(); return r.json(); })
@@ -123,6 +179,8 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   let capture = null, saving = false, pendingUpload = null, pollTimer, pollAbort;
   const activeRun = () => ['requesting','running'].includes(run.status) || run.workerActive === true || run.leaseReleasePending === true;
   const busy = () => starting || activeRun() || Boolean(activeCommand);
+  const skillDiagnostics=createSkillDiagnosticTrace(Module);
+  Module.MapleBenchRecordSkillState=skillDiagnostics.sample;
   const observe = () => Module.MapleBenchObservation || {ready:false};
   const fresh = observation => observation.ready && Number.isFinite(observation.capturedAt)
     && Date.now() - observation.capturedAt >= 0 && Date.now() - observation.capturedAt < 1500
@@ -152,9 +210,12 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   };
   const manualSkillBindings = value => {
     const profile = value.adaptiveProtocol?.profile || value.nativeAcceptance?.profile || value.previewProtocol?.profile;
+    const toolkit = value.adaptiveProtocol?.skill_toolkit || value.nativeAcceptance?.skill_toolkit || value.previewProtocol?.skill_toolkit;
+    const channel = toolkit?.id === 'full-client-skill-toolkit-v2'
+      ? new Set(toolkit.skills.filter(skill => skill.route === 'channel_attack').map(skill => skill.slot)) : new Set();
     if (profile) return Object.entries(toolkitKeyNames)
       .filter(([slot]) => typeof profile.skill_keys?.[slot] === 'string' && profile.skill_keys[slot].length > 0)
-      .map(([slot, code]) => ({code, label:`${profile.skill_keys[slot]} (${code.slice(3)})`, ms:slot === 'PRIMARY_SKILL' ? 500 : 180}));
+      .map(([slot, code]) => ({code, label:`${profile.skill_keys[slot]} (${code.slice(3)})`, ms:channel.has(slot) ? 1500 : slot === 'PRIMARY_SKILL' ? 500 : 180}));
     return [['Brandish','KeyA',500],['Combo','KeyS',180],['Booster','KeyD',180],['Maple Warrior','KeyF',180]]
       .map(([label, code, ms]) => ({code, label:`${label} (${code.slice(3)})`, ms}));
   };
@@ -423,6 +484,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   async function stopRecording() {
     const item=capture;
     if(!item) return;
+    skillDiagnostics.stop('recording_stopped');
     if(item.stopping) {
       if(item.encodedMode&&(closed||item.hidden||item.errors>0||item.relayLost)) {
         item.failFinalFrame?.(Error('capture_interrupted'));
@@ -505,6 +567,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   const sessionAck=new URLSearchParams(location.search).get('transition');
   const updateRun = next => {
     if(captureFailure && captureFailure.run_id!==next.id) captureFailure=null;
+    skillDiagnostics.update(next);
     run=next;
     if(run.id && lastRunId!==run.id && activeRun()) { lastRunId=run.id; setBaseline('run'); details.open=false; }
     if(activeRun() && run.id && recordedRunId!==run.id && !saving) {
@@ -549,7 +612,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     if(activeCommand) return;
     const item={interrupted:false,failure:null,keydown:false,startedAt:performance.now()}; activeCommand=item;
     const toolkit=run.adaptiveProtocol?.skill_toolkit||run.nativeAcceptance?.skill_toolkit||run.previewProtocol?.skill_toolkit;
-    const skillMap=toolkit?.id==='full-client-skill-toolkit-v1'?toolkitKeyNames:skillKeyNames;
+    const skillMap=['full-client-skill-toolkit-v1','full-client-skill-toolkit-v2'].includes(toolkit?.id)?toolkitKeyNames:skillKeyNames;
     const declared=toolkit?new Set(toolkit.skills?.map(skill=>skill.slot)||[]):null;
     const keys=Array.isArray(command.keys)?command.keys.map(name=>{
       if(toolkitKeyNames[name]&&declared&&!declared.has(name))return undefined;
@@ -571,6 +634,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       if(performance.now()+command.durationMs>deadline) reject('deadline_before_input');
       releaseAll(false); game.focus();
       if(performance.now()+command.durationMs>deadline) reject('deadline_before_keydown');
+      skillDiagnostics.mark(command,'before_keydown',item.startedAt);
       item.keydown=true; item.keydownAt=performance.now();
       for(const code of keys) { key(code,'keydown'); held.set(code,setTimeout(()=>release(code),command.durationMs)); }
       renderHeader();
@@ -579,6 +643,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       if(!ok) item.failure ??= item.interrupted?'interrupted_unknown':'deadline_after_input';
     } finally {
       keys.filter(Boolean).forEach(release);
+      skillDiagnostics.mark(command,'after_release',item.startedAt,ok);
       acknowledgement={id:command.id,ok};
       if(!ok) {
         const elapsed=Math.round(performance.now()-item.startedAt),remaining=Math.round(deadline-performance.now());

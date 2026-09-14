@@ -23,8 +23,9 @@ model failures from environment/recording failures.
   field: the pinned definition stores 130% in `x`.
 - [x] Source regression and repair for learned Critical Shot/Throw, physical
   skill/defense order, and Lucky Seven/Triple Throw's LUK-based range.
-- [x] Source-only `0013` repair for Shadow Stars' zero-valued buff recognition
-  and asset-derived upfront star-cost admission; not built or live-qualified.
+- [x] `0013` repair for Shadow Stars' zero-valued buff recognition
+  and asset-derived upfront star-cost admission is in the three-minute control
+  build. Those controls did not bind Shadow Stars or qualify its effects.
 
 ## Completed native preparation
 
@@ -55,10 +56,10 @@ XP-window ledger.
 
 ## Before model admission
 
-- [ ] Rebuild with the fixed-step timing repair and prove real-time simulation
-  during actual recorded gameplay. The September 13 controls' old eight-update
-  cap caused roughly half-speed simulation; capture integrity did not detect it.
-  See [the timing audit](FULL_CLIENT_FIXED_STEP_TIMING.md).
+- [x] Rebuild with the fixed-step timing repair and prove real-time simulation
+  during recorded gameplay. The [four three-minute controls](FULL_CLIENT_3_MINUTE_CHECKS.md)
+  have completed this gate on their pinned build. Repeat the timing measurement
+  on the expanded-toolkit build; earlier proof does not transfer across binaries.
 - [ ] Verify actual native attacks, movement, buffs and resources on each fixture.
 - [x] Every class's productive control earns positive native XP and saves it
   through ordinary logout.
@@ -74,22 +75,25 @@ XP-window ledger.
 ## Skill-set decision remains material
 
 The current expanded toolkit is provisional. It is **not the complete canonical
-class kit**. The audit found these remaining groups of work:
+class kit**. The [opt-in v2 qualification plan](FULL_CLIENT_TOOLKIT_V2.md) repairs
+several core mechanics and binds a new native recipe and finite resources.
+The audit identified these groups of work:
 
 | Class | Important remaining mechanics |
 | --- | --- |
-| Hero | Combo/Advanced Combo damage semantics; Monster Magnet target route; full status/effect qualification |
-| Bowmaster | Continuous Hurricane, Sharp Eyes stacking, Puppet/Hawk/Phoenix; full status/effect qualification |
+| Hero | Native verification of repaired Combo/Advanced Combo/finishers; Monster Magnet target route; full status/effect qualification |
+| Bowmaster | Native verification of held Hurricane, Sharp Eyes stacking and monster statuses; Puppet/Hawk/Phoenix remain excluded |
 | Ice/Lightning | Charged Big Bang, Ifrit, full elemental/status semantics; all advertised buffs/effects need native proof |
-| Night Lord | Flash Jump, Shadow Partner damage lines, Shadow Stars upfront-cost/buff and consumption verification, Shadow Web/Ninja Ambush; full status/effect qualification |
+| Night Lord | Native verification of repaired Shadow Partner damage lines and finite costs, Shadow Stars activation/exemption/cancellation; Flash Jump and Shadow Web/Ninja Ambush remain excluded |
 
 Critical Shot and Critical Throw were also absent in the audited client. Their
 repair is now in the combined build; source tests and productive controls do not
 isolate native critical behavior on Bowmaster or Night Lord.
 Shadow Stars' per-attack ammunition exemption is already server-owned. The
 [0013 client repair](FULL_CLIENT_SHADOW_STARS.md) preserves real projectile
-requirements and server-owned inventory changes; it still needs a new build,
-fixture/policy identity, and live cost, consumption, cancellation and save proof.
+requirements and server-owned inventory changes. V2 supplies the new binding
+and policy identity; live cost, consumption, cancellation and save proof are
+still required on the matching build.
 Night Lord's Flash Jump skill assets contain MP costs but no movement impulse.
 An unverified movement approximation must not be presented as canonical behavior.
 

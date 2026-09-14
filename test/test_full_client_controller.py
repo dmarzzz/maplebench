@@ -109,10 +109,13 @@ assert.equal(view().keys,'Keys: Chain Lightning');
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
         dispatch=source[source.index('  const commandDeadline = '):source.index('  const poll=async()=>{')]
         mappings=source[source.index('  const keyNames = '):source.index('  const held = ')]
+        diagnostics=source[source.index('function createSkillDiagnosticTrace('):
+                           source.index('// Live controls and honest canvas capture')]
         fixture="""
 const assert=require('node:assert/strict');
 let activeCommand=null,acknowledgement=null,clock=100;
 const performance={now:()=>clock};
+const Module={},skillDiagnostics=createSkillDiagnosticTrace(Module,()=>clock);
 const held=new Map(), cancelledRuns=new Set(['cancelled']);
 const document={hidden:false},relayConnected=true,run={id:'cancelled'},game={focus(){}};
 const capture={recorderStarted:true,frames:1,autoRunId:'cancelled',stopping:false};
@@ -120,9 +123,25 @@ const observe=()=>({ready:true}),fresh=()=>true,renderHeader=()=>{};
 const events=[],keyCodes=[],key=(code,type)=>{events.push(type);keyCodes.push([code,type]);},release=code=>{clearTimeout(held.get(code));held.delete(code);key(code,'keyup');};
 const releaseAll=()=>{};
 """
-        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',fixture+mappings+dispatch+checks],
+        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',diagnostics+fixture+mappings+dispatch+checks],
             capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_diagnostic_failure_does_not_interrupt_key_release_or_ack(self):
+        self.run_dispatch("""
+(async()=>{
+ Object.assign(run,{id:'d'.repeat(32),mode:'script',model:null,status:'running',
+  nativeAcceptance:{id:'scripted-native-toolkit-acceptance-v2',class_id:'hero',
+   skill_toolkit:{id:'full-client-skill-toolkit-v2',skills:[{slot:'PRIMARY_SKILL'}]}}});
+ capture.autoRunId=run.id;skillDiagnostics.update(run);
+ Object.defineProperty(Module,'MapleBenchSkillState',{get(){throw Error('diagnostic state fault');}});
+ await executeInput({id:'e'.repeat(32),runId:run.id,keys:['PRIMARY_SKILL'],durationMs:30},1000);
+ assert.equal(acknowledgement.ok,true);assert.equal(activeCommand,null);assert.equal(held.size,0);
+ assert.equal(Module.MapleBenchSkillTrace.failure,'diagnostic_serialization');
+ assert.ok(keyCodes.some(([code,kind])=>code==='KeyA'&&kind==='keydown'));
+ assert.ok(keyCodes.some(([code,kind])=>code==='KeyA'&&kind==='keyup'));
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
 
     @unittest.skipUnless(shutil.which('node'),'Node is required for the browser dispatcher regression')
     def test_first_interrupt_subcode_retains_keydown_without_accepting_input(self):

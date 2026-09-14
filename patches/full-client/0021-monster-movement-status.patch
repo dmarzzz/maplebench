@@ -1,0 +1,467 @@
+--- a/src/client/Gameplay/MapleMap/Mob.cpp
++++ b/src/client/Gameplay/MapleMap/Mob.cpp
+@@ -279,6 +279,13 @@
+         }
+     }
+ 
++    bool Mob::stop_status_motion()
++    {
++        if (!is_alive() || !movement_status.stopped()) return false;
++        phobj.hspeed = phobj.vspeed = phobj.hforce = phobj.vforce = 0.0;
++        return true;
++    }
++
+     int8_t Mob::update(const Physics& physics)
+     {
+         if (!active)
+@@ -320,6 +327,8 @@
+ 
+         effects.update();
+         showhp.update();
++
++        if (stop_status_motion()) return phobj.fhlayer;
+ 
+         if (!dying)
+         {
+@@ -342,14 +351,14 @@
+             case MOVE:
+                 if (canfly)
+                 {
+-                    phobj.hforce = flip ? flyspeed : -flyspeed;
++                    phobj.hforce = flip ? movement_status.force(flyspeed, 0.0005) : -movement_status.force(flyspeed, 0.0005);
+                     switch (flydirection)
+                     {
+                     case UPWARDS:
+-                        phobj.vforce = -flyspeed;
++                        phobj.vforce = -movement_status.force(flyspeed, 0.0005);
+                         break;
+                     case DOWNWARDS:
+-                        phobj.vforce = flyspeed;
++                        phobj.vforce = movement_status.force(flyspeed, 0.0005);
+                         break;
+                     default:
+                         break;
+@@ -357,7 +366,7 @@
+                 }
+                 else
+                 {
+-                    phobj.hforce = flip ? speed : -speed;
++                    phobj.hforce = flip ? movement_status.force(speed, 0.001) : -movement_status.force(speed, 0.001);
+                 }
+                 break;
+             case HIT:
+@@ -413,6 +422,7 @@
+ 
+     void Mob::next_move()
+     {
++        if (movement_status.stopped()) return;
+         if (canmove)
+         {
+             switch (stance)
+@@ -511,6 +521,7 @@
+ 
+     void Mob::send_movement(Point<int16_t> start, std::vector<Movement>&& in_movements)
+     {
++        if (movement_status.stopped()) return;
+         if (control)
+         {
+             return;
+@@ -579,6 +590,7 @@
+ 
+     void Mob::kill(int8_t animation)
+     {
++        if (animation >= 0 && animation <= 2) movement_status = {};
+         switch (animation)
+         {
+         case 0:
+--- a/src/client/Gameplay/MapleMap/Mob.h
++++ b/src/client/Gameplay/MapleMap/Mob.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include "LivingObject.h"
++#include "MobMovementStatus.h"
+ 
+ #include "../Combat/Attack.h"
+ #include "../Combat/Bullet.h"
+@@ -94,7 +95,11 @@
+         /// Return the head position.
+         Point<int16_t> get_head_position() const;
+ 
++        void set_movement_status(const MobMovementStatus& status) { movement_status = status; }
++
+     private:
++        MobMovementStatus movement_status;
++        bool stop_status_motion();
+         enum FlyDirection
+         {
+             STRAIGHT,
+--- a/src/client/Gameplay/MapleMap/MapMobs.cpp
++++ b/src/client/Gameplay/MapleMap/MapMobs.cpp
+@@ -62,6 +62,8 @@
+                     spawn.instantiate()
+                 );
+             }
++            if (Optional<Mob> mob = mobs.get(spawn.get_oid()))
++                mob->set_movement_status(movement_status.at(spawn.get_oid()));
+         }
+ 
+         mobs.update(physics);
+@@ -80,11 +82,22 @@
+         return result;
+     }
+ 
+-    void MapMobs::spawn(MobSpawn&& spawn)
+-    {
++    void MapMobs::spawn(MobSpawn&& spawn, MobMovementStatus initial)
++    {
++        movement_status[spawn.get_oid()] = initial;
+         spawns.emplace(
+             std::move(spawn)
+         );
++    }
++
++    void MapMobs::apply_status(int32_t oid, const MobMovementStatus& status, bool cancel)
++    {
++        auto found = movement_status.find(oid);
++        // No status may create a future lifetime for an unknown or killed OID.
++        if (found == movement_status.end()) return;
++        found->second.merge(status, cancel);
++        if (Optional<Mob> mob = mobs.get(oid))
++            if (mob->is_alive()) mob->set_movement_status(found->second);
+     }
+ 
+     void MapMobs::remove(int32_t oid, int8_t animation)
+@@ -109,6 +122,7 @@
+             spawns.pop();
+         }
+         spawns.swap(remaining);
++        movement_status.erase(oid);
+ 
+         if (Optional<Mob> mob = mobs.get(oid))
+         {
+@@ -119,6 +133,8 @@
+     void MapMobs::clear()
+     {
+         mobs.clear();
++        spawns = {};
++        movement_status.clear();
+     }
+ 
+     void MapMobs::set_control(int32_t oid, bool control)
+--- a/src/client/Gameplay/MapleMap/MapMobs.h
++++ b/src/client/Gameplay/MapleMap/MapMobs.h
+@@ -23,6 +23,8 @@
+ #include "../Spawn.h"
+ 
+ #include <queue>
++#include <unordered_map>
++#include "MobMovementStatus.h"
+ 
+ 
+ namespace jrc
+@@ -37,7 +39,8 @@
+         void update(const Physics& physics);
+ 
+         // Spawn a new mob.
+-        void spawn(MobSpawn&& spawn);
++        void spawn(MobSpawn&& spawn, MobMovementStatus initial = {});
++        void apply_status(int32_t oid, const MobMovementStatus& status, bool cancel);
+         // Kill a mob.
+         void remove(int32_t oid, int8_t effect);
+         // Remove all mobs.
+@@ -77,5 +80,6 @@
+         MapObjects mobs;
+ 
+         std::queue<MobSpawn> spawns;
++        std::unordered_map<int32_t, MobMovementStatus> movement_status;
+     };
+ }
+--- a/src/client/Net/Handlers/MapObjectHandlers.cpp
++++ b/src/client/Net/Handlers/MapObjectHandlers.cpp
+@@ -18,7 +18,7 @@
+ #include "MapObjectHandlers.h"
+ 
+ #include "Helpers/LoginParser.h"
+-#include "Helpers/MobTemporaryStatMasks.h"
++#include "Helpers/MobStatusPacket.h"
+ #include "Helpers/MovementParser.h"
+ 
+ #include "../../Audio/Audio.h"
+@@ -29,68 +29,9 @@
+ {
+     namespace
+     {
+-        bool has_mob_temporary_status(
+-            const std::array<int32_t, MobTemporaryStatMasks::MASK_COUNT>& masks,
+-            const MobTemporaryStatMasks::Descriptor& status)
+-        {
+-            size_t index = status.first_mask
+-                ? MobTemporaryStatMasks::FIRST_MASK_INDEX
+-                : MobTemporaryStatMasks::SECOND_MASK_INDEX;
+-            return (masks[index] & status.value) != 0;
+-        }
+-
+-        void skip_mob_temporary_data(InPacket& recv)
+-        {
+-            // Cosmic writes a 16-byte mask here and then appends per-status payloads.
+-            // Skipping a fixed size shifts the mob position whenever the status block changes.
+-            std::array<int32_t, MobTemporaryStatMasks::MASK_COUNT> masks{{
+-                recv.read_int(),
+-                recv.read_int(),
+-                recv.read_int(),
+-                recv.read_int()
+-            }};
+-
+-            bool has_weapon_reflect = false;
+-            bool has_magic_reflect = false;
+-
+-            for (const auto& status : MobTemporaryStatMasks::ALL)
+-            {
+-                if (!has_mob_temporary_status(masks, status))
+-                {
+-                    continue;
+-                }
+-
+-                recv.skip(MobTemporaryStatMasks::STATUS_PAYLOAD_SIZE);
+-
+-                if (status.value == MobTemporaryStatMasks::WEAPON_REFLECT)
+-                {
+-                    has_weapon_reflect = true;
+-                }
+-                else if (status.value == MobTemporaryStatMasks::MAGIC_REFLECT)
+-                {
+-                    has_magic_reflect = true;
+-                }
+-            }
+-
+-            if (has_weapon_reflect)
+-            {
+-                recv.skip(MobTemporaryStatMasks::REFLECT_COUNTER_SIZE);
+-            }
+-
+-            if (has_magic_reflect)
+-            {
+-                recv.skip(MobTemporaryStatMasks::REFLECT_COUNTER_SIZE);
+-            }
+-
+-            if (has_weapon_reflect || has_magic_reflect)
+-            {
+-                recv.skip(MobTemporaryStatMasks::REFLECT_COUNTER_SIZE);
+-            }
+-        }
+-
+         void spawn_mob_from_packet(InPacket& recv, int32_t oid, int32_t id, int8_t mode)
+         {
+-            skip_mob_temporary_data(recv);
++            const auto status = read_mob_status(recv, false);
+ 
+             Point<int16_t> position = recv.read_point();
+             int8_t stance = recv.read_byte();
+@@ -137,7 +78,7 @@
+ 
+             Stage::get().get_mobs().spawn({
+                 oid, id, mode, stance, fh, effect == -2, team, position
+-            });
++            }, status.movement);
+         }
+     }
+ 
+@@ -316,6 +257,22 @@
+     }
+ 
+ 
++    void ApplyMobStatusHandler::handle(InPacket& recv) const
++    {
++        if (recv.length() < 4) throw PacketError("Truncated monster status OID");
++        const int32_t oid = recv.read_int();
++        const auto status = read_mob_status(recv, true);
++        Stage::get().get_mobs().apply_status(oid, status.movement, false);
++    }
++
++    void CancelMobStatusHandler::handle(InPacket& recv) const
++    {
++        if (recv.length() < 4) throw PacketError("Truncated monster status OID");
++        const int32_t oid = recv.read_int();
++        const auto status = read_mob_status(recv, true, true);
++        Stage::get().get_mobs().apply_status(oid, status.movement, true);
++    }
++
+     void SpawnMobHandler::handle(InPacket& recv) const
+     {
+         int32_t oid = recv.read_int();
+--- a/src/client/Net/Handlers/MapObjectHandlers.h
++++ b/src/client/Net/Handlers/MapObjectHandlers.h
+@@ -67,6 +67,15 @@
+         void handle(InPacket& recv) const override;
+     };
+ 
++
++    class ApplyMobStatusHandler : public PacketHandler
++    {
++        void handle(InPacket& recv) const override;
++    };
++    class CancelMobStatusHandler : public PacketHandler
++    {
++        void handle(InPacket& recv) const override;
++    };
+ 
+     // Spawn a mob on the stage.
+     // Opcode: SPAWN_MOB(236)
+--- a/src/client/Net/Handlers/Helpers/MobTemporaryStatMasks.h
++++ b/src/client/Net/Handlers/Helpers/MobTemporaryStatMasks.h
+@@ -51,7 +51,9 @@
+         constexpr int32_t WEAPON_REFLECT    = 0x20000000;
+         constexpr int32_t MAGIC_REFLECT     = 0x40000000;
+ 
+-        constexpr std::array<Descriptor, 29> ALL{{
++        constexpr std::array<Descriptor, 31> ALL{{
++            { 0x1, false }, // WATK (dynamic packets)
++            { 0x2, false }, // WDEF (dynamic packets)
+             { NEUTRALISE, true },
+             { PHANTOM_IMPRINT, true },
+             { MATK, false },
+--- a/src/client/Net/PacketSwitch.cpp
++++ b/src/client/Net/PacketSwitch.cpp
+@@ -134,6 +134,8 @@
+         SPAWN_MOB_C       = 238,
+         MOB_MOVED         = 239,
+         MOVE_MOB_RESPONSE = 240,
++        APPLY_MOB_STATUS  = 242,
++        CANCEL_MOB_STATUS = 243,
+         SHOW_MOB_HP       = 250,
+         SPAWN_NPC         = 257,
+         SPAWN_NPC_C       = 259,
+@@ -183,6 +185,8 @@
+         emplace<SPAWN_MOB_C, SpawnMobControllerHandler>();
+         emplace<MOB_MOVED, MobMovedHandler>();
+         emplace<SHOW_MOB_HP, ShowMobHpHandler>();
++        emplace<APPLY_MOB_STATUS, ApplyMobStatusHandler>();
++        emplace<CANCEL_MOB_STATUS, CancelMobStatusHandler>();
+         emplace<KILL_MOB, KillMobHandler>();
+         emplace<DROP_LOOT, DropLootHandler>();
+         emplace<REMOVE_LOOT, RemoveLootHandler>();
+--- /dev/null
++++ b/src/client/Gameplay/MapleMap/MobMovementStatus.h
+@@ -0,0 +1,31 @@
++#pragma once
++#include <algorithm>
++#include <cstdint>
++
++namespace jrc
++{
++    // Only server-received movement effects. Wire duration -1 is not a TTL.
++    struct MobMovementStatus
++    {
++        static constexpr uint32_t SPEED = 0x40, STUN = 0x80, FREEZE = 0x100;
++        uint32_t fields = 0;
++        int16_t speed = 0;
++        bool stopped() const { return (fields & (STUN | FREEZE)) != 0; }
++        void merge(const MobMovementStatus& update, bool cancel)
++        {
++            if (cancel)
++                fields &= ~update.fields;
++            else
++                fields |= update.fields;
++            if (update.fields & SPEED)
++                speed = cancel ? 0 : update.speed;
++        }
++        double force(double base, double unit) const
++        {
++            // Declared port scale, matching MapleBenchMobMotion's additive
++            // WZ+SPEED percentage and [0,200] clamp; no animation time scaling.
++            if (!(fields & SPEED)) return base;
++            return std::max(0.0, std::min(200.0, base / unit + speed)) * unit;
++        }
++    };
++}
+--- /dev/null
++++ b/src/client/Net/Handlers/Helpers/MobStatusPacket.h
+@@ -0,0 +1,88 @@
++#pragma once
++#include "MobTemporaryStatMasks.h"
++#include "../../InPacket.h"
++#include "../../../Gameplay/MapleMap/MobMovementStatus.h"
++
++namespace jrc
++{
++    struct MobStatusPacket
++    {
++        MobMovementStatus movement;
++        bool reflect_weapon = false, reflect_magic = false;
++        size_t count = 0;
++    };
++
++    inline MobStatusPacket read_mob_status(InPacket& recv, bool dynamic, bool cancel = false)
++    {
++        if (recv.length() < 16) throw PacketError("Truncated monster status mask");
++        const std::array<int32_t, 4> masks{{recv.read_int(), recv.read_int(),
++            recv.read_int(), recv.read_int()}};
++        const size_t first = dynamic ? 2 : 0, second = dynamic ? 3 : 2;
++        // Cosmic's spawn writer repeats each int in its following slot.
++        if (dynamic ? (masks[0] != 0 || masks[1] != 0)
++                    : (masks[0] != masks[1] || masks[2] != masks[3]))
++            throw PacketError("Invalid monster status mask layout");
++        uint32_t known_first = 0, known_second = 0;
++        for (const auto& status : MobTemporaryStatMasks::ALL)
++            (status.first_mask ? known_first : known_second) |= static_cast<uint32_t>(status.value);
++        if ((static_cast<uint32_t>(masks[first]) & ~known_first)
++            || (static_cast<uint32_t>(masks[second]) & ~known_second))
++            throw PacketError("Unknown monster status mask");
++        size_t payload_count = 0, reflects = 0;
++        for (const auto& status : MobTemporaryStatMasks::ALL)
++        {
++            if (!(masks[status.first_mask ? first : second] & status.value)) continue;
++            ++payload_count;
++            if (status.first_mask && (status.value == MobTemporaryStatMasks::WEAPON_REFLECT
++                || status.value == MobTemporaryStatMasks::MAGIC_REFLECT)) ++reflects;
++        }
++        const size_t required = (cancel ? 0 : payload_count * 8)
++            + (dynamic ? (cancel ? 4 : 5 + (reflects ? 4 : 0))
++                       : (reflects ? 4 * (reflects + 1) : 0));
++        if (recv.length() < required || (dynamic && recv.length() != required))
++            throw PacketError("Truncated or trailing monster status payload");
++        MobStatusPacket result;
++        for (const auto& status : MobTemporaryStatMasks::ALL)
++        {
++            if (!(masks[status.first_mask ? first : second] & status.value))
++                continue;
++            ++result.count;
++            int16_t value = 0;
++            if (!cancel)
++            {
++                value = recv.read_short();
++                recv.read_int(); // skill or mob-skill identity
++                recv.read_short(); // server owns cancellation; never invent TTL
++            }
++            if (!status.first_mask && (status.value == MobMovementStatus::SPEED
++                || status.value == MobMovementStatus::STUN || status.value == MobMovementStatus::FREEZE))
++            {
++                result.movement.fields |= status.value;
++                if (status.value == MobMovementStatus::SPEED) result.movement.speed = value;
++            }
++            result.reflect_weapon |= status.first_mask && status.value == MobTemporaryStatMasks::WEAPON_REFLECT;
++            result.reflect_magic |= status.first_mask && status.value == MobTemporaryStatMasks::MAGIC_REFLECT;
++        }
++        if (!dynamic)
++        {
++            if (result.reflect_weapon) recv.read_int();
++            if (result.reflect_magic) recv.read_int();
++            if (result.reflect_weapon || result.reflect_magic) recv.read_int();
++        }
++        else
++        {
++            if (!cancel)
++            {
++                // Pinned MobSkill's three reflection cases each append one int.
++                const bool reflected = result.reflect_weapon || result.reflect_magic;
++                if (reflected) recv.read_int();
++                const auto expected = reflected ? result.count / 2 : result.count;
++                if (static_cast<uint8_t>(recv.read_byte()) != expected)
++                    throw PacketError("Invalid monster status count");
++            }
++            recv.read_int(); // trailing delay, not an expiry
++            if (recv.length() != 0) throw PacketError("Trailing monster status bytes");
++        }
++        return result;
++    }
++}
