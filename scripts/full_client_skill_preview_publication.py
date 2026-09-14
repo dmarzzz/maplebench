@@ -180,7 +180,12 @@ def project_preview(folder, refs, *, probe_video=None):
             'bytes': size, 'playback': cue, 'duration_ms': recording['duration_ms']}}
 
 
-def preview_panel(rows):
+def preview_panel(rows, *, embedded=False):
+    heading = "h3" if embedded else "h2"
+    model_heading = "h4" if embedded else "h3"
+    panel_class = "skill-preview-section" if embedded else "section section-card"
+    heading_class = "skill-preview-heading" if embedded else "card-heading"
+    emblem_class = "skill-preview-emblem" if embedded else "section-emblem"
     cards = []
     for row in rows:
         recording = row['recording']
@@ -190,24 +195,29 @@ def preview_panel(rows):
         cue = recording['playback']['start_ms'] / 1000
         items = ''.join('<tr><td>' + escape(s['name']) + '</td><td>' + escape(s['key'])
             + '</td><td>' + str(s['acknowledged_inputs']) + '</td></tr>' for s in row['skills'])
-        cards.append('<article class="skill-preview-card"><h3>' + escape(row['class_name'])
-            + ' · ' + escape(row['requested_model']) + '</h3><p>' + escape(instruction_label)
+        model_names = {'gpt-6-astra': 'GPT-6 Astra', 'gpt-5.6-sol': 'GPT-5.6 Sol',
+            'gpt-5.6-terra': 'GPT-5.6 Terra', 'gpt-5.6-luna': 'GPT-5.6 Luna'}
+        cards.append('<article class="skill-preview-card"><' + model_heading + '>'
+            + escape(model_names.get(row['requested_model'], row['requested_model']))
+            + '</' + model_heading + '><p class="skill-preview-class">' + escape(row['class_name'])
             + '</p><video controls playsinline preload="metadata" src="'
             + url + '#t=' + format(cue, '.3f') + '" aria-label="Short ' + escape(row['class_name'], quote=True)
-            + ' skill preview"></video><p>60-second program budget · ' + str(row['actions'])
-            + ' acknowledged inputs · ' + ('Alive' if row['alive_at_last_observation'] else 'Dead')
-            + ' at last observation</p><p>' + format(row['program_elapsed_ms'] / 1000, '.1f')
-            + 's of program execution after ' + format(row['planning_ms'] / 1000, '.1f')
-            + 's of model planning.</p><p><a href="' + url + '">Full original recording, including planning</a></p>'
-            + '<details><summary>Available skills and model inputs</summary><table><thead><tr>'
-            + '<th scope="col">Skill</th><th scope="col">SDK key</th><th scope="col">Inputs</th>'
-            + '</tr></thead><tbody>' + items + '</tbody></table></details><p class="skill-preview-id">Run '
-            + row['id'] + '</p></article>')
-    return ('<!-- skill-previews:start --><section id="skill-previews" class="section section-card" aria-labelledby="skill-previews-title">'
-        '<h2 id="skill-previews-title">Short skill previews</h2><p>Recent model experiments with expanded class controls. '
-        'Playback opens at the first acknowledged input. These development clips are outside the benchmark comparisons.</p>'
-        '<p>Input counts show what the model requested. They do not prove successful casts or damage.</p>'
+            + ' skill preview"></video><p>60-second budget · ' + str(row['actions'])
+            + ' acknowledged inputs</p><details><summary>Skills and run details</summary><p>'
+            + escape(instruction_label) + '</p><p>' + format(row['program_elapsed_ms'] / 1000, '.1f')
+            + 's of execution after ' + format(row['planning_ms'] / 1000, '.1f')
+            + 's of model planning. ' + ('Alive' if row['alive_at_last_observation'] else 'Dead')
+            + ' at last observation.</p><table><thead><tr><th scope="col">Skill</th><th scope="col">SDK key</th>'
+            + '<th scope="col">Inputs</th></tr></thead><tbody>' + items + '</tbody></table>'
+            + '<p class="skill-preview-id">Run ' + row['id'] + '</p></details><p><a href="' + url
+            + '">Full recording</a></p></article>')
+    return (f'<!-- skill-previews:start --><section id="skill-previews" class="{panel_class}" aria-labelledby="skill-previews-title">'
+        f'<div class="{heading_class}"><img class="inventory-sprite {emblem_class}" src="./illustrations/potions.png" '
+        f'width="1254" height="1254" alt="" aria-hidden="true" loading="lazy"><{heading} id="skill-previews-title">Skill experiments</{heading}>'
+        '<span class="skill-preview-kind">Exploratory runs</span></div>'
+        '<p>Unscored model runs with expanded controls. Input counts show requests, not verified casts or damage.</p>'
         '<div class="skill-preview-grid">' + ''.join(cards) + '</div></section><!-- skill-previews:end -->')
+
 
 
 def attach_previews(catalog, selections, output_root, *, probe_video=None):
@@ -232,20 +242,15 @@ def attach_previews(catalog, selections, output_root, *, probe_video=None):
     snapshot['development_previews'] = rows
     html = stable_bytes(original / 'index.html', 4 * 1024**2).decode('utf-8')
     require('<!-- skill-previews:start -->' not in html and html.count('<main>') == 1, 'preview_html_anchor')
-    if '<!-- development-previews -->' in html:
+    if '<!-- results-development-previews -->' in html:
+        require(html.count('<!-- results-development-previews -->') == 1, 'preview_html_anchor')
+        html = html.replace('<!-- results-development-previews -->', preview_panel(rows, embedded=True), 1)
+    elif '<!-- development-previews -->' in html:
         require(html.count('<!-- development-previews -->') == 1, 'preview_html_anchor')
         html = html.replace('<!-- development-previews -->', preview_panel(rows), 1)
     else:
         html = html.replace('<main>', '<main>\n' + preview_panel(rows), 1)
-    style = (stable_bytes(original / 'style.css', 4 * 1024**2) + b'\n'
-        b'#skill-previews{max-width:1200px;margin-left:auto;margin-right:auto;padding-left:24px;padding-right:24px;box-sizing:border-box}'
-        b'.skill-preview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:start}'
-        b'.skill-preview-card{background:#fff;border:1px solid #d6d1c8;border-radius:16px;padding:20px;min-width:0}'
-        b'.skill-preview-card:only-child{grid-column:1/-1;width:100%;max-width:900px;justify-self:center}'
-        b'.skill-preview-card video{display:block;width:100%;height:auto;max-height:60vh;aspect-ratio:4/3;object-fit:contain;background:#17252e;border-radius:8px}'
-        b'.skill-preview-card table{width:100%;text-align:left}.skill-preview-card td,.skill-preview-card th{padding:7px}'
-        b'.skill-preview-id{font-size:12px;overflow-wrap:anywhere}.skill-preview-card summary{cursor:pointer}'
-        b'@media(max-width:760px){.skill-preview-grid{grid-template-columns:minmax(0,1fr)}}\n')
+    style = stable_bytes(original / 'style.css', 4*1024**2)
     root_data = {'index.html': html.encode(), 'style.css': style, 'results.json': encoded(snapshot)}
     planned = copy.deepcopy(files)
     for _, refs, row in sources:

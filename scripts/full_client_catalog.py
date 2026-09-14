@@ -210,10 +210,9 @@ def annotated_index(raw,notes):
     anchor='<!-- cohort-limitations -->'
     require(text.count(anchor)==1 or (anchor not in text and text.count('</header>')==1),
             'catalog_annotation_html_anchor')
-    body=''.join('<article><h3><a href="'+escape(note['url'],quote=True)+'">'
-                 +escape(CLASSES[note['class_id']])+' cohort</a></h3><p>'
-                 +escape(note['text'],quote=True)+'</p></article>' for note in notes)
-    section='<section class="research-intro" aria-label="Operator cohort limitations"><h2>Cohort limitations</h2>'+body+'</section>'
+    body=''.join('<p>'+escape(note['text'],quote=True)+' <a href="'+escape(note['url'],quote=True)+'">'
+                 +escape(CLASSES[note['class_id']])+' cohort</a>.</p>' for note in notes)
+    section='<aside class="cohort-notes" aria-label="Operator cohort limitations">'+body+'</aside>'
     if anchor in text:
         return text.replace(anchor,section,1).encode('utf-8')
     return text.replace('</header>','</header>'+section,1).encode('utf-8')

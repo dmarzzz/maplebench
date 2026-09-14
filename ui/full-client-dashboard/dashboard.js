@@ -3,7 +3,7 @@
   const $=id=>document.getElementById(id), el=(tag,text)=>{const node=document.createElement(tag);if(text!=null)node.textContent=String(text);return node;};
   const phases=[['restore_baseline','Restore'],['start_server','Start server'],['login','Login'],['run_controller','Play'],['disconnect','Logout'],['collect_final','Verify XP'],['cleanup','Finish']];
   const labels={not_started:'Not started',running:'In progress',requesting:'Awaiting API',completed:'Completed',failed:'Failed',interrupted:'Interrupted',recovering:'Recovering',recovered:'Recovered; invalid run',unavailable:'Evidence unavailable',idle:'Idle'};
-  let snapshot=null,closed=false,timer;
+  let snapshot=null,closed=false,timer,researchIdentity='',researchView='class',researchSelection=null,researchButtons=[];
   const format=value=>Number.isFinite(value)?value.toLocaleString('en-US'):'—';
   const xp=value=>Number.isFinite(value)?`${value>0?'+':''}${format(value)}`:'—';
   const seconds=value=>Number.isFinite(value)?`${(value/1000).toFixed(1)}s`:'—';
@@ -250,40 +250,101 @@
       node.append(group);
     }
   }
+  const plannedSkillTasks=[
+    {id:'platforming',label:'Platforming',symbol:'↗',group:'Control',budget:'120 seconds',
+      goal:'Reach a marked ledge and remain grounded in its target zone for one second using normal movement.',
+      evidence:'Server-validated position and landing events; qualified geometry and starting state.',phase:'First batch'},
+    {id:'teleport',label:'Teleport',symbol:'↔',group:'Control',budget:'120 seconds',
+      goal:'Use native Teleport to enter a target zone and stop there. Walking alone cannot satisfy the skill requirement.',
+      evidence:'Native Teleport execution linked to displacement and MP consumption, plus stable arrival.',phase:'First batch'},
+    {id:'potion',label:'Potion use',symbol:'♧',group:'Resources',budget:'120 seconds',
+      goal:'Recover from a low-MP start by consuming the supplied potion and reaching the declared MP threshold.',
+      evidence:'Authoritative item consumption and resource changes, distinguished from passive regeneration.',phase:'First batch'},
+    {id:'buff',label:'Buff upkeep',symbol:'✧',group:'Resources',budget:'300 seconds',
+      goal:'Maintain a named buff for at least 90% of the scored interval, including a required renewal during the run.',
+      evidence:'Complete native buff apply/expire coverage and consumed resources; runtime duration must require renewal.',phase:'Second batch'},
+    {id:'navigation',label:'Navigation',symbol:'⌁',group:'Planning',budget:'300 seconds',
+      goal:'Reach a destination through the required ordinary portals, starting with the same route information.',
+      evidence:'Ordered, authoritative map-transition events and final arrival; no teleport shortcuts.',phase:'Second batch'},
+    {id:'recovery',label:'Recovery',symbol:'↶',group:'Planning',budget:'300 seconds',
+      goal:'Recover from a fixed low-resource return-to-town state, reach the hunting map and earn native XP.',
+      evidence:'Matched initial setback, route transitions, resource use and a positive native XP event.',phase:'Second batch'}
+  ];
+  function matrixCellState(value,maximum){
+    if(!value||!value.attempt_ids?.length)return {tone:'unrun',text:'—',label:'Not run'};
+    if(!Number.isFinite(value.mean)&&value.in_progress)return {tone:'pending',text:'…',label:'In progress'};
+    if(!Number.isFinite(value.mean)&&value.attempted===0&&value.not_started)return {tone:'unrun',text:'—',label:'Not started'};
+    if(!Number.isFinite(value.mean))return {tone:'unknown',text:'?',label:'No verified score'};
+    const tone=value.mean<0?'loss':value.mean===0?'zero':maximum>0&&value.mean/maximum>=.9?'high':maximum>0&&value.mean/maximum>=.5?'mid':'low';
+    return {tone,text:xp(value.mean),label:`${value.valid} scored ${value.valid===1?'run':'runs'}`};
+  }
+  function showMatrixCell(model,column,value,button,protocol){
+    researchSelection={model:model.model,column:column.id,view:researchView};
+    for(const b of researchButtons)b.setAttribute('aria-pressed',String(b===button));
+    const box=$('matrix-inspector');box.replaceChildren();
+    const modelLabel=el('p',names[model.model]||model.model);modelLabel.className='matrix-model-label';
+    box.append(modelLabel,el('h4',researchView==='skill'?column.label:column.class_label));
+    if(researchView==='skill'){
+      const status=el('p',`${column.phase} · ${column.budget} · no runs yet`);status.className='matrix-cell-context';
+      box.append(status,el('p',column.goal),el('p',`Required evidence: ${column.evidence}`));
+      const note=el('p','Proposed task contract. Fixture and verifier qualification must precede model trials.');note.className='matrix-cell-note';box.append(note);return;
+    }
+    const score=el('p',Number.isFinite(value?.mean)?`${xp(value.mean)} ${protocol.score_key==='authoritative_peak_xp_per_minute'?'XP/min':'XP'}`:'No verified score');score.className='matrix-selected-score';box.append(score);
+    const task=el('p',`${column.task_label} · ${protocol.metric}`);task.className='matrix-cell-context';box.append(task);
+    const dl=el('dl'),fields=[['Scored runs',`${value?.valid??0} / ${value?.planned??'unknown'} planned`],['Uncertainty','Not estimated']];
+    if(value?.valid>1)fields.push(['Observed range',`${xp(value.minimum)} to ${xp(value.maximum)}`]);
+    for(const [label,count]of [['Failed',value?.failed],['Unknown',value?.unknown],['In progress',value?.in_progress],['Not started',value?.not_started]])if(count)fields.push([label,String(count)]);
+    if(value?.no_ops)fields.push(['No-input runs',String(value.no_ops)]);
+    for(const [label,v]of fields)dl.append(el('dt',label),el('dd',v));box.append(dl);
+    const note=el('p',value?.valid===1?'One trial; this does not establish a reliable model ranking.':'Cells show the mean of verified runs. All declared attempts remain in the details.');note.className='matrix-cell-note';box.append(note);
+    const details=el('details');details.className='cell-details';details.append(el('summary','Task and attempt details'));
+    details.append(el('p',`Fixture ${column.fixture_fingerprint}`));
+    for(const id of value?.attempt_ids||[]){const row=snapshot.attempts.find(item=>item.id===id);if(row){const run=el('div');run.append(el('small',`${id.slice(0,8)} · ${labels[row.status]||row.status}`));recording(run,row);details.append(run);}}
+    box.append(details);
+    const first=snapshot.attempts.find(r=>(value?.attempt_ids||[]).includes(r.id)&&r.recording);
+    if(first){const links=el('div');links.className='matrix-recording-link';recording(links,first);box.append(links);}
+  }
   function renderResearch(){
     const matrix=snapshot.research_matrix,container=$('research-matrix'),select=$('research-protocol');
     const available=matrix?.schema_version===1&&Array.isArray(matrix.protocols)&&Array.isArray(matrix.columns)&&Array.isArray(matrix.models);
-    $('research-empty').hidden=available;container.hidden=!available;select.disabled=!available;
+    $('research-empty').hidden=available;container.hidden=!available;select.disabled=!available;$('matrix-layout').hidden=!available;
     if(!available)return;
+    const identity=JSON.stringify([matrix,select.value,researchView]);if(identity===researchIdentity)return;
     const selected=select.value;select.replaceChildren();
     for(const protocol of matrix.protocols){const option=el('option',protocol.label);option.value=protocol.id;select.append(option);}
     if(matrix.protocols.some(item=>item.id===selected))select.value=selected;
     else if(snapshot.catalog&&matrix.protocols.some(item=>item.id==='full-client-adaptive-pilot-v1'))select.value='full-client-adaptive-pilot-v1';
-    const protocol=matrix.protocols.find(item=>item.id===select.value),columns=matrix.columns.filter(item=>item.protocol_id===select.value);
+    const protocol=matrix.protocols.find(item=>item.id===select.value),planned=researchView==='skill',columns=planned?plannedSkillTasks:matrix.columns.filter(item=>item.protocol_id===select.value);
     $('research-protocol-detail').textContent=protocol?`${protocol.clock}. ${protocol.metric}. ${protocol.status}.`:'';
-    const table=el('table'),caption=el('caption',`${protocol?.label||'Protocol'}: model and class/task evidence`),head=el('thead'),heading=el('tr'),body=el('tbody');
-    caption.className='visually-hidden';heading.append(el('th','Exact model'));
-    for(const column of columns){const th=el('th',column.class_label);th.append(el('small',column.task_label),el('small',column.fixture_fingerprint==='undeclared'?'Fixture undeclared':`Fixture ${column.fixture_fingerprint.slice(0,10)}`));heading.append(th);}
-    head.append(heading);table.append(caption,head,body);
+    $('matrix-class-view').setAttribute('aria-pressed',String(!planned));$('matrix-skill-view').setAttribute('aria-pressed',String(planned));
+    $('research-protocol-label').hidden=planned;$('matrix-legend').hidden=planned;$('matrix-layout').classList.toggle('planned',planned);
+    $('matrix-context').textContent=planned?'Six proposed tasks · each square awaits a new evaluation':`${protocol?.metric||'Verified score'} · select a cell for its sample count`;
+    $('matrix-limits').textContent=planned?'Empty squares mean unrun. Existing class pilots do not supply separate skill scores.':'Compare within a column. These pilots are unranked; live scenes may differ.';
+    const table=el('table'),caption=el('caption',planned?'Proposed skill evaluations; no results collected':`${protocol?.label||'Protocol'}: model and class/task evidence`),head=el('thead'),heading=el('tr'),body=el('tbody');
+    caption.className='visually-hidden';const corner=el('th','Model');corner.scope='col';heading.append(corner);
+    const classSymbols={hero:'⚔',bowmaster:'➶',ice_lightning_arch_mage:'ϟ',night_lord:'✦'};
+    for(const column of columns){const th=el('th');th.scope='col';const symbol=el('span',planned?column.symbol:classSymbols[column.class_id]||'◇');symbol.className='matrix-task-symbol';symbol.setAttribute('aria-hidden','true');th.append(symbol,el('span',planned?column.label:column.class_label),el('small',planned?column.group:column.task_label));heading.append(th);}
+    head.append(heading);table.append(caption,head,body);researchButtons=[];const picks=[];
     for(const model of matrix.models){
-      const tr=el('tr');cell(tr,model.model);
+      const tr=el('tr'),label=el('th');label.scope='row';const dot=el('span');dot.className='model-dot';dot.style.setProperty('--model-color',colors[model.model]||'#78847b');label.append(dot,el('span',names[model.model]||model.model));tr.append(label);
       for(const column of columns){
-        const value=model.cells.find(item=>item.column_id===column.id),td=cell(tr,null,'research-cell');
-        if(!value||value.attempt_ids.length===0){td.textContent='No declared runs';continue;}
-        td.append(el('strong',Number.isFinite(value.mean)?protocol.score_key==='authoritative_peak_xp_per_minute'
-          ?`${format(value.mean)} mean peak XP/min`:`${xp(value.mean)} mean net XP`:'No verified score'));
-        td.append(el('small',`${value.valid} valid / ${value.attempted} attempted${value.planned==null?' · plan denominator unknown':` / ${value.planned} planned`}`));
-        td.append(el('small',`${value.failed} failed · ${value.unknown} unknown · ${value.in_progress} in progress · ${value.not_started} not started`));
-        if(value.valid>1)td.append(el('small',`Observed range ${xp(value.minimum)} to ${xp(value.maximum)}; uncertainty not estimated`));
-        else if(value.valid===1)td.append(el('small','One sample; uncertainty not estimated'));
-        if(value.no_ops)td.append(el('small',`${value.no_ops} verified no-input ${value.no_ops===1?'run':'runs'} retained`));
-        for(const id of value.attempt_ids){const row=snapshot.attempts.find(item=>item.id===id);if(row?.recording){const link=el('span');recording(link,row);td.append(link);}}
+        const value=planned?null:model.cells.find(item=>item.column_id===column.id),td=cell(tr,null,'research-cell');
+        const maximum=planned?0:Math.max(0,...matrix.models.map(m=>m.cells.find(c=>c.column_id===column.id)?.mean).filter(Number.isFinite));
+        const state=matrixCellState(value,maximum),button=el('button');button.type='button';button.className=`matrix-square ${state.tone}`;
+        button.append(el('strong',state.text),el('small',planned?'Unrun':value?.valid?`n = ${value.valid}${value.failed||value.unknown||value.in_progress||value.not_started?' · partial':''}`:state.label));
+        button.setAttribute('aria-pressed','false');button.setAttribute('aria-label',`${names[model.model]||model.model}, ${planned?column.label:column.class_label}: ${planned?'planned, not run':`${state.text}; ${state.label}`}`);
+        button.addEventListener('click',()=>showMatrixCell(model,column,value,button,protocol));td.append(button);researchButtons.push(button);picks.push({model,column,value,button});
       }
       body.append(tr);
     }
     container.replaceChildren(table);
+    const pick=picks.find(p=>p.model.model===researchSelection?.model&&p.column.id===researchSelection?.column&&researchSelection?.view===researchView)||picks[0];
+    if(pick)showMatrixCell(pick.model,pick.column,pick.value,pick.button,protocol);else $('matrix-inspector').replaceChildren();
+    researchIdentity=JSON.stringify([matrix,select.value,researchView]);
   }
   $('research-protocol').addEventListener('change',renderResearch);
+  $('matrix-class-view').addEventListener('click',()=>{researchView='class';renderResearch();});
+  $('matrix-skill-view').addEventListener('click',()=>{researchView='skill';renderResearch();});
   function renderComparisons(){
     const groups=snapshot.comparisons.map(group=>({group,rows:snapshot.attempts.filter(item=>group.attempt_ids.includes(item.id))}));
     const latest=rows=>Math.max(0,...rows.map(row=>row.created_at_ms||0));
@@ -324,11 +385,6 @@
       if(row.kind==='integration')state.append(el('small','Unranked integration'));
       scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');inputDetails(cell(tr,null,'input-summary'),row);publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
     }
-    $('scope').textContent=snapshot.catalog
-      ?`${snapshot.catalog.verified} of ${snapshot.catalog.planned} planned model/class runs have verified results. ${snapshot.catalog.archive_state==='retired'?'A complete four-model cohort replaced the public test recordings.':snapshot.catalog.archive_state==='retained'?'The public test archive remains until one four-model cohort is complete.':''} Saved progress refreshes every 10 seconds. No runs start from this page.`
-      :snapshot.cohort
-      ?`${snapshot.cohort.verified} of ${snapshot.cohort.planned} planned models have verified results. ${snapshot.cohort.archive_replacement?'This completed cohort replaces the public test archive.':'Cohort progress; the existing public archive is retained.'} No runs start from this page.`
-      :snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
   }
   // Public research presentation; all scores and evidence come from the same snapshot.
   const node=(tag,text,cls)=>{const n=el(tag,text);if(cls)n.className=cls;return n;};
@@ -363,10 +419,10 @@
         &&r.returned_model===exact&&r.attribution!=='mismatch'&&safeRecording(r))||null}));
   }
   function runOutcome(row) {
-    if(!Number.isFinite(row.persisted_xp))return 'No verified saved XP score is available for this attempt.';
-    const saved=row.persisted_xp===0?'The run ended with zero net saved XP.':row.persisted_xp<0
-      ?`${xp(row.persisted_xp)} net XP remained after logout, including losses.`
-      :`${xp(row.persisted_xp)} XP remained saved after normal logout.`;
+    if(!Number.isFinite(row.persisted_xp))return 'No verified score.';
+    const saved=row.persisted_xp===0?'Zero net XP saved.':row.persisted_xp<0
+      ?'XP lost after penalties.'
+      :'XP verified after logout.';
     return saved+(row.no_op===true?' No input actions were executed.':'');
   }
   function groupLabel(group) {
@@ -394,7 +450,7 @@
     $('montage-toggle').hidden=!picks.some(p=>p.row);
     $('showcase-class').textContent=group?groupLabel(group):'Awaiting a declared group';
     $('showcase-caption').textContent=group?`${picks.length} models · one frozen class setup`:'No group published';
-    document.querySelector('.sample-note').textContent='Independent recorded attempts; previews open at verified playback cues. The full recordings retain every wait. These are unranked pilot observations.';
+    document.querySelector('.sample-note').textContent='Unranked pilot runs. Previews start near the first input; full recordings include every wait.';
     if(!picks.length){$('montage').append(node('p','No declared group is available.','loading'));return;}
     for(const {model:exact,row:r}of picks){
       if(!r){const empty=node('div',null,'montage-tile empty-preview');empty.append(node('span',names[exact]||exact),node('small','Recording unavailable'));$('montage').append(empty);continue;}
@@ -458,8 +514,8 @@
     const p=publication(row);$('run-evidence').textContent=`${p.label}. ${p.detail?p.detail+'. ':''}${Number.isFinite(row.persisted_xp)?'Saved XP was verified by the runner.':'Diagnostic XP is not a verified score.'}`;
     $('run-id').textContent=row.id;$('run-attribution').textContent=`Requested: ${row.requested_model||'none'}. Returned: ${row.returned_model||'not recorded'}. ${row.attribution==='mismatch'?'Model attribution mismatch. ':''}${row.action_attempts!=null?`${row.action_attempts} attempted inputs; ${number(row.acknowledged_actions)} acknowledged.`:'Input receipts unavailable.'}`;
     const c=cue(row);$('cue-button').hidden=!c;$('cue-button').textContent=c?.basis==='first_acknowledged_input'?'First input':'Program start';
-    $('cue-note').textContent=c?`Playback opens near ${c.basis==='first_acknowledged_input'?'the first acknowledged input':'program start; first-input timing was not recorded'}. Full recording retains the opening wait.`:'Showing the full recording. No verified playback cue is available.';
-    if(adaptiveRow(row))$('cue-note').textContent+=` Every model wait counts within the ${wallBudget(row)/60000}-minute wall budget. Seeking changes playback only.`;
+    $('cue-note').textContent=c?`Starts near ${c.basis==='first_acknowledged_input'?'the first input':'program start'}. Full recording includes the wait.`:'Showing the full recording. No verified playback cue is available.';
+    if(adaptiveRow(row))$('cue-note').textContent+=` Model waits count toward the ${wallBudget(row)/60000}-minute budget.`;
     const details=$('selected-evidence');details.replaceChildren();const hold=adaptiveHold(row);if(hold)details.append(node('p',hold.detail,'group-notice'));
     const adaptive=adaptiveDetails(row);if(adaptive)details.append(adaptive);const native=nativeDetails(row);if(native)details.append(native);
   }
@@ -468,6 +524,13 @@
     $('trajectories').scrollIntoView({behavior:reducedMotion.matches?'instant':'smooth'});runPlayer.focus({preventScroll:true});
   }
   function playAt(time){if(runPlayer.readyState<1)return;try{runPlayer.currentTime=time;runPlayer.play().catch(()=>{$('player-status').textContent='Use the video controls to play.';});}catch{$('player-status').textContent='Use the video controls to seek.';}}
+  // Class background, not a claim that every ability is exercised in these demos.
+  const classGuides={
+    hero:{description:'A warrior who fights up close with swords and axes.',wiki:'https://maplestorywiki.net/w/Hero'},
+    bowmaster:{description:'An archer who fires volleys of arrows from a distance.',wiki:'https://maplestorywiki.net/w/Bowmaster'},
+    ice_lightning_arch_mage:{description:'An elemental mage with ice, chain lightning, and teleportation.',wiki:'https://maplestorywiki.net/w/Arch_Mage_(Ice,_Lightning)'},
+    night_lord:{description:'A star-throwing thief who repositions with Flash Jump.',wiki:'https://maplestorywiki.net/w/Night_Lord'}
+  };
   function renderEnvironmentChecks(){
     const rows=snapshot.environment_checks;
     const valid=Array.isArray(rows)&&rows.length===4
@@ -485,18 +548,35 @@
     document.querySelector('.sample-note').hidden=valid;
     $('environment-check-grid').replaceChildren();if(!valid)return;
     for(const row of rows){
-      const card=node('article',null,'environment-check-card');card.append(node('h3',row.class_name),node('p','Scripted · no model · unranked','environment-label'));
+      const card=node('article',null,'environment-check-card');
+      const className=row.class_name==='Ice/Lightning Arch Mage'?'Ice / Lightning':row.class_name;
+      const frame=node('figure',null,'environment-video'),title=node('figcaption',null,'environment-video-title');
+      title.append(node('h3',className),node('span','Class demo','environment-controller'));
       const video=node('video');video.controls=true;video.playsInline=true;video.preload='metadata';
-      video.src=row.recording.url;video.setAttribute('aria-label',`${row.class_name} scripted environment check`);
+      video.src=row.recording.url;video.setAttribute('aria-label',`${row.class_name} class demo`);
       video.addEventListener('loadedmetadata',()=>{const start=row.recording.playback.start_ms/1000;if(start<video.duration)video.currentTime=start;});
       const full=node('button','Full recording','text-button');full.type='button';
       full.addEventListener('click',()=>{if(video.readyState>=1){video.currentTime=0;video.play().catch(()=>{});}});
-      const saved=Number.isFinite(row.saved_xp_delta)?`${xp(row.saved_xp_delta)} XP saved after ordinary logout`:`Level ${row.initial_level} → ${row.final_level}; no fixed-level XP delta`;
-      card.append(video,node('p',`${seconds(row.program_elapsed_ms)} execution · 180s ceiling`),
-        node('p',`${seconds(row.recording.duration_ms)} original video · ${row.actions} acknowledged inputs`),
-        node('p',saved),node('p',`Includes ${seconds(row.post_recording_settlement_ms)} of post-recording settlement`),
-        node('p',`${row.alive_at_logout?'Alive':'Dead'} at logout · ${row.clock_evidence.capture_fps.toFixed(1)} capture FPS`),
-        full,node('small',`Run ${row.id}`,'environment-run-id'));
+      const totalSeconds=Math.round(row.recording.duration_ms/1000),minutes=Math.floor(totalSeconds/60),secondsPart=totalSeconds%60;
+      frame.append(title,video);card.append(frame);
+      const guide=classGuides[row.class_id],description=node('p',guide.description,'environment-class-copy');
+      const wiki=node('a',`${className} wiki ↗`,'environment-wiki');wiki.href=guide.wiki;wiki.target='_blank';wiki.rel='noopener noreferrer';
+      wiki.setAttribute('aria-label',`${row.class_name} on MapleStory Wiki (opens in a new tab)`);
+      card.append(description,wiki);
+      const stats=node('ul',null,'environment-stats');
+      stats.append(node('li',Number.isFinite(row.saved_xp_delta)?`Saved XP: ${xp(row.saved_xp_delta)} XP`:`Level: ${row.initial_level} → ${row.final_level}`),node('li',`Recording: ${minutes}:${String(secondsPart).padStart(2,'0')}`));
+      card.append(stats);
+      const info=node('details',null,'environment-details'),list=node('dl',null,'environment-detail-list');
+      const fields=[['Run type','Class demo · excluded from benchmark results'],
+        ['Controller','Preset inputs · no AI model'],
+        ['Level',row.initial_level===row.final_level?number(row.final_level):`${row.initial_level} → ${row.final_level}`],
+        ['Saved XP',Number.isFinite(row.saved_xp_delta)?`${xp(row.saved_xp_delta)} XP after logout`:'No fixed-level XP delta'],
+        ['Execution',`${seconds(row.program_elapsed_ms)} / ${row.program_budget_seconds}s budget`],
+        ['Recording',seconds(row.recording.duration_ms)],['Inputs',`${number(row.actions)} acknowledged`],
+        ['After recording',`${seconds(row.post_recording_settlement_ms)} settlement`],
+        ['At logout',alive(row.alive_at_logout)],['Capture',`${row.clock_evidence.capture_fps.toFixed(1)} FPS`],['Run ID',row.id]];
+      for(const [label,value]of fields){const entry=node('div');entry.append(node('dt',`${label}:`),node('dd',value));list.append(entry);}
+      info.append(node('summary','Full details'),list,full);card.append(info);
       $('environment-check-grid').append(card);
     }
   }
@@ -504,8 +584,7 @@
     const {generated_at_ms,...presentation}=snapshot;
     const identity=JSON.stringify(presentation);if(identity===presentationIdentity)return;presentationIdentity=identity;
     recordings=snapshot.attempts.filter(safeRecording);
-    $('hero-models').textContent=new Set(snapshot.attempts.map(r=>r.requested_model).filter(Boolean)).size;
-    $('hero-recordings').textContent=recordings.length;$('hero-attempts').textContent=snapshot.attempts.length;$('recording-count').textContent=`${recordings.length} recordings`;
+    $('recording-count').textContent=`${recordings.length} recordings`;
     const previous=$('comparison-select').value;
     for(const id of ['comparison-select','showcase-select']){const select=$(id);select.replaceChildren();for(const g of snapshot.comparisons){const option=node('option',groupLabel(g));option.value=g.id;select.append(option);}}
     const group=snapshot.comparisons.find(g=>g.id===previous)||snapshot.comparisons.find(g=>g.attempt_ids.includes(snapshot.featured_run_id))||snapshot.comparisons[0];
@@ -513,7 +592,6 @@
     renderEnvironmentChecks();renderMontage();renderComparison();
     const featured=recordings.find(r=>r.id===selected?.id)||recordings.find(r=>r.id===snapshot.featured_run_id)||recordings[0];
     if(featured){filterModel=model(featured);renderModels();renderRunOptions();selectRun(featured);}else{$('player-status').textContent='No recordings available.';}
-    $('snapshot-date').textContent=`Saved ${new Date(snapshot.generated_at_ms).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`;
   }
   runPlayer.addEventListener('loadedmetadata',()=>{const start=(cue(selected)?.start_ms||0)/1000;if(start<runPlayer.duration)runPlayer.currentTime=start;$('player-status').textContent='Ready to play';$('cue-button').disabled=false;$('full-button').disabled=false;});
   runPlayer.addEventListener('playing',()=>{$('player-status').textContent='Playing recorded run';setPreviews(false);});
@@ -556,7 +634,11 @@
   scheduleSectionUpdate();
   const labDetails = $('lab-details');
   function revealLab() {
-    if (location.hash === '#approach') labDetails.open = true;
+    if (['#approach', '#simulation-flow', '#agent-sdk', '#simulation-environment'].includes(location.hash)) {
+      labDetails.open = true;
+      const target = $(location.hash.slice(1));
+      requestAnimationFrame(() => target?.scrollIntoView({block:'start'}));
+    }
   }
   document.querySelector('.site-nav a[href="#approach"]').addEventListener('click', () => { labDetails.open = true; });
   addEventListener('hashchange', revealLab);
@@ -564,17 +646,11 @@
 
   function freshness(){
     if(!snapshot)return;
-    if(snapshot.source==='full_client_public_catalog'){
-      $('connection').className='';
-      $('connection').textContent=`Published results · refreshes every 10s · Snapshot ${new Date(snapshot.generated_at_ms).toLocaleString()}`;
-      return;
-    }
-    if(snapshot.cohort&&snapshot.generated_at_ms===0){$('connection').textContent='Four-model cohort · awaiting the first attempt';return;}
+    $('load-status').textContent='';
+    if(snapshot.source==='full_client_public_catalog'||(snapshot.cohort&&snapshot.generated_at_ms===0))return;
     const age=Date.now()-snapshot.generated_at_ms,active=snapshot.attempts.some(row=>['running','requesting','recovering'].includes(row.status));
     const stale=age>10000||age< -1000||snapshot.live_status_available===false;
-    $('connection').className=active&&stale?'stale':'';
-    $('connection').textContent=active&&stale?'Live updates stale · showing saved snapshot':stale
-      ?`Saved results · ${new Date(snapshot.generated_at_ms).toLocaleString()}`:`Snapshot updated ${Math.max(0,Math.floor(age/1000))}s ago`;
+    if(active&&stale)$('load-status').textContent='Live updates stale · showing saved results';
   }
   async function refresh(){
     if(closed)return;
@@ -584,7 +660,7 @@
       if(next.schema_version!==1||!Array.isArray(next.attempts)||next.attempts.length>100||!Array.isArray(next.comparisons)||!Number.isFinite(next.generated_at_ms))throw Error();
       snapshot=next;renderRedesign();renderCatalog();renderResearch();renderLive();renderComparisons();renderHistory();freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
-    }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
+    }catch{$('load-status').textContent=snapshot?'Results feed unavailable · showing saved results':'Results feed unavailable';}
     finally{if(!closed&&(snapshot?.live_status_available!==false||[1,2].includes(snapshot?.catalog?.schema_version)))timer=setTimeout(refresh,[1,2].includes(snapshot?.catalog?.schema_version)?10000:2000);}
   }
   window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();setPreviews(false);runPlayer.pause();});

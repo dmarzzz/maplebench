@@ -1,5 +1,9 @@
 # Repository boundaries
 
+For work on the next simulation suite, read `docs/NEXT_SIMULATION_PLAN.md` and
+`docs/plans/AGENTS.md`. Maintain the suite's progress records as trials execute;
+keep the frozen experiment design and schedules separate from observed progress.
+
 Never commit credentials, personal information, account exports, private transcripts,
 host-specific configuration, database files, recordings, or game assets.
 The explicitly approved gameplay sample under `examples/full-client-benchmark/`

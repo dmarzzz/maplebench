@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "design_id": "skill-suite-v1-draft-2026-09-14",
+  "status": "qualification_pending",
+  "last_updated_at_utc": null,
+  "reporting_note": "No execution reported against this plan; reconcile runtime journals before dispatch.",
+  "execution_manifests": [],
+  "phase_counts": {
+    "native-initial": {
+      "planned": 36,
+      "reported_terminal": 0,
+      "success": 0,
+      "gameplay_failure": 0,
+      "invalid": 0,
+      "in_progress": 0
+    },
+    "skill-development": {
+      "planned": 96,
+      "reported_terminal": 0,
+      "success": 0,
+      "gameplay_failure": 0,
+      "invalid": 0,
+      "in_progress": 0
+    },
+    "native-remaining": {
+      "planned": 36,
+      "reported_terminal": 0,
+      "success": 0,
+      "gameplay_failure": 0,
+      "invalid": 0,
+      "in_progress": 0
+    },
+    "skill-comparative": {
+      "planned": 576,
+      "reported_terminal": 0,
+      "success": 0,
+      "gameplay_failure": 0,
+      "invalid": 0,
+      "in_progress": 0
+    },
+    "training-qualification": {
+      "planned": 12,
+      "reported_terminal": 0,
+      "success": 0,
+      "gameplay_failure": 0,
+      "invalid": 0,
+      "in_progress": 0
+    },
+    "training-long-proposed": {
+      "planned": 96,
+      "reported_terminal": 0,
+      "success": 0,
+      "gameplay_failure": 0,
+      "invalid": 0,
+      "in_progress": 0
+    }
+  },
+  "entries": {},
+  "blockers": [
+    "runtime_and_fixture_bindings",
+    "native_task_verification",
+    "skill_controller_and_observation_contract",
+    "model_configuration_and_execution_authorization",
+    "recording_storage_and_publication"
+  ],
+  "next_action": "Reconcile runtime inventory and bind the first three task fixtures and verifiers."
+}

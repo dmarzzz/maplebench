@@ -46,6 +46,7 @@ class Node {
  getAttribute(name){return this.attrs[name]??null}
  addEventListener(event,callback){(this.events[event]??=[]).push(callback)}
  emit(event,value={}){for(const callback of this.events[event]||[])callback(value)}
+ scrollIntoView(options){this.scrolled=options}
  pause(){this.pauseCount++} play(){return Promise.resolve()} focus(){this.focused=true}
 }
 const nodes={},$=id=>nodes[id]??=new Node('div'),el=(tag,text)=>new Node(tag,text);
@@ -56,6 +57,7 @@ const matchMedia=()=>({matches:true,events:{},
  addEventListener(event,callback){(this.events[event]??=[]).push(callback)},
  emit(event,value){for(const callback of this.events[event]||[])callback(value)}});
 const location={href:'https://example.test/cohorts/current/',origin:'https://example.test'};
+const requestAnimationFrame=callback=>callback();
 const labels={completed:'Completed',failed:'Failed',running:'In progress'};
 let snapshot;
 const sample=(id,exact='gpt-6-astra',score=0)=>({
@@ -68,6 +70,7 @@ const sample=(id,exact='gpt-6-astra',score=0)=>({
 });
 """
 PRESENTATION_HELPERS = SOURCE[SOURCE.index('\n  const node='):SOURCE.index('  function safeRecording(')]
+CLASS_GUIDES = SOURCE[SOURCE.index('  const classGuides='):SOURCE.index('  function renderEnvironmentChecks(')]
 
 
 class Elements(HTMLParser):
@@ -136,18 +139,24 @@ assert.equal($('environment-checks').hidden,true);assert.equal($('model-showcase
 snapshot.environment_checks=['hero','bowmaster','ice_lightning_arch_mage','night_lord'].map((class_id,i)=>({
  id:String(i+1).repeat(32),kind:'scripted_environment_check',protocol_id:'scripted-native-productivity-v2',
  class_id,class_name:class_id,model:null,model_api_requests:0,ranked:false,score:null,
- actions:50,program_elapsed_ms:176000,saved_xp_delta:i===0?-500:i===1?0:4500,alive_at_logout:true,
+ actions:50,program_elapsed_ms:176000,program_budget_seconds:180,saved_xp_delta:i===0?-500:i===1?0:4500,alive_at_logout:true,
  recording:{url:`./checks/${String(i+1).repeat(32)}/recordings/${String(i+1).repeat(32)}.webm`,
  duration_ms:176500,playback:{basis:'first_acknowledged_input',start_ms:1000}},clock_evidence:{capture_fps:40}}));
 renderEnvironmentChecks();assert.equal($('environment-check-grid').children.length,4);
 assert.equal($('model-showcase').hidden,true);assert.equal($('environment-checks').hidden,false);
-assert.equal(snapshot.attempts,before);assert.match($('environment-check-grid').textContent,/no model/);
-assert.match($('environment-check-grid').textContent,/180s ceiling/);assert.match($('environment-check-grid').textContent,/-500/);
-const video=$('environment-check-grid').children[0].children[2];video.duration=176.5;video.emit('loadedmetadata');
+assert.equal(snapshot.attempts,before);assert.match($('environment-check-grid').textContent,/no AI model/);
+const card=$('environment-check-grid').children[0];
+assert.match(card.children[0].textContent,/Class demo/);
+assert.match(card.children[2].textContent,/hero wiki/);
+assert.equal(card.children[2].href,'https://maplestorywiki.net/w/Hero');
+assert.equal(card.children[3].children.length,2);
+assert.match(card.children[3].textContent,/Saved XP: -500 XP.*Recording: 2:57/);
+assert.equal(card.children[4].tag,'details');assert.match(card.children[4].textContent,/180s budget/);
+const video=card.children[0].children[1];video.duration=176.5;video.emit('loadedmetadata');
 assert.equal(video.currentTime,1);assert.equal(video.controls,true);
 snapshot.environment_checks[0].model='gpt-6-astra';renderEnvironmentChecks();
 assert.equal($('environment-check-grid').children.length,0);assert.equal($('model-showcase').hidden,false);
-""", DOM + PRESENTATION_HELPERS)
+""", DOM + PRESENTATION_HELPERS + CLASS_GUIDES)
 
     def test_group_label_counts_distinct_models_and_uses_frozen_horizon(self):
         self.run_js(['groupLabel'], r"""
@@ -161,17 +170,17 @@ row.adaptive.horizon_policy.id='unverified';assert.match(groupLabel(group),/5 mi
 
     def test_outcome_keeps_zero_negative_unknown_and_no_input_independent(self):
         self.run_js(['runOutcome'], r"""
-assert.match(runOutcome({persisted_xp:0}),/zero net saved XP/);
-assert.match(runOutcome({persisted_xp:-4500}),/-4,500 net XP.*including losses/);
-assert.match(runOutcome({persisted_xp:9000}),/\+9,000 XP remained saved/);
+assert.match(runOutcome({persisted_xp:0}),/Zero net XP saved/);
+assert.match(runOutcome({persisted_xp:-4500}),/XP lost after penalties/);
+assert.match(runOutcome({persisted_xp:9000}),/XP verified after logout/);
 for(const value of [null,undefined,NaN,'9000']){
  const text=runOutcome({persisted_xp:value,no_op:true});
- assert.match(text,/No verified saved XP score/);
- assert.doesNotMatch(text,/zero net|No XP gained|no net gain|remained saved/);
+ assert.match(text,/No verified score/);
+ assert.doesNotMatch(text,/Zero net|XP lost|XP verified/);
 }
 const passive=runOutcome({persisted_xp:9000,no_op:true});
-assert.match(passive,/\+9,000 XP remained saved/);assert.match(passive,/No input actions/);
-const failed=runOutcome({persisted_xp:-500,status:'failed'});assert.match(failed,/-500 net XP/);
+assert.match(passive,/XP verified after logout/);assert.match(passive,/No input actions/);
+const failed=runOutcome({persisted_xp:-500,status:'failed'});assert.match(failed,/XP lost after penalties/);
 """)
 
     def test_preview_seeks_to_cue_and_retains_full_opening_without_one(self):
@@ -219,7 +228,8 @@ row={...row,persisted_xp:100};snapshot={...snapshot,attempts:[row],generated_at_
 renderRedesign();
 assert.equal(runPlayer.sourceChanges,changes,'A new snapshot must not reload the selected recording');
 assert.equal(runPlayer.pauseCount,pauses,'A new snapshot must not pause the selected recording');
-assert.equal(runPlayer.currentTime,25);assert.match($('run-outcome').textContent,/\+100 XP/);
+assert.equal(runPlayer.currentTime,25);assert.match($('run-outcome').textContent,/XP verified after logout/);
+assert.match($('run-metrics').textContent,/Saved XP \+100/);
 selectRun(sample('another'));assert.ok(runPlayer.sourceChanges>changes);
 """, DOM + PRESENTATION_HELPERS + r"""
 const renderModels=()=>{},renderRunOptions=()=>{},renderMontage=()=>{},renderComparison=()=>{};
@@ -230,6 +240,10 @@ const adaptiveHold=()=>null,adaptiveDetails=()=>null,nativeDetails=()=>null;
         self.run_js(['revealLab'], r"""
 const labDetails={open:false};location.hash='#results';revealLab();assert.equal(labDetails.open,false);
 location.hash='#approach';revealLab();assert.equal(labDetails.open,true);
+for(const id of ['simulation-flow','agent-sdk','simulation-environment']){
+ labDetails.open=false;location.hash='#'+id;revealLab();assert.equal(labDetails.open,true);
+ assert.deepEqual($(id).scrolled,{block:'start'});
+}
 labDetails.open=false;location.hash='#trajectories';revealLab();assert.equal(labDetails.open,false);
 """, DOM)
 
@@ -288,7 +302,7 @@ class RedesignAccessibilityTests(unittest.TestCase):
             self.assertEqual(tag, 'video')
             self.assertIn('controls', attrs)
             self.assertTrue(attrs.get('aria-label'))
-        for status in ('player-status', 'replay-playback-status', 'connection'):
+        for status in ('player-status', 'replay-playback-status', 'load-status'):
             self.assertEqual(self.ids[status][1].get('role'), 'status')
         for control in ('showcase-select', 'comparison-select', 'run-select', 'history-filter'):
             self.assertTrue(any(tag == 'label' and attrs.get('for') == control

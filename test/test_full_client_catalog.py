@@ -314,10 +314,10 @@ class CatalogAnnotationTests(unittest.TestCase):
               'text':'Hurricane is discrete & "channel" fidelity is unaccepted.'}
         request['annotations']=[note];result=catalog.compose(request,self.out);site=Path(result['site'])
         html=(site/'index.html').read_text();prefix=manifest['content']['target_path'].lstrip('/')
-        self.assertIn('Cohort limitations',html)
+        self.assertIn('aria-label="Operator cohort limitations"',html)
         self.assertIn('discrete &amp; &quot;channel&quot;',html)
         self.assertIn('href="./'+prefix+'"',html)
-        self.assertLess(html.index('Cohort limitations'),html.index('id="research-title"'))
+        self.assertLess(html.index('id="research-matrix"'),html.index('aria-label="Operator cohort limitations"'))
         self.assertNotEqual(result['catalog_sha256'],plain['catalog_sha256'])
         for name,expected in manifest['content']['files'].items():
             self.assertEqual(publication.stable_fingerprint(site/prefix/name,publication.MAX_ADAPTIVE_VIDEO),expected)

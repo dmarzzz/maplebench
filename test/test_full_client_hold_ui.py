@@ -155,12 +155,11 @@ assert.doesNotMatch(text,/300.0s play|135.1s play/);
         start=SOURCE.index('  function freshness(){');end=SOURCE.index('  async function refresh(){')
         code=DOM+SOURCE[start:end]+r"""
 snapshot={source:'full_client_public_catalog',generated_at_ms:1000,live_status_available:false,attempts:[{status:'running'}]};
-freshness();assert.equal($('connection').className,'');
-assert.match($('connection').textContent,/Published results · refreshes every 10s · Snapshot /);
-assert.ok($('connection').textContent.endsWith(new Date(1000).toLocaleString()));
-assert.doesNotMatch($('connection').textContent,/stale|Live updates/);
+freshness();assert.equal($('load-status').textContent,'');
 snapshot.source='full_client_dashboard';freshness();
-assert.match($('connection').textContent,/Live updates stale/);
+assert.match($('load-status').textContent,/Live updates stale/);
+snapshot.source='full_client_public_catalog';freshness();
+assert.equal($('load-status').textContent,'');
 """
         result=subprocess.run([shutil.which('node'), '--max-old-space-size=64','-e',code],capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)

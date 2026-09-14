@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="A benchmark for AI agents playing MapleStory. Explore recorded runs, compare persisted XP, and inspect the evidence behind every attempt.">
+  <meta name="description" content="Agent benchmarks for MMORPG classic Maplestory. Explore recorded runs, compare persisted XP, and inspect the evidence behind every attempt.">
   <title>MapleBench — AI agents in MapleStory</title>
+  <link rel="icon" type="image/png" href="./illustrations/maple-leaf.png">
   <link rel="stylesheet" href="./style.css">
   <script src="./dashboard.js" defer></script>
 </head>
@@ -18,24 +19,23 @@
   </defs></svg>
 
   <header class="site-header">
-    <nav class="site-nav" aria-label="Sections"><a href="#overview" aria-current="location">Overview</a><a href="#approach">Simulation lab</a><a href="#results">Results</a><a href="#trajectories">Recordings</a><a href="#methodology">Methodology</a></nav>
-    <a class="author-link" href="https://x.com/DistributedMarz" aria-label="dmarz on Twitter / X">Built by <strong>dmarz</strong><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.9 2H22l-6.8 7.8L23.2 22H17l-4.9-7.4L5.6 22H2.4l7.3-8.4L.8 2h6.4l4.4 6.7L18.9 2Zm-1.1 18h1.7L6.3 3.9H4.5L17.8 20Z" fill="currentColor"/></svg></a>
+    <nav class="site-nav" aria-label="Sections"><a href="#overview" aria-current="location">Overview</a><a href="#approach">How it works</a><a href="#methodology">Methodology</a><a href="#results">Results</a><a href="#trajectories">Recordings</a></nav>
   </header>
   <main>
     <section class="hero section-card" id="overview" aria-labelledby="overview-title">
       <div class="hero-copy">
         <h1 id="overview-title"><img class="inventory-sprite maple-leaf" src="./illustrations/maple-leaf.png" width="1254" height="1254" alt="" aria-hidden="true" decoding="async">MapleBench</h1>
-        <p class="hero-description">A benchmark for AI agents playing MapleStory</p>
+        <p class="hero-description">Agent benchmarks for MMORPG classic Maplestory</p>
+        <p class="hero-byline"><a class="author-link" href="https://x.com/DistributedMarz" aria-label="dmarz on Twitter / X">Built by <strong>dmarz</strong><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.9 2H22l-6.8 7.8L23.2 22H17l-4.9-7.4L5.6 22H2.4l7.3-8.4L.8 2h6.4l4.4 6.7L18.9 2Zm-1.1 18h1.7L6.3 3.9H4.5L17.8 20Z" fill="currentColor"/></svg></a></p>
         <div class="hero-actions">
           <a class="pill-link" href="https://github.com/dmarzzz/maplebench"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .8A11.2 11.2 0 0 0 8.46 22.6c.56.1.77-.24.77-.54v-2.1c-3.13.68-3.79-1.33-3.79-1.33-.51-1.3-1.25-1.65-1.25-1.65-1.02-.7.08-.69.08-.69 1.13.08 1.72 1.16 1.72 1.16 1 1 2.63.73 3.27.56.1-.73.4-1.23.71-1.51-2.5-.28-5.13-1.25-5.13-5.55 0-1.22.44-2.22 1.15-3-.11-.28-.5-1.42.11-2.96 0 0 .94-.3 3.08 1.15a10.7 10.7 0 0 1 5.61 0c2.14-1.45 3.08-1.15 3.08-1.15.61 1.54.22 2.68.1 2.96.72.78 1.16 1.78 1.16 3 0 4.31-2.63 5.27-5.14 5.55.4.35.76 1.03.76 2.08v3.08c0 .3.2.65.77.54A11.2 11.2 0 0 0 12 .8Z"/></svg>Code</a>
           <a class="pill-link" href="#results"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h17M7 16v-5m5 5V4m5 12V8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Results</a>
         </div>
       </div>
       <section id="environment-checks" class="environment-checks" hidden aria-labelledby="environment-checks-title">
-        <h2 id="environment-checks-title">Inside the game world</h2>
-        <p>Four scripted class checks · no model calls · unranked. Each clip retains its full recording and actual duration.</p>
+        <h2 id="environment-checks-title">Gameplay preview</h2>
+        <p>Four MapleStory classes, each with different skills, attacks, and movement.</p>
         <div id="environment-check-grid" class="environment-check-grid"></div>
-        <p class="environment-note">Saved XP is measured after ordinary logout and includes a brief settlement period after recording. These environment checks do not establish model performance or full skill qualification.</p>
       </section>
       <figure id="model-showcase" class="showcase">
         <div class="showcase-toolbar"><label for="showcase-select">Watch a class</label><select id="showcase-select"></select></div>
@@ -44,89 +44,259 @@
         <figcaption><span id="showcase-caption">Recorded gameplay from one frozen group</span><button id="montage-toggle" class="text-button" type="button" aria-pressed="false">Play previews</button></figcaption>
       </figure>
       <p class="sample-note">Independent recorded attempts from one frozen class setup.</p>
-      <div class="introduction overview-summary">
-        <img class="inventory-sprite quest-scroll" src="./illustrations/return-scroll.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async">
-        <div><p>Agents write code to earn XP that survives logout. Each recording retains its declared task, controls, and time budget.</p><p class="snapshot-summary"><span id="hero-models">—</span> models · <span id="hero-recordings">—</span> recordings · <span id="hero-attempts">—</span> attempts</p></div>
-      </div>
     </section>
     <section id="approach" class="section section-card simulation-lab" aria-labelledby="approach-title">
       <details id="lab-details">
-        <summary class="lab-toggle"><h2 id="approach-title"><img class="inventory-sprite section-emblem" src="./illustrations/blue-snail.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async"><span>Simulation lab<small>Inside the distributed setup</small></span><svg class="lab-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></h2></summary>
+        <summary class="lab-toggle"><h2 id="approach-title"><img class="inventory-sprite section-emblem" src="./illustrations/blue-snail.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async"><span>How agent simulations work<small>Agent loop, SDK and architecture</small></span><svg class="lab-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></h2></summary>
         <div class="lab-content">
-          <figure class="lab-figure">
-            <div class="lab-context"><p>One game world per worker.</p><span>Illustrative worker layout</span></div>
-            <p class="lab-scroll-hint">Swipe to follow the connections</p>
-            <div class="lab-scroll" tabindex="0" role="region" aria-label="Distributed simulation lab diagram; scroll horizontally on smaller screens">
-              <svg class="lab-diagram" viewBox="0 0 900 630" role="img" aria-labelledby="lab-diagram-title lab-diagram-description">
-                <title id="lab-diagram-title">Distributed simulation lab, with one worker expanded</title>
-                <desc id="lab-diagram-description">OpenTofu and Ansible provision three independent game environments. All workers use the OpenAI inference provider. Inside worker one, the MapleBench controller sends initial state to the model and receives a program for a bounded, networkless Node.js and Docker sandbox. The program observes and presses keys through the controller and Journey WASM. Journey connects through a WebSocket-to-TCP proxy to Cosmic, which persists progress in MySQL. A read-only asset service feeds the client. MapleBench verifies saved XP before publishing results to Vercel. The other two workers have the same isolated stack. Single-response and adaptive protocols differ in how often the controller requests a new program. This is an illustrative layout, not a live fleet monitor.</desc>
-                <defs><marker id="lab-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="m2 1 5 4-5 4" fill="none" stroke="context-stroke" stroke-width="1.5"/></marker></defs>
-                <g class="lab-provision"><text x="30" y="47" class="lab-small">Provisioned with</text><a href="https://github.com/opentofu/opentofu"><text x="30" y="71" class="lab-link">OpenTofu</text></a><text x="108" y="71" class="lab-small">+</text><a href="https://github.com/ansible/ansible"><text x="124" y="71" class="lab-link">Ansible</text></a><text x="30" y="95" class="lab-small">DigitalOcean / Ubuntu</text></g>
-                <g class="lab-inference" text-anchor="middle"><text x="450" y="27" class="lab-small">Shared inference provider</text><text x="450" y="58" class="lab-name">OpenAI API</text></g>
-                <path class="lab-wire inference" d="M450 80V126H150V162"/><path class="lab-wire inference" d="M450 126H780V162"/><path class="lab-wire inference" d="M620 126V162"/>
-                <text x="473" y="102" class="lab-small">Task + state ↔ program</text>
-                <g class="lab-worker active" text-anchor="middle"><circle cx="150" cy="187" r="22"/><text x="150" y="193" class="lab-worker-number">01</text><text x="150" y="232" class="lab-worker-name">Worker 01</text></g>
-                <g class="lab-worker" text-anchor="middle"><circle cx="620" cy="187" r="22"/><text x="620" y="193" class="lab-worker-number">02</text><text x="620" y="232" class="lab-worker-name">Worker 02</text></g>
-                <g class="lab-worker" text-anchor="middle"><circle cx="780" cy="187" r="22"/><text x="780" y="193" class="lab-worker-number">03</text><text x="780" y="232" class="lab-worker-name">Worker 03</text></g>
-                <text x="700" y="257" text-anchor="middle" class="lab-small">Each has the same isolated stack</text>
-                <path class="lab-wire" d="M150 246V296"/>
-                <g text-anchor="middle"><text x="150" y="325" class="lab-name">MapleBench controller</text><text x="150" y="348" class="lab-small">SDK, budgets &amp; receipts</text></g>
-                <path class="lab-wire both" d="M263 327H351"/><text x="307" y="311" text-anchor="middle" class="lab-small">State / keys</text>
-                <g text-anchor="middle"><a href="https://github.com/nmnsnv/maplestory-wasm"><text x="450" y="325" class="lab-name lab-link">Journey WASM</text></a><text x="450" y="348" class="lab-small">Browser client &amp; recording</text></g>
-                <path class="lab-wire both" d="M554 327H703"/><text x="628" y="303" text-anchor="middle" class="lab-small">WebSocket ↔ TCP</text><text x="628" y="348" text-anchor="middle" class="lab-small">proxy</text>
-                <g text-anchor="middle"><a href="https://github.com/P0nk/Cosmic"><text x="780" y="325" class="lab-name lab-link">Cosmic</text></a><text x="780" y="348" class="lab-small">v83 game server</text></g>
-                <path class="lab-wire both" d="M150 370V433"/><text x="168" y="403" class="lab-small">Run program</text>
-                <g text-anchor="middle"><text x="150" y="465" class="lab-name">Node.js + Docker</text><text x="150" y="489" class="lab-small">Bounded, networkless sandbox</text></g>
-                <path class="lab-wire" d="M450 433V369"/><text x="467" y="403" class="lab-small">Asset stream</text>
-                <g text-anchor="middle"><text x="450" y="465" class="lab-name">Game assets</text><text x="450" y="489" class="lab-small">Separate read-only service</text></g>
-                <path class="lab-wire" d="M780 370V433"/><text x="797" y="403" class="lab-small">Logout</text>
-                <g text-anchor="middle"><text x="780" y="465" class="lab-name">MySQL</text><text x="780" y="489" class="lab-small">Saved character state</text></g>
-                <path class="lab-wire verification" d="M780 507V531H450V560"/>
-                <g text-anchor="middle"><text x="450" y="588" class="lab-name">Verify saved XP</text><text x="450" y="611" class="lab-small">MapleBench verifier</text></g>
-                <path class="lab-wire verification" d="M551 585H703"/>
-                <g text-anchor="middle"><text x="780" y="588" class="lab-name">Public results</text><text x="780" y="611" class="lab-small">Vercel</text></g>
+          <section id="simulation-flow" class="simulation-flow" aria-labelledby="flow-title">
+            <div class="lab-subheading"><h3 id="flow-title"><img class="inventory-sprite" src="./illustrations/return-scroll.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async">The agent loop</h3></div>
+            <figure class="agent-loop">
+              <svg class="agent-loop-diagram desktop" viewBox="0 0 920 316" role="img" aria-labelledby="loop-title-desktop loop-description-desktop">
+              <title id="loop-title-desktop">Adaptive agent loop, from observations to verified XP</title><desc id="loop-description-desktop">The model receives the task, remaining budget and a structured game-state snapshot, then writes a bounded JavaScript program. The program can repeatedly call sdk.observe() for fresh state and sdk.pressKeys() for game inputs without another model call. The diagram shows both the world-to-program observation path and the separate snapshot path for the next model call. Between programs, the controller can ask the model to plan again with fresh state and recent execution feedback while budget remains. Inference and execution share the time budget. After logout, saved XP is verified.</desc>
+              <defs><marker id="loop-arrow-desktop" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m1 1 7 4-7 4" fill="none" stroke="context-stroke" stroke-width="1.6"/></marker></defs>
+              <text x="132" y="24" text-anchor="middle" class="loop-label">Task + time budget</text>
+              <path class="loop-route " d="M132 34V64" marker-end="url(#loop-arrow-desktop)"/>
+              <g class="loop-node model"><rect x="22" y="70" width="220" height="106" rx="10"/><text x="40" y="98" class="loop-title">AI model</text><text x="40" y="119" class="loop-detail">Turns observations into code.</text></g>
+              <g class="loop-node program"><rect x="352" y="70" width="220" height="106" rx="10"/><text x="370" y="98" class="loop-title">Agent program</text><text x="370" y="119" class="loop-detail">Observes and acts through the SDK.</text></g>
+              <g class="loop-node world"><rect x="682" y="70" width="216" height="106" rx="10"/><text x="700" y="98" class="loop-title">Live game world</text><text x="700" y="119" class="loop-detail">Physics, combat and progression.</text></g>
+              <g class="loop-node outcome"><rect x="682" y="245" width="216" height="64" rx="10"/><text x="700" y="273" class="loop-title">Verified outcome</text><text x="700" y="294" class="loop-detail">XP saved after logout.</text></g>
+              <path class="loop-route " d="M248 122H346" marker-end="url(#loop-arrow-desktop)"/>
+              <text x="297" y="109" text-anchor="middle" class="loop-label">Code</text>
+              <path class="loop-route " d="M578 122H676" marker-end="url(#loop-arrow-desktop)"/>
+              <text x="627" y="109" text-anchor="middle" class="loop-label">Inputs</text>
+              <path class="loop-route observation" d="M676 157H578" marker-end="url(#loop-arrow-desktop)"/>
+              <text x="627" y="148" text-anchor="middle" class="loop-label">World state</text>
+              <path class="loop-route feedback" d="M790 182V211H132V182" marker-end="url(#loop-arrow-desktop)"/>
+              <rect x="350" y="201" width="222" height="20" fill="#fffefa"/>
+              <text x="461" y="215" text-anchor="middle" class="loop-label">Snapshot for next model call</text>
+              <path class="loop-route verification" d="M790 217V239" marker-end="url(#loop-arrow-desktop)"/>
+              <text x="842" y="232" text-anchor="middle" class="loop-label">Log out</text>
               </svg>
-            </div>
-            <figcaption>Each worker owns a separate game world. Single-response runs execute one model-authored program; adaptive runs repeat observation and model calls within their frozen budget. This diagram is not a live fleet monitor.</figcaption>
-          </figure>
-          <div class="lab-notes">
-            <div><h3>What the agent sees</h3><p>Position, HP/MP, XP, level, map, alive status, and nearby monsters. The model receives structured state; the recording is for us.</p><h3>What it controls</h3><p>A program calls <code>observe()</code>, <code>pressKeys()</code>, and <code>wait()</code> in <a href="https://github.com/nodejs/node">Node.js</a> / <a href="https://github.com/moby/moby">Docker</a>. Normal game inputs only; no stat edits.</p></div>
-            <div class="lab-code"><h3><img class="inventory-sprite" src="./illustrations/potions.png" width="1254" height="1254" alt="" loading="lazy" decoding="async">An agent’s program <small>Illustrative</small></h3><pre><code><span class="syntax-keyword">const</span> state = <span class="syntax-keyword">await</span> sdk.observe();
-<span class="syntax-keyword">if</span> (state.character.hp &lt; state.character.maxHp / 2) {
+              <svg class="agent-loop-diagram mobile" viewBox="0 0 340 478" role="img" aria-labelledby="loop-title-mobile loop-description-mobile">
+              <title id="loop-title-mobile">Adaptive agent loop, from observations to verified XP</title><desc id="loop-description-mobile">The model receives the task, remaining budget and a structured game-state snapshot, then writes a bounded JavaScript program. The program can repeatedly call sdk.observe() for fresh state and sdk.pressKeys() for game inputs without another model call. The diagram shows both the world-to-program observation path and the separate snapshot path for the next model call. Between programs, the controller can ask the model to plan again with fresh state and recent execution feedback while budget remains. Inference and execution share the time budget. After logout, saved XP is verified.</desc>
+              <defs><marker id="loop-arrow-mobile" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="m1 1 7 4-7 4" fill="none" stroke="context-stroke" stroke-width="1.6"/></marker></defs>
+              <text x="183" y="18" text-anchor="middle" class="loop-label">Task + time budget</text>
+              <path class="loop-route " d="M183 25V36" marker-end="url(#loop-arrow-mobile)"/>
+              <g class="loop-node model"><rect x="52" y="42" width="262" height="72" rx="10"/><text x="70" y="70" class="loop-title">AI model</text><text x="70" y="91" class="loop-detail">Turns observations into code.</text></g>
+              <g class="loop-node program"><rect x="52" y="159" width="262" height="72" rx="10"/><text x="70" y="187" class="loop-title">Agent program</text><text x="70" y="208" class="loop-detail">Observes and acts through the SDK.</text></g>
+              <g class="loop-node world"><rect x="52" y="276" width="262" height="72" rx="10"/><text x="70" y="304" class="loop-title">Live game world</text><text x="70" y="325" class="loop-detail">Physics, combat and progression.</text></g>
+              <g class="loop-node outcome"><rect x="52" y="398" width="262" height="64" rx="10"/><text x="70" y="426" class="loop-title">Verified outcome</text><text x="70" y="447" class="loop-detail">XP saved after logout.</text></g>
+              <path class="loop-route " d="M183 120V153" marker-end="url(#loop-arrow-mobile)"/>
+              <text x="208" y="139" text-anchor="middle" class="loop-label">Code</text>
+              <path class="loop-route " d="M183 237V270" marker-end="url(#loop-arrow-mobile)"/>
+              <text x="211" y="256" text-anchor="middle" class="loop-label">Inputs</text>
+              <path class="loop-route observation" d="M100 270V237" marker-end="url(#loop-arrow-mobile)"/>
+              <text x="127" y="256" text-anchor="middle" class="loop-label">State</text>
+              <path class="loop-route feedback" d="M46 312H24V78H46" marker-end="url(#loop-arrow-mobile)"/>
+              <text x="12" y="195" transform="rotate(-90 12 195)" text-anchor="middle" class="loop-label">Snapshot for next model call</text>
+              <path class="loop-route verification" d="M183 354V392" marker-end="url(#loop-arrow-mobile)"/>
+              <text x="224" y="376" text-anchor="middle" class="loop-label">Log out</text>
+              </svg>
+              <figcaption>The model sees a state snapshot and writes JavaScript. The program can repeatedly read fresh state with <code>sdk.observe()</code> and send inputs with <code>sdk.pressKeys()</code>, without another model call. After execution, the controller can request a new plan using fresh state and execution feedback. Model calls and execution share one time budget; saved XP is verified after logout.</figcaption>
+            </figure>
+          </section>
+          <section id="agent-sdk" class="agent-sdk" aria-labelledby="sdk-title">
+            <div class="lab-subheading"><h3 id="sdk-title"><img class="inventory-sprite" src="./illustrations/potions.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async">Agent SDK</h3><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/scripts/agent-sandbox.mjs">SDK source</a></div>
+            <p class="lab-intro">Model-authored JavaScript observes the world and sends ordinary game inputs.</p>
+            <div class="sdk-layout">
+              <div>
+                <dl class="sdk-methods">
+                  <div><dt><code>sdk.observe()</code></dt><dd>Read position, HP/MP, XP, level, map and nearby monsters as structured state.</dd></div>
+                  <div><dt><code>sdk.pressKeys(keys, ms)</code></dt><dd>Move, jump, attack and use the skills or potions allowed by the fixture.</dd></div>
+                  <div><dt><code>sdk.wait(ms)</code></dt><dd>Pause the program while the game keeps running.</dd></div>
+                </dl>
+                <p class="sdk-boundary">Only model-written code runs in the networkless Docker sandbox. The host controller validates SDK requests over stdin/stdout and makes the model API calls.</p>
+              </div>
+              <div class="sdk-example"><h4>Example program</h4><pre><code><span class="syntax-keyword">const</span> { character } = <span class="syntax-keyword">await</span> sdk.observe();
+<span class="syntax-keyword">if</span> (!character.alive) <span class="syntax-keyword">return</span>;
+
+<span class="syntax-keyword">if</span> (character.hp &lt; character.maxHp / 2) {
   <span class="syntax-keyword">await</span> sdk.pressKeys([<span class="syntax-string">'HP_POTION'</span>], 100);
 }
 <span class="syntax-keyword">await</span> sdk.pressKeys([<span class="syntax-string">'LEFT'</span>], 300);
-<span class="syntax-keyword">await</span> sdk.pressKeys([<span class="syntax-string">'PRIMARY_SKILL'</span>], 650);</code></pre></div>
-          </div>
-          <p class="lab-footnote">Each worker owns its world, database, baseline, credentials, and locks. Trials run serially per worker; cohorts stay on one host. Provisioning alone does not establish qualification. An external controller verifies worker deletion at lease expiry.</p>
+<span class="syntax-keyword">await</span> sdk.pressKeys([<span class="syntax-string">'PRIMARY_SKILL'</span>], 650);
+<span class="syntax-keyword">await</span> sdk.wait(250);</code></pre><p>Gameplay recordings are for human review.</p></div>
+            </div>
+          </section>
+          <section id="simulation-environment" class="lab-environment" aria-labelledby="environment-title">
+            <div class="lab-subheading"><h3 id="environment-title"><svg class="subsection-portal" viewBox="0 0 48 62" aria-hidden="true"><use href="#icon-portal"/></svg>Distributed simulation environment</h3><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/docs/FULL_CLIENT_RUNTIME.md">Runtime docs</a></div>
+            <p class="lab-intro">Frozen comparison groups are assigned to separate worker VMs. Each worker runs one trial at a time in its own game world.</p>
+          <figure class="lab-figure">
+            <div class="lab-context"><span>Worker pool · one VM expanded</span></div>
+            <p class="lab-scroll-hint">Swipe to follow the connections</p>
+            <div class="lab-scroll" tabindex="0" role="region" aria-label="Distributed simulation lab diagram; scroll horizontally on smaller screens">
+              <svg class="lab-diagram" viewBox="0 0 960 1130" role="img" aria-labelledby="lab-diagram-title lab-diagram-description">
+<title id="lab-diagram-title">Agent runtime and game environment on each simulation worker</title>
+<desc id="lab-diagram-description">The illustrated worker pool contains separate virtual machines; the labels A, B and C do not report a live worker count. Each VM owns one Cosmic game world, its MySQL database, Journey WASM browser and local asset service, WebSocket-to-TCP proxy, host controller, program sandbox and verifier. Operator-managed dispatch assigns frozen comparison plans to qualified workers. The fan-out shows those assignments, not an automated fleet scheduler. Inside each worker, the worker runner executes the assigned plan in order, restores the baseline, drives each trial and collects verified evidence. This node groups local plan execution and the durable trial runner; it does not assign work to other workers. It enforces group limits and stops on failure. Exclusive world, queue and runner locks permit one active trial per configured worker world, including verification and cleanup. Separate qualified worker VMs can execute independently. The model inference provider is remote and shared; the current implementation uses the OpenAI API. Within each VM, Agent runtime groups the trusted MapleBench controller and the isolated model-written program. Game environment groups the Journey WASM frontend, the WebSocket-to-TCP proxy, the Cosmic Java backend and MySQL persistence. These group boxes describe software responsibilities, not additional machines or security boundaries. The worker runner and outcome collection belong to the evaluation harness, outside the agent runtime group. The trusted controller has network access and holds API credentials outside the Docker sandbox. Only model-written JavaScript runs in that networkless sandbox; validated SDK requests use stdin/stdout pipes. Cosmic saves character state in the worker-local MySQL database. This database is reused across trials with the frozen baseline restored before each trial. The controller writes run metrics, model-call evidence, SDK receipts and captured video to private files keyed by attempt ID. The trial runner collects these with initial and final database exports and native save receipts into a separate evidence bundle for every attempt. Verification checks the saved outcome and artifact bindings. A separate serialized publication process rechecks the evidence and exports allowlisted results.json summaries, recording manifests and videos to the static site on Vercel. Raw prompts, generated programs and private logs remain private. Each model in a comparison group uses the same declared worker and restored character baseline; this does not make live combat deterministic.</desc>
+<defs>
+<pattern id="map-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#dbe7e4" stroke-width=".7"/></pattern>
+<marker id="map-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="m1 1 7 4-7 4" fill="none" stroke="context-stroke" stroke-width="1.6"/></marker>
+<clipPath id="worker-clip"><rect x="28" y="190" width="896" height="760" rx="18"/></clipPath>
+<symbol id="tiny-tree" viewBox="0 0 42 62"><path d="M19 36h6v24h-6" fill="#a67a4a"/><path d="m21 0 17 25H29l13 21H0l13-21H4Z" fill="#99bca1"/><path d="m21 0 0 46H0l13-21H4Z" fill="#bad1b2"/></symbol>
+</defs>
+<g class="worker-stack" aria-hidden="true">
+<rect class="worker-back far" x="52" y="142" width="896" height="760" rx="18"/>
+<rect class="worker-back" x="40" y="166" width="896" height="760" rx="18"/>
+<rect class="worker-front" x="28" y="190" width="896" height="760" rx="18"/>
+</g>
+<g clip-path="url(#worker-clip)" aria-hidden="true"><rect x="28" y="190" width="896" height="760" fill="url(#map-grid)"/><g transform="translate(0 190)"><path d="M28 738Q102 704 185 733T355 739T540 730T735 740T924 727V760H28Z" fill="#e1eddb"/><use href="#tiny-tree" x="846" y="703" width="31" height="46"/><use href="#tiny-tree" x="817" y="718" width="22" height="33"/>
+<g transform="translate(445 716)"><path d="M0 22Q-3 0 17 0T34 22Z" fill="#f2bb6e" stroke="#c09151"/><path d="M12 22v13q5 6 11 0V22" fill="#fff4d8" stroke="#c09151"/><circle cx="9" cy="13" r="4" fill="#fff6dc"/><circle cx="26" cy="11" r="4" fill="#fff6dc"/><path d="M16 27v2m4-2v2" stroke="#886a47" stroke-width="2"/></g></g></g>
+<text x="72" y="160" class="map-region">Worker C · separate VM</text>
+<text x="60" y="184" class="map-region">Worker B · separate VM</text>
+<text x="60" y="224" class="worker-title">Worker A · one VM</text>
+<text x="60" y="245" class="map-region">1 active trial per worker</text>
+<text x="874" y="224" text-anchor="end" class="map-region">Independent world, database &amp; run state</text>
+<g class="runtime-group agent-group"><rect x="44" y="380" width="332" height="330" rx="14"/><text x="76" y="406" class="group-title">Agent runtime</text></g>
+<g class="runtime-group game-group"><rect x="574" y="380" width="332" height="520" rx="14"/><text x="606" y="406" class="group-title">Game environment</text></g>
+<g class="map-node plan"><rect x="60" y="20" width="300" height="88" rx="10"/><text x="78" y="44" class="map-kicker">Operator-managed dispatch</text><text x="78" y="68" class="map-name">Experiment coordination</text><text x="78" y="90" class="map-detail">Frozen plans → assigned workers</text></g>
+<g class="map-node provider"><rect x="590" y="20" width="300" height="88" rx="10"/><text x="608" y="44" class="map-kicker">External service</text><text x="608" y="68" class="map-name">Model inference provider</text><text x="608" y="90" class="map-detail">OpenAI API</text></g>
+<path class="map-route dispatch" d="M330 114V269"/>
+<path class="map-route dispatch" d="M330 126H355V160"/>
+<path class="map-route dispatch" d="M355 126H380V136"/>
+<g class="map-node worker-runner"><rect x="60" y="275" width="300" height="88" rx="10"/><text x="78" y="299" class="map-kicker">Local plan execution</text><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/docs/FULL_CLIENT_RUNNER.md"><text x="78" y="323" class="map-name">Worker runner</text></a><text x="78" y="345" class="map-detail">Reset · run · verify · collect evidence</text></g>
+<path class="map-route " d="M210 369V420"/>
+<path class="map-route both inference" d="M740 114V150H440V450H366"/>
+<text x="458" y="312" class="route-label">Task + state / code</text>
+<g class="map-node controller is-highlighted"><rect x="60" y="426" width="300" height="108" rx="10"/><text x="78" y="450" class="map-kicker">Trusted host process · Python</text><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/scripts/full_client_bridge.py"><text x="78" y="474" class="map-name">MapleBench controller</text></a><text x="78" y="496" class="map-detail">SDK relay, budgets &amp; receipts</text><text x="78" y="514" class="map-detail">Network access · host-held credentials</text></g>
+<g class="map-node client is-highlighted"><rect x="590" y="426" width="300" height="108" rx="10"/><text x="608" y="450" class="map-kicker">Frontend · browser client</text><a href="https://github.com/nmnsnv/maplestory-wasm"><text x="608" y="474" class="map-name">Journey WASM</text></a><text x="608" y="496" class="map-detail">Client physics, controls &amp; rendering</text><text x="608" y="514" class="map-detail">Read-only assets · gameplay recording</text></g>
+<path class="map-route both" d="M366 484H584"/>
+<text x="475" y="472" class="route-label" text-anchor="middle">Game state / key inputs</text>
+<path class="map-route both" d="M210 540V598"/>
+<text x="228" y="562" class="route-label">Validated SDK calls</text>
+<text x="228" y="580" class="route-label">stdin / stdout</text>
+<g class="map-node sandbox"><rect x="60" y="604" width="300" height="88" rx="10"/><text x="78" y="628" class="map-kicker">Model-written JavaScript only</text><text x="78" y="652" class="map-name"><a href="https://github.com/nodejs/node">Node.js</a><tspan> + </tspan><a href="https://github.com/moby/moby">Docker</a></text><text x="78" y="674" class="map-detail">No network · no credentials</text></g>
+<path class="map-route both" d="M612 540V598"/>
+<text x="630" y="573" class="route-label">WebSocket ↔ TCP proxy</text>
+<g class="map-node server"><rect x="590" y="604" width="300" height="88" rx="10"/><text x="608" y="628" class="map-kicker">Backend · Java game server</text><a href="https://github.com/P0nk/Cosmic"><text x="608" y="652" class="map-name">Cosmic · MapleStory v83</text></a><text x="608" y="674" class="map-detail">Combat, monsters &amp; character state</text></g>
+<path class="map-route " d="M740 698V782"/>
+<text x="758" y="745" class="route-label">Save on logout</text>
+<g class="map-node database"><rect x="590" y="788" width="300" height="88" rx="10"/><text x="608" y="812" class="map-kicker">Persistence · local to worker</text><a href="https://github.com/mysql/mysql-server"><text x="608" y="836" class="map-name">MySQL</text></a><text x="608" y="858" class="map-detail">Baseline restored before each trial</text></g>
+<path class="map-route verification" d="M584 833H366"/>
+<text x="475" y="821" class="route-label" text-anchor="middle">Initial / final snapshots</text>
+<path class="map-route verification" d="M366 518H424V801H366"/>
+<text x="438" y="745" class="route-label">Metrics / video</text>
+<g class="map-node verifier"><rect x="60" y="788" width="300" height="88" rx="10"/><text x="78" y="812" class="map-kicker">Collected &amp; verified by the runner</text><text x="78" y="836" class="map-name">Per-attempt evidence files</text><text x="78" y="858" class="map-detail">Metrics, receipts &amp; recording</text></g>
+<path class="map-route verification" d="M210 882V1004"/>
+<text x="228" y="985" class="route-label">Export checked artifacts</text>
+<g class="map-node publisher"><rect x="60" y="1010" width="300" height="88" rx="10"/><text x="78" y="1034" class="map-kicker">Separate publication process</text><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/docs/FULL_CLIENT_PUBLICATION.md"><text x="78" y="1058" class="map-name">Verify &amp; publish</text></a><text x="78" y="1080" class="map-detail">Allowlisted export · SHA-256 manifest</text></g>
+<path class="map-route verification" d="M366 1054H584"/>
+<text x="475" y="1042" class="route-label" text-anchor="middle">Public evidence package</text>
+<g class="map-node public-results"><rect x="590" y="1010" width="300" height="88" rx="10"/><text x="608" y="1034" class="map-kicker">Static site · Vercel</text><text x="608" y="1058" class="map-name">Results &amp; recordings</text><text x="608" y="1080" class="map-detail">results.json + manifests + WebM</text></g>
+</svg>
+            </div>
+            <figcaption>Built on <a href="https://github.com/nmnsnv/maplestory-wasm">nmnsnv’s Journey WASM</a>, <a href="https://github.com/P0nk/Cosmic">Cosmic</a> and the <a href="https://github.com/NDBellisario/cosmic">Cosmic bot fork</a>, connected by MapleBench’s controller and evaluation harness. Earlier observer work: <a href="https://github.com/Sheilem/maplewright">Maplewright</a>. Inspiration: <a href="https://maxbittker.github.io/runebench/">RuneBench</a>.</figcaption>
+          </figure>
+          <dl class="lab-properties">
+            <div><dt>Isolation over shared worlds</dt><dd>A trial cannot change another worker’s monsters or saved state. Separate worlds cost more compute, but allow independent resets and parallel runs.</dd></div>
+            <div><dt>Controlled comparisons</dt><dd>Models in a group use the same worker and restored character baseline. Inference counts toward the time budget; live combat can still vary.</dd></div>
+            <div><dt>Traceable results</dt><dd>The worker runner records each attempt and stops on failure. XP is checked after logout, with input receipts and recordings to inspect what happened.</dd></div>
+          </dl>
+          <details class="supporting-detail lab-evidence">
+            <summary>What each run records <span>Storage, metrics and publication</span></summary>
+            <dl>
+              <div><dt>Game state</dt><dd>One MySQL database per worker, restored before each trial. Initial and final character snapshots plus the server’s save receipt establish the saved XP.</dd></div>
+              <div><dt>Run evidence</dt><dd>Private files keyed by attempt ID retain the phase journal, model requests and responses, generated programs, SDK receipts, capture measurements and WebM recording. Resetting the game database leaves these files intact.</dd></div>
+              <div><dt>Performance metrics</dt><dd>Inference and execution time, token usage, model-call counts, SDK requests and acknowledged inputs are recorded per run, with per-cycle detail for adaptive runs. Capture evidence also records frame counts and gaps.</dd></div>
+              <div><dt>Public results</dt><dd>The publisher rechecks the evidence and exports selected metrics to <a href="./results.json">results.json</a>, alongside verified recordings and file hashes. Raw prompts, programs and private logs stay outside the public site. <a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/docs/FULL_CLIENT_PUBLICATION.md">Publication docs</a></dd></div>
+            </dl>
+          </details>
+          <p class="lab-footnote">Provisioned with <a href="https://github.com/opentofu/opentofu">OpenTofu</a> and <a href="https://github.com/ansible/ansible">Ansible</a> on DigitalOcean / Ubuntu. Worker assignment is operator-managed; trial execution is automated locally. A worker’s world stays locked through verification and cleanup.</p>
+          </section>
+        </div>
+      </details>
+    </section>
+    <section id="methodology" class="section section-card methodology" aria-labelledby="methodology-title">
+      <div class="card-heading"><img class="inventory-sprite section-emblem" src="./illustrations/skill-book.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async"><div><h2 id="methodology-title">Methodology</h2></div></div>
+      <div class="method-intro">
+        <p class="method-kicker">Published protocol · Five-minute adaptive pilots</p>
+        <p class="method-question">How well can an agent turn game observations into a productive training strategy?</p>
+        <p>We evaluate the complete agent configuration: model, prompt, SDK and execution harness, under matched, versioned game setups.</p>
+      </div>
+      <dl class="method-facts" aria-label="Pilot protocol at a glance">
+        <div><dt>Time budget</dt><dd>300 seconds<small>Includes inference and execution</small></dd></div>
+        <div><dt>Measured outcome</dt><dd>Saved net XP<small>Verified after normal logout</small></dd></div>
+        <div><dt>Repetitions</dt><dd>One trial per cell<small>Pilot evidence · no overall ranking</small></dd></div>
+      </dl>
+      <div class="method-columns">
+        <article class="method-block" aria-labelledby="method-design-title">
+          <h3 id="method-design-title">Experimental design</h3>
+          <dl class="method-controls">
+            <div><dt>Starting state</dt><dd>Restore the worker’s database before each trial. Class, level, equipment, inventory, map and key bindings are fixed within a comparison.</dd></div>
+            <div><dt>Agent interface</dt><dd>Models receive the same class-specific prompt and SDK within a comparison. They read structured state and write JavaScript that issues normal game inputs.</dd></div>
+            <div><dt>Time and isolation</dt><dd>Planning, inference, execution and waits share one deadline. A worker’s world is locked for the trial; other workers can run independently.</dd></div>
+          </dl>
+        </article>
+        <article class="method-block" aria-labelledby="method-score-title">
+          <h3 id="method-score-title">Outcome and verification</h3>
+          <p class="method-equation" aria-label="Net XP equals saved XP after logout minus starting XP">ΔXP = XP<sub>saved</sub> − XP<sub>start</sub></p>
+          <p>The score preserves zero gains and losses, including death penalties. This pilot scorer requires the same starting and final level; it rejects unsupported level transitions.</p>
+          <h4>Evidence behind the number</h4>
+          <p>The verifier checks the restored baseline, normal logout, server save receipt and final database snapshot. Cycle receipts bind the returned model, generated programs and acknowledged inputs. Recording publication is checked separately.</p>
+          <p class="method-source-links"><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/scripts/full_client_score.py">XP verifier ↗</a><a href="./results.json">Published data ↗</a></p>
+        </article>
+      </div>
+      <article class="method-interpretation" aria-labelledby="method-limits-title">
+        <h3 id="method-limits-title">How to interpret the results</h3>
+        <ul>
+          <li><strong>Compare within a class.</strong> Different fixtures have different XP opportunities. Raw XP is not averaged into an overall score.</li>
+          <li><strong>One trial is a pilot.</strong> With n = 1 per model–fixture pair, run-to-run variance and confidence intervals are not estimated. Frozen inputs do not fix live spawns or combat randomness.</li>
+          <li><strong>The harness is part of the result.</strong> Inference latency consumes the budget, and available skills depend on this client/server port. Input receipts establish requests, not successful casts or damage.</li>
+        </ul>
+      </article>
+      <details class="supporting-detail method-disclosure">
+        <summary>Budget and failure policy</summary>
+        <div class="method-detail">
+          <p>The published full-horizon policy admits a new model call only with at least 75 seconds left: up to 50 for inference, 20 for execution and 5 for settlement. After that window closes or an aggregate limit is reached, the controller only observes until the deadline. Death, cancellation or failure can end a trial early.</p>
+          <p>Zero-XP runs and generated no-ops remain visible. Missing or unverified XP stays unknown, rather than becoming zero. Failed and recovered attempts remain in the <a href="#attempt-history">history</a>; persistence scores and publication checks are reported separately.</p>
+          <p><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/scripts/full_client_adaptive.py">Adaptive controller and frozen prompt ↗</a></p>
+        </div>
+      </details>
+      <details class="supporting-detail method-disclosure">
+        <summary>Next protocol <span>Planned · not used for these scores</span></summary>
+        <div class="method-detail">
+          <p>The research direction is a 30-minute budget with peak normalized XP/min measured in complete, authoritative 15-second windows. Saved start/end XP cannot reconstruct those peaks.</p>
+          <p>A scored skill suite also needs fixed objectives and verified success criteria. Repetitions, run order, failure handling and aggregation must be declared before a comparative evaluation. The current skill experiments remain exploratory and unscored. <a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/docs/RESEARCH_FRAMING.md">Research framing ↗</a></p>
         </div>
       </details>
     </section>
     <section id="results" class="section section-card">
       <div class="section-title"><div class="section-heading-copy"><img class="inventory-sprite section-emblem" src="./illustrations/meso-pouch.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async"><div><h2>Results</h2></div></div><span class="status-label">Development results</span></div>
-      <!-- cohort-limitations -->
-      <div class="comparison-toolbar"><label for="comparison-select">Compare runs</label><select id="comparison-select"></select><a href="./results.json">Download data ↗</a></div>
-      <div class="results-panel"><div class="chart-heading"><h3>Persisted XP</h3><span>Verified after logout</span></div><div id="xp-chart" class="xp-chart" aria-label="Persisted experience by model"></div><p id="group-context" class="muted small"></p></div>
+      <p class="results-intro">Select a square to inspect the task, score and recording.</p>
+      <div class="research-intro" aria-labelledby="research-title">
+        <div class="matrix-views" role="group" aria-label="Matrix view"><button type="button" id="matrix-class-view" aria-pressed="true">Class pilots</button><button type="button" id="matrix-skill-view" aria-pressed="false">Skill suite <span>Planned</span></button></div>
+        <div class="section-heading matrix-heading"><h3 id="research-title" class="sr-only">Models by class and task</h3><label id="research-protocol-label">Protocol<select id="research-protocol" aria-label="Evidence protocol"></select></label><a class="data-link" href="./results.json">Download data</a></div>
+        <p id="matrix-context" class="matrix-context"></p>
+        <div id="matrix-layout" class="matrix-layout">
+          <div class="matrix-grid-area"><div id="research-matrix" class="table-wrap" tabindex="0" role="region" aria-label="Model evaluation matrix"></div>
+            <div id="matrix-legend" class="matrix-legend"><span><i class="legend-square zero" aria-hidden="true"></i>Zero</span><span><i class="legend-square gain" aria-hidden="true"></i>Gain</span><span><i class="legend-square loss" aria-hidden="true"></i>Loss</span><span>Color compares within a column</span></div>
+          </div>
+          <aside id="matrix-inspector" class="matrix-inspector" aria-label="Selected evaluation" aria-live="polite"></aside>
+        </div>
+        <p id="research-empty" class="empty">No class results published yet.</p>
+        <p id="matrix-limits" class="results-limits">Compare within a column. These pilots are unranked; live scenes may differ.</p>
+        <!-- cohort-limitations -->
+        <details class="audit-disclosure"><summary>Compare runs in a class</summary>
+      <div class="comparison-toolbar"><label for="comparison-select">Compare runs</label><select id="comparison-select"></select><a href="./results.json">Download data</a></div>
+      <div class="results-panel"><div class="chart-heading"><h3>Saved XP</h3><span>Verified after logout</span></div><div id="xp-chart" class="xp-chart" aria-label="Persisted experience by model"></div><p id="group-context" class="muted small"></p></div>
       <div class="table-scroll"><table><caption class="sr-only">Selected group results</caption><thead><tr><th scope="col">Model</th><th scope="col">Saved XP</th><th scope="col">Inputs</th><th scope="col">Time budget</th><th scope="col">At logout</th><th scope="col">Evidence</th><th scope="col"></th></tr></thead><tbody id="comparison-rows"></tbody></table></div>
-      <p class="footnote">Each attempt is one observation. Matching inputs do not prove identical live monster scenes. Scores from different groups should not be treated as a model ranking.</p>
-        <div class="research-intro" aria-labelledby="research-title">
-      <div class="section-heading"><div><h2 id="research-title">Model × class evidence</h2>
-        <p>Compare models within the same class, task, frozen setup and protocol. Five-minute adaptive pilots include inference and gameplay in their wall-clock budget.</p></div><span class="pill">Research preview · unranked</span></div>
-      <p class="note">Legacy clips report saved net XP from short, single-response programs. The intended 30-minute benchmark measures the best normalized XP/min in complete 15-second authoritative windows. Initial/final XP cannot establish that peak score.</p>
-      <div class="section-heading matrix-heading"><h3>Model × declared class / task</h3><label>Evidence protocol<select id="research-protocol" aria-label="Evidence protocol"></select></label></div>
-      <nav id="catalog-cohorts" aria-label="Class cohort progress" hidden></nav>
-      <p id="research-protocol-detail" class="note"></p>
-      <div id="research-matrix" class="table-wrap"></div>
-      <p id="research-empty" class="empty">A protocol-declared cohort is required for the research matrix. Existing run evidence remains below.</p>
-      <p class="note">Each cell retains planned and attempted counts, valid scores, failures, unknown evidence and unfinished runs. One sample is a pilot observation; no uncertainty estimate or overall model ranking is implied. Each run lists its available skill controls. A limited skill fixture does not establish performance with the class’s full toolkit.</p>
-      <details class="audit-disclosure"><summary>Every frozen input group</summary>    <section aria-labelledby="comparison-title">
-      <div class="section-heading"><div><h2 id="comparison-title">Results by frozen inputs</h2><p>Every group is shown. Matching inputs do not prove identical live monster scenes.</p></div><span class="pill">Unranked</span></div>
+        </details>
+        <details class="audit-disclosure"><summary>Scoring and comparison limits</summary>
+          <p id="research-protocol-detail" class="note"></p>
+          <p class="note">Groups share a class, task, starting setup and protocol. Model wait time counts toward the adaptive run budget. Each cell reports its sample count; a single run cannot establish uncertainty or a model ranking.</p>
+          <p class="note">These pilots measure saved net XP. The planned 30-minute benchmark measures peak normalized XP/min from complete 15-second windows. Start and end XP cannot establish that rate.</p>
+          <p class="note">Available skills differ by fixture. These runs do not establish performance with the class’s full toolkit.</p>
+        </details>
+      <details class="audit-disclosure"><summary>All comparison groups</summary>        <nav id="catalog-cohorts" aria-label="Class cohort progress" hidden></nav>
+    <section aria-labelledby="comparison-title">
+      <div class="section-heading"><div><h2 id="comparison-title">Comparison groups</h2><p>Full inputs and evidence for each group.</p></div><span class="pill">Unranked</span></div>
       <p id="comparison-empty" class="empty">Verified persisted results appear here after normal logout.</p>
       <div id="comparison-groups"></div>
       <p class="note">Persisted XP includes penalties and is measured after normal logout. Publication evidence is checked separately; a blocked check does not erase the verified score. All displayed runs remain unranked.</p>
     </section>
 </details>
     </div>
+    <!-- results-development-previews -->
 </section>
     <section id="trajectories" class="section section-card">
       <div class="section-title"><div class="section-heading-copy"><img class="inventory-sprite section-emblem" src="./illustrations/ribbon-pig.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async"><div><h2>Recordings</h2></div></div><span id="recording-count" class="muted small"></span></div>
@@ -134,11 +304,11 @@
       <div class="run-toolbar"><label for="run-select">Recorded attempt</label><select id="run-select"></select><span id="run-state"></span></div>
       <div class="trajectory-layout">
         <div class="player-column"><video id="run-video" controls playsinline preload="metadata" aria-label="Selected agent gameplay"></video><div class="player-toolbar"><button type="button" id="cue-button">Program start</button><button type="button" id="full-button">Full recording</button><span id="player-status" role="status"></span></div><p id="cue-note" class="footnote"></p></div>
-        <aside class="run-summary"><div class="model-identity"><span id="run-dot" class="model-dot"></span><h3 id="run-model"></h3></div><p id="run-outcome"></p><dl id="run-metrics"></dl><div class="evidence-note"><h4>Evidence</h4><p id="run-evidence"></p></div><details><summary>Attempt details</summary><p id="run-id" class="mono"></p><p id="run-attribution" class="small"></p></details></aside>
+        <aside class="run-summary"><div class="model-identity"><span id="run-dot" class="model-dot"></span><h3 id="run-model"></h3></div><p id="run-outcome"></p><dl id="run-metrics"></dl><details><summary>Verification and attempt details</summary><p id="run-evidence"></p><p id="run-id" class="mono"></p><p id="run-attribution" class="small"></p></details></aside>
       </div>
       <div id="selected-evidence" class="selected-evidence"></div>
         <div class="history-section" id="attempt-history"><details id="history-details"><summary><span class="history-companion"><img class="inventory-sprite " src="./illustrations/little-stump.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async">All attempts <span id="count" class="muted"></span></span><span class="summary-hint">Including failures and incomplete runs</span></summary><div class="history-filters"><label for="history-filter">Show</label><select id="history-filter"><option value="all">All attempts</option><option value="completed">Completed</option><option value="other">Failed / incomplete</option></select></div><div class="table-scroll"><table><caption class="sr-only">Complete attempt history</caption><thead><tr><th scope="col">Model / attempt</th><th scope="col">Outcome</th><th scope="col">Saved XP</th><th scope="col">Diagnostic XP</th><th scope="col">Input evidence</th><th scope="col">Publication evidence</th><th scope="col"></th></tr></thead><tbody id="history"></tbody></table></div><p id="history-empty" class="empty" hidden>No attempts have been exported yet.</p></details></div>
-    <details class="audit-disclosure runner-receipt"><summary>Latest runner receipt and trial phases</summary>    <section class="live" aria-labelledby="live-title">
+    <details class="audit-disclosure runner-receipt"><summary>Runner status</summary>    <section class="live" aria-labelledby="live-title">
       <div class="live-heading"><span id="live-badge" class="pill">No active attempt</span><span id="live-id"></span></div>
       <h3 id="live-title">The next run starts here.</h3>
       <p id="live-description">This page shows actual full-client attempts as their evidence arrives.</p>
@@ -154,16 +324,6 @@
     </section>
 </details>
 </section>
-    <!-- development-previews -->
-    <section id="methodology" class="section section-card methodology" aria-labelledby="methodology-title">
-      <div class="card-heading"><img class="inventory-sprite section-emblem" src="./illustrations/skill-book.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async"><div><h2 id="methodology-title">Methodology</h2></div></div>
-      <div class="method-summary">
-        <article><h3>Score</h3><p>Saved XP after logout minus starting XP, including penalties. Live XP is diagnostic. Missing scores stay missing.</p></article>
-        <article><h3>Comparisons</h3><p>Groups share a baseline, scenario, budgets, and runtime settings. Live scenes can differ. Small samples do not establish statistical significance.</p></article>
-        <article><h3>Evidence</h3><p>Input and publication checks are separate from scores. Failed, recovered, and zero-input attempts remain in the <a href="#attempt-history">history</a>.</p></article>
-      </div>
-    <details class="supporting-detail"><summary>Research framing and score limits</summary><div class="method-detail"><h3 class="game-accent-heading">Scoring progress</h3><p>The score is the change in persisted XP after ordinary logout. It includes penalties. Live XP is diagnostic and is kept separate from the saved result. A missing verified score is shown as missing, never silently turned into zero.</p><h3>Strategy discovery is the research goal</h3><p>Given the same starting conditions, tools, and time budget, how effectively does an agent discover a training strategy? The intended 30-minute benchmark measures the best normalized XP/min in complete 15-second authoritative windows. These five-minute pilots report saved net XP; their endpoints cannot reconstruct a peak rate. Native scoring and expanded skill toolkits are implemented in source and still need runtime qualification. <a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/docs/RESEARCH_FRAMING.md">Read the research framing.</a></p><h3>Reading these results</h3><p>This is a development benchmark with a small number of attempts. Frozen-input groups share a baseline, scenario, budgets, and runtime settings. They do not establish identical live scenes or statistical significance. Publication evidence is checked separately from the persisted score.</p><h3>Learning from the whole run</h3><p>An agent may gain XP, execute inputs without gaining XP, or exit without sending any inputs. The recordings make those differences inspectable. Failed and recovered attempts stay in the history even when no score can be verified.</p></div></details></section>
-    <p id="connection" class="reading small" role="status"></p><p id="scope" class="reading footnote"></p>
     <p id="load-status" role="status" class="load-status"></p>
   </main>
   <dialog id="replay" aria-labelledby="replay-title" aria-describedby="replay-verification">
@@ -177,6 +337,9 @@
     <p id="replay-playback-status" role="status"></p>
   </dialog>
 
-  <footer class="site-footer"><div class="reading"><a class="return-portal" href="#top" aria-label="Back to top"><img class="inventory-sprite" src="./illustrations/return-scroll.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async"><span>Back to town</span></a><strong>MapleBench</strong><p class="project-credits">Built with <a href="https://github.com/nmnsnv/maplestory-wasm">nmnsnv’s Journey WASM</a>, <a href="https://github.com/P0nk/Cosmic">Cosmic</a>, and the <a href="https://github.com/NDBellisario/cosmic">Cosmic bot fork</a>.<br>Earlier observer work: <a href="https://github.com/Sheilem/maplewright">Maplewright</a>. Inspiration: <a href="https://maxbittker.github.io/runebench/">RuneBench</a>.</p><div class="footer-links"><a href="https://github.com/dmarzzz/maplebench">Source code</a><a href="./results.json">Result data</a><a id="all-results-link" href="/">All results</a><span id="snapshot-date"></span></div><p class="footnote">MapleBench is independent, not affiliated with, endorsed by, or sponsored by Nexon or MapleStory. MapleStory names, imagery, and assets belong to their respective owners.</p></div></footer>
+  <footer class="site-footer"><div class="reading">
+    <div class="footer-row"><time id="site-updated" datetime="2026-09-14">Updated Sep 14, 2026</time><nav class="footer-links" aria-label="Project links"><a href="https://github.com/dmarzzz/maplebench">GitHub ↗</a><a href="https://x.com/DistributedMarz">Twitter ↗</a></nav></div>
+    <p class="footnote">Independent project; not affiliated with or endorsed by Nexon or MapleStory. All trademarks belong to their respective owners.</p>
+  </div></footer>
 </body>
 </html>
