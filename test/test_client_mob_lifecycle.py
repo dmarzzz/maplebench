@@ -110,7 +110,9 @@ int main(int argc,char**argv){try{need(argc==2,"case required");std::string mode
    need(mob(m)->active==(animation!=0),"active kill behavior changed");
    need(mob(m)->dying==(animation==1||animation==2) && mob(m)->fading==(animation==2),"death animation flags changed");}
  }
- else throw std::runtime_error("unknown case");std::cout<<mode<<" passed\n";return 0;
+ else { throw std::runtime_error("unknown case"); }
+ std::cout<<mode<<" passed\n";
+ return 0;
  }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
 '''
 
