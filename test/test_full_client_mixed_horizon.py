@@ -31,7 +31,8 @@ class MixedHorizonPublicationTests(unittest.TestCase):
         (site/'recording-manifest.json').write_bytes(publication.encoded({'schema_version':1,
             'entries':[{'path':video.name,**fingerprint}]}))
         manifest=json.loads((package/'package-manifest.json').read_bytes())
-        manifest['content']['files']=publication.file_inventory(site,maximum_video=publication.MAX_LONG_VIDEO)
+        manifest['content']['files']=publication.file_inventory(site,maximum_video=publication.MAX_LONG_VIDEO,
+            presentation_assets=manifest['content'].get('presentation_assets'))
         manifest['content_sha256']=publication.digest(publication.encoded(manifest['content']))
         (package/'package-manifest.json').write_bytes(publication.encoded(manifest))
         self.long['content_sha256']=manifest['content_sha256'];self.long_manifest=manifest
