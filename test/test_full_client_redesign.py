@@ -129,6 +129,26 @@ for(const change of [r=>r.recording=null,r=>r.recording.url='https://outside.tes
 assert.deepEqual(montageRows(null,[]),[]);
 """, DOM)
 
+    def test_scripted_checks_use_separate_class_cards_without_model_or_score_ranking(self):
+        self.run_js(['renderEnvironmentChecks'], r"""
+const before=[sample('original')];snapshot={attempts:before};renderEnvironmentChecks();
+assert.equal($('environment-checks').hidden,true);assert.equal($('model-showcase').hidden,false);
+snapshot.environment_checks=['hero','bowmaster','ice_lightning_arch_mage','night_lord'].map((class_id,i)=>({
+ id:String(i+1).repeat(32),kind:'scripted_environment_check',protocol_id:'scripted-native-productivity-v2',
+ class_id,class_name:class_id,model:null,model_api_requests:0,ranked:false,score:null,
+ actions:50,program_elapsed_ms:176000,saved_xp_delta:i===0?-500:i===1?0:4500,alive_at_logout:true,
+ recording:{url:`./checks/${String(i+1).repeat(32)}/recordings/${String(i+1).repeat(32)}.webm`,
+ duration_ms:176500,playback:{basis:'first_acknowledged_input',start_ms:1000}},clock_evidence:{capture_fps:40}}));
+renderEnvironmentChecks();assert.equal($('environment-check-grid').children.length,4);
+assert.equal($('model-showcase').hidden,true);assert.equal($('environment-checks').hidden,false);
+assert.equal(snapshot.attempts,before);assert.match($('environment-check-grid').textContent,/no model/);
+assert.match($('environment-check-grid').textContent,/180s ceiling/);assert.match($('environment-check-grid').textContent,/-500/);
+const video=$('environment-check-grid').children[0].children[2];video.duration=176.5;video.emit('loadedmetadata');
+assert.equal(video.currentTime,1);assert.equal(video.controls,true);
+snapshot.environment_checks[0].model='gpt-6-astra';renderEnvironmentChecks();
+assert.equal($('environment-check-grid').children.length,0);assert.equal($('model-showcase').hidden,false);
+""", DOM + PRESENTATION_HELPERS)
+
     def test_group_label_counts_distinct_models_and_uses_frozen_horizon(self):
         self.run_js(['groupLabel'], r"""
 const row=sample('a');snapshot={attempts:[row]};
@@ -191,7 +211,7 @@ const watch=()=>node('button','Watch'),adaptiveHold=()=>null;
 """)
 
     def test_refresh_updates_evidence_without_restarting_the_same_video(self):
-        self.run_js(['safeRecording','cue','groupLabel','runOutcome','publication','selectRun','renderRedesign'], r"""
+        self.run_js(['safeRecording','cue','groupLabel','runOutcome','publication','selectRun','renderEnvironmentChecks','renderRedesign'], r"""
 let row=sample('a');snapshot={attempts:[row],comparisons:[],generated_at_ms:1000};
 renderRedesign();const changes=runPlayer.sourceChanges,pauses=runPlayer.pauseCount;
 runPlayer.currentTime=25;
@@ -206,33 +226,16 @@ const renderModels=()=>{},renderRunOptions=()=>{},renderMontage=()=>{},renderCom
 const adaptiveHold=()=>null,adaptiveDetails=()=>null,nativeDetails=()=>null;
 """)
 
-    def test_keyboard_navigation_updates_focus_selection_and_panels(self):
-        bindings = SOURCE[SOURCE.index('  for (const tab of architectureTabs) {',
-                                      SOURCE.index('  function showArchitecture(') +
-                                      len(function('showArchitecture'))):
-                          SOURCE.index('  const worldSteps =')]
-        self.run_js(['showArchitecture'], bindings + r"""
-const [agent,fleet]=architectureTabs;
-showArchitecture('fleet');assert.equal(fleet.getAttribute('aria-selected'),'true');
-let prevented=0;
-const press=(tab,key)=>tab.emit('keydown',{key,preventDefault(){prevented++}});
-press(fleet,'Home');assert.equal(agent.getAttribute('aria-selected'),'true');
-assert.equal(agent.tabIndex,0);assert.equal(fleet.tabIndex,-1);assert.ok(agent.focused);
-assert.equal($('agent-panel').hidden,false);assert.equal($('fleet-panel').hidden,true);
-press(agent,'ArrowLeft');assert.equal(fleet.getAttribute('aria-selected'),'true');
-press(fleet,'ArrowRight');assert.equal(agent.getAttribute('aria-selected'),'true');
-press(agent,'End');assert.equal(fleet.getAttribute('aria-selected'),'true');
-press(fleet,'Escape');assert.equal(prevented,4);
-""", DOM + r"""
-const architectureTabs=['agent','fleet'].map(key=>{
- const tab=new Node('button');tab.dataset.architecture=key;
- tab.setAttribute('aria-controls',key+'-panel');return tab;
-});
-""")
+    def test_lab_deep_link_opens_native_disclosure_without_forcing_it_open_elsewhere(self):
+        self.run_js(['revealLab'], r"""
+const labDetails={open:false};location.hash='#results';revealLab();assert.equal(labDetails.open,false);
+location.hash='#approach';revealLab();assert.equal(labDetails.open,true);
+labDetails.open=false;location.hash='#trajectories';revealLab();assert.equal(labDetails.open,false);
+""", DOM)
 
     def test_reduced_motion_and_hidden_page_pause_previews(self):
         bindings = SOURCE[SOURCE.index("  $('montage-toggle').addEventListener"):
-                          SOURCE.index('  const architectureTabs =')]
+                          SOURCE.index('  const sectionLinks =')]
         self.run_js(['setPreviews'], bindings + r"""
 setPreviews(true);assert.equal(previewsPlaying,true);
 const beforeMotion=preview.pauseCount;
@@ -291,18 +294,27 @@ class RedesignAccessibilityTests(unittest.TestCase):
             self.assertTrue(any(tag == 'label' and attrs.get('for') == control
                                 for tag, attrs in self.elements), control)
 
-    def test_architecture_tabs_expose_selection_and_panel_relationships(self):
-        tabs = [(tag, attrs) for tag, attrs in self.elements if attrs.get('role') == 'tab']
-        self.assertGreaterEqual(len(tabs), 2)
-        self.assertEqual(sum(attrs.get('aria-selected') == 'true' for _, attrs in tabs), 1)
-        for tag, attrs in tabs:
-            self.assertEqual(tag, 'button')
-            selected = attrs.get('aria-selected') == 'true'
-            self.assertEqual(attrs.get('tabindex'), '0' if selected else '-1')
-            panel = self.ids[attrs['aria-controls']][1]
-            self.assertEqual(panel.get('role'), 'tabpanel')
-            self.assertEqual(panel.get('aria-labelledby'), attrs['id'])
-            self.assertEqual('hidden' in panel, not selected)
+    def test_lab_is_a_closed_native_disclosure_with_a_real_navigation_anchor(self):
+        tag, attrs = self.ids['lab-details']
+        self.assertEqual(tag, 'details'); self.assertNotIn('open', attrs)
+        self.assertTrue(any(tag == 'summary' and attrs.get('class') == 'lab-toggle'
+                            for tag, attrs in self.elements))
+        self.assertTrue(any(tag == 'a' and attrs.get('href') == '#approach'
+                            for tag, attrs in self.elements))
+        self.assertFalse(any(attrs.get('role') == 'tab' for _, attrs in self.elements))
+
+    def test_every_data_control_survives_the_presentation_change(self):
+        controls = set(re.findall(r"\$\(['\"]([a-z][a-z0-9-]*)['\"]\)", SOURCE))
+        self.assertEqual(controls - set(self.ids), set())
+        # The production renderer also writes through class selectors. A fake
+        # DOM that creates missing nodes would hide a half-rendered real page.
+        for cls in re.findall(r"document\.querySelector\(['\"]\.([a-z][a-z0-9-]*)['\"]\)", SOURCE):
+            self.assertTrue(any(cls in attrs.get('class', '').split()
+                                for _, attrs in self.elements), cls)
+        self.assertIn('<!-- cohort-limitations -->', HTML)
+        self.assertEqual(HTML.count('<main>'), 1)
+        for cls in ('hero section-card', 'section section-card simulation-lab'):
+            self.assertTrue(any(attrs.get('class') == cls for _, attrs in self.elements))
 
 
 if __name__ == '__main__':

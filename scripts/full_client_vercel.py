@@ -36,7 +36,9 @@ META_PAYLOAD='maplebenchPayloadSha256'
 META_NONCE='maplebenchPublicationId'
 MAX_PAYLOAD=512*1024**2
 MAX_OUTPUT=2*1024**2
-PUBLIC_NAME=re.compile(r'(?:(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:index\.html|dashboard\.js|style\.css|results\.json|recording-manifest\.json|vercel\.json|README\.md|recordings/[a-f0-9]{32}\.webm)|previews/([a-f0-9]{32})/recordings/\1\.webm)\Z')
+from full_client_presentation_assets import PUBLIC_ART, validate_payload_art
+
+PUBLIC_NAME=re.compile(r'(?:(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:index\.html|dashboard\.js|style\.css|results\.json|recording-manifest\.json|vercel\.json|README\.md|'+PUBLIC_ART+r'|recordings/[a-f0-9]{32}\.webm)|previews/([a-f0-9]{32})/recordings/\1\.webm|checks/([a-f0-9]{32})/recordings/\2\.webm)\Z')
 DEPLOYMENT=re.compile(r'dpl_[A-Za-z0-9]{8,80}\Z')
 
 
@@ -60,11 +62,18 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
     else:files=raw
     require(1<=len(files)<=100,'payload_file_count_limit')
     content=package_manifest['content']
+    require(not any(isinstance(name, str) and name.startswith('checks/') for name in files)
+        or 'environment_checks_payload_sha256' in content, 'environment_checks_payload_binding_required')
     if 'skill_preview_payload_sha256' in content:
         require(isinstance(content['skill_preview_payload_sha256'],str)
             and SHA.fullmatch(content['skill_preview_payload_sha256'])
             and content['skill_preview_payload_sha256']==digest(encoded(files)),
             'skill_preview_payload_binding_mismatch')
+    if 'environment_checks_payload_sha256' in content:
+        require(isinstance(content['environment_checks_payload_sha256'], str)
+            and SHA.fullmatch(content['environment_checks_payload_sha256'])
+            and content['environment_checks_payload_sha256'] == digest(encoded(files)),
+            'environment_checks_payload_binding_mismatch')
     video_limits=cohort_video_limits(supplied,files,package_manifest)
     total=0
     for name,expected in files.items():
@@ -76,6 +85,7 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
         total+=expected['bytes'];require(total<=MAX_PAYLOAD,'public_payload_size_limit')
         require(expected['bytes']<=maximum,'public_payload_file_limit')
         require(stable_fingerprint(payload/name,maximum)==expected,'public_payload_changed')
+    validate_payload_art(files)
     actual=set()
     for count,path in enumerate(payload.rglob('*'),1):
         require(count<=150 and not path.is_symlink(),'unexpected_public_payload_file')

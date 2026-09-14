@@ -1,7 +1,14 @@
-# MapleBench decorative illustration
+# Original website illustrations
 
-The PNG embedded in `index.html` is an original AI-generated fan illustration of an orange mushroom and green slime, created with the built-in image generation tool on September 12, 2026. It is decorative website artwork, not a downloaded or extracted MapleStory runtime asset. It has a transparent alpha channel and its original generation provenance metadata is retained. The website’s independent-project / non-affiliation notice applies; no official affiliation or ownership of MapleStory is claimed.
+The public UI uses ten original AI-generated decorative fan illustrations from
+the approved September 12, 2026 MapleBench design. Their exact original PNG bytes,
+including generation provenance metadata, are preserved. They are not downloaded
+or extracted MapleStory runtime assets. The independent-project/non-affiliation
+notice remains in the footer.
 
-## Generation prompt
-
-Create one small website decoration: a friendly orange mushroom monster and a glossy green slime standing close together, inspired by the nostalgic 2000s MapleStory visual world. This is original fan illustration for a clean independent research website, not a logo, not an official asset. Style: beautifully crafted 2D pixel art sprite vignette, crisp stepped pixel edges, warm dark-brown outlines, soft warm cream mushroom stem with two tiny black eyes, big orange cap with cream spots, rounded lime-green slime with two small eyes and a little sprout on top, tiny grounded pixel shadows only. Composition: landscape 3:2 transparent canvas; the two creatures form one compact group, mushroom on the left slightly taller, slime on the right, baseline aligned, both fully visible with no crop. Fill most of the canvas with the two creatures and minimal clear padding. No environment, no ground platform, no grass, no text, no letters, no watermark, no UI, no extra objects. Genuine transparent alpha background. This will display at 110 by 74 pixels on a white page; prioritize clear silhouettes, simple adorable faces, and sharp details readable at that size. Output as a PNG with transparency.
+See [the original generation and edit prompts](illustrations/README.md),
+[section-art provenance](illustrations/SECTION-ART.md), and
+[world-background provenance](illustrations/WORLD-BACKGROUND.md).
+The earlier `henesys-garden.png` is mentioned in the historical provenance but is
+not used or distributed by this UI. The ten published files and their immutable
+hashes are listed in `scripts/full_client_presentation_assets.py`.

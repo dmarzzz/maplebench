@@ -24,6 +24,8 @@ from full_client_score import same_json
 from full_client_trial import publish_attempt, sync_directory, validate_spec
 from full_client_research import summarize, CLASSES, TASKS
 
+from full_client_presentation_assets import illustration_files, policy_for_ui, validate_package_art
+
 ASSETS = ('index.html', 'dashboard.js', 'style.css')
 # Self-contained UI may include licensed fonts and original decorative artwork.
 # This matches the existing non-video package verification ceiling.
@@ -171,20 +173,38 @@ def project_member(entry, fixture, attempt_root, recordings):
         return row
 
 
-def file_inventory(site,*,maximum_video=MAX_VIDEO):
+def write_ui(ui, site):
+    policy = policy_for_ui(ui)
+    for name in ASSETS:
+        write_new(site/name, stable_bytes(ui/name, MAX_UI_ASSET), 0o644)
+    for name, expected in illustration_files(policy).items():
+        raw = stable_bytes(ui/name, MAX_UI_ASSET)
+        require({'bytes': len(raw), 'sha256': digest(raw)} == expected, 'presentation_art_binding')
+        (site/name).parent.mkdir(mode=0o755, exist_ok=True)
+        write_new(site/name, raw, 0o644)
+    return policy
+
+
+def file_inventory(site,*,maximum_video=MAX_VIDEO,presentation_assets=None):
     require(maximum_video in (MAX_VIDEO,MAX_ADAPTIVE_VIDEO,MAX_LONG_VIDEO),'invalid_public_video_limit')
     names=set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}
+    art=illustration_files(presentation_assets)
     found=set()
     for count,p in enumerate(site.iterdir(),1):
-        require(count<=7,'unexpected_public_file');found.add(p.name)
-    require(found==names|{'recordings'},'unexpected_public_file')
+        require(count<=7+bool(art),'unexpected_public_file');found.add(p.name)
+    require(found==names|{'recordings'}|({'illustrations'} if art else set()),'unexpected_public_file')
+    if art:
+        children=list(directory(site/'illustrations').iterdir())
+        require(len(children)==len(art) and {'illustrations/'+p.name for p in children}==set(art),'unexpected_public_file')
+        names.update(art)
     for count,p in enumerate(directory(site/'recordings').iterdir(),1):
         require(count<=4,'public_recording_count_limit');names.add('recordings/'+p.name)
     result={}
     for name in sorted(names):
-        require(name in ASSETS or name in ('results.json','recording-manifest.json','vercel.json')
+        require(name in ASSETS or name in art or name in ('results.json','recording-manifest.json','vercel.json')
                 or re.fullmatch(r'recordings/[a-f0-9]{32}\.webm',name),'unexpected_public_file')
         result[name]=stable_fingerprint(site/name,maximum_video if name.endswith('.webm') else 4*1024**2)
+    validate_package_art(result,presentation_assets)
     return result
 
 
@@ -195,11 +215,12 @@ def verify_package(package, expected):
             and isinstance(manifest.get('content'),dict) and digest(encoded(manifest['content']))==expected,
             'package_manifest_mismatch')
     content=manifest['content'];site=directory(package/'site')
+    require('presentation_assets' not in content or bool(illustration_files(content['presentation_assets'])),'presentation_art_policy')
     require(content.get('protocol') in (None,'legacy-full-client-v1',ADAPTIVE_PROTOCOL,XP_PROTOCOL),'invalid_package_protocol')
     require('horizon_seconds' not in content or (content.get('protocol')==XP_PROTOCOL
             and type(content['horizon_seconds']) is int and content['horizon_seconds']==1800),'invalid_package_horizon')
     maximum=MAX_LONG_VIDEO if content.get('horizon_seconds')==1800 else MAX_ADAPTIVE_VIDEO if content.get('protocol') in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) else MAX_VIDEO
-    require(content.get('files')==file_inventory(site,maximum_video=maximum),'package_content_changed')
+    require(content.get('files')==file_inventory(site,maximum_video=maximum,presentation_assets=content.get('presentation_assets')),'package_content_changed')
     return manifest
 
 
@@ -273,7 +294,7 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
                       'archive_replacement':replace_archive,'attempt_ids':[r['id'] for r in rows]}}
         snapshot['research_matrix']=summarize(snapshot)
         ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
-        for name in ASSETS:write_new(site/name,stable_bytes(ui/name,MAX_UI_ASSET),0o644)
+        art_policy=write_ui(ui,site)
         videos=[{'path':p.name,**stable_fingerprint(p,maximum_video)}
                 for p in sorted(recordings.iterdir())]
         write_new(site/'results.json',encoded(snapshot),0o644)
@@ -281,7 +302,8 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
         write_new(site/'vercel.json',encoded({'framework':None,'buildCommand':None,'outputDirectory':'.'}),0o644)
         content={'schema_version':1,'plan_sha256':plan_sha256,'archive_replacement':replace_archive,
                  'target_path':'/' if replace_archive else '/cohorts/'+plan_sha256[:16]+'/',
-                 'protocol':profile['protocol_id'],'files':file_inventory(site,maximum_video=maximum_video)}
+                 'protocol':profile['protocol_id'],'files':file_inventory(site,maximum_video=maximum_video,presentation_assets=art_policy)}
+        if art_policy is not None:content['presentation_assets']=art_policy
         if maximum_video==MAX_LONG_VIDEO:content['horizon_seconds']=1800
         content_sha=digest(encoded(content));package=output_root/content_sha
         write_new(staging/'package-manifest.json',encoded({'schema_version':1,'content_sha256':content_sha,'content':content}))

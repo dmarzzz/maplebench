@@ -11,7 +11,8 @@ import tempfile
 from full_client_gallery import copy_recording, directory
 from full_client_publication import (ASSETS, MAX_UI_ASSET, ADAPTIVE_PROTOCOL, XP_PROTOCOL, MAX_ADAPTIVE_VIDEO, MAX_LONG_VIDEO,
     MAX_VIDEO, digest, encoded, file_inventory, require, stable_bytes,
-    verify_package, write_new)
+    verify_package, write_new, write_ui)
+from full_client_presentation_assets import illustration_files
 from full_client_trial import publish_attempt, sync_directory
 
 
@@ -25,18 +26,22 @@ def refresh(package, expected, output_root, *, ui_root=None):
     staging=Path(tempfile.mkdtemp(prefix='.presentation-',dir=output_root))
     try:
         site=staging/'site';site.mkdir(mode=0o755);(site/'recordings').mkdir(mode=0o755)
+        old_art=illustration_files(original.get('presentation_assets'))
+        art_policy=write_ui(ui,site)
         for name,ref in original['files'].items():
-            if name in ASSETS:
-                write_new(site/name,stable_bytes(ui/name,MAX_UI_ASSET),0o644)
+            if name in ASSETS or name in old_art:
+                continue
             elif name.endswith('.webm'):
                 copy_recording(package/'site',{'path':name,'sha256':ref['sha256']},site/name,{},maximum=maximum)
             else:
                 write_new(site/name,stable_bytes(package/'site'/name,4*1024**2),0o644)
-        files=file_inventory(site,maximum_video=maximum)
-        require(all(files[name]==ref for name,ref in original['files'].items() if name not in ASSETS),
+        files=file_inventory(site,maximum_video=maximum,presentation_assets=art_policy)
+        require(all(files[name]==ref for name,ref in original['files'].items() if name not in ASSETS and name not in old_art),
                 'presentation_changed_evidence')
         verify_package(package,expected)
         content={**original,'files':files,'presentation_parent_sha256':expected}
+        content.pop('presentation_assets',None)
+        if art_policy is not None:content['presentation_assets']=art_policy
         identity=digest(encoded(content));destination=output_root/identity
         write_new(staging/'package-manifest.json',encoded({'schema_version':1,'content_sha256':identity,'content':content}))
         sync_directory(site/'recordings');sync_directory(site);sync_directory(staging)

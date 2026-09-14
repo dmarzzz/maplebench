@@ -409,7 +409,7 @@
       const caption=node('span',null,'tile-caption');caption.append(dot(r),node('span',name(r)),node('span',`${xp(r.persisted_xp)} saved XP`,'tile-score'));
       tile.append(v,caption,node('span','▶','tile-play'));tile.addEventListener('click',()=>openRun(r));$('montage').append(tile);
     }
-    if(!reducedMotion.matches&&!document.hidden)setPreviews(true);
+    if(!reducedMotion.matches&&!document.hidden&&$('model-showcase').hidden!==true)setPreviews(true);
   }
   function renderComparison(){
     const group=snapshot.comparisons.find(g=>g.id===$('comparison-select').value);
@@ -468,6 +468,38 @@
     $('trajectories').scrollIntoView({behavior:reducedMotion.matches?'instant':'smooth'});runPlayer.focus({preventScroll:true});
   }
   function playAt(time){if(runPlayer.readyState<1)return;try{runPlayer.currentTime=time;runPlayer.play().catch(()=>{$('player-status').textContent='Use the video controls to play.';});}catch{$('player-status').textContent='Use the video controls to seek.';}}
+  function renderEnvironmentChecks(){
+    const rows=snapshot.environment_checks;
+    const valid=Array.isArray(rows)&&rows.length===4
+      &&new Set(rows.map(row=>row.class_id)).size===4
+      &&rows.every(row=>['hero','bowmaster','ice_lightning_arch_mage','night_lord'].includes(row.class_id)
+        &&row.kind==='scripted_environment_check'&&row.protocol_id==='scripted-native-productivity-v2'
+        &&row.model===null&&row.model_api_requests===0&&row.ranked===false&&row.score===null
+        &&/^[a-f0-9]{32}$/.test(row.id)
+        &&row.recording?.url===`./checks/${row.id}/recordings/${row.id}.webm`
+        &&row.recording?.playback?.basis==='first_acknowledged_input'
+        &&Number.isFinite(row.recording.playback.start_ms)&&row.recording.playback.start_ms>=0
+        &&row.recording.playback.start_ms<row.recording.duration_ms
+        &&Number.isFinite(row.clock_evidence?.capture_fps));
+    $('environment-checks').hidden=!valid;$('model-showcase').hidden=valid;
+    document.querySelector('.sample-note').hidden=valid;
+    $('environment-check-grid').replaceChildren();if(!valid)return;
+    for(const row of rows){
+      const card=node('article',null,'environment-check-card');card.append(node('h3',row.class_name),node('p','Scripted · no model · unranked','environment-label'));
+      const video=node('video');video.controls=true;video.playsInline=true;video.preload='metadata';
+      video.src=row.recording.url;video.setAttribute('aria-label',`${row.class_name} scripted environment check`);
+      video.addEventListener('loadedmetadata',()=>{const start=row.recording.playback.start_ms/1000;if(start<video.duration)video.currentTime=start;});
+      const full=node('button','Full recording','text-button');full.type='button';
+      full.addEventListener('click',()=>{if(video.readyState>=1){video.currentTime=0;video.play().catch(()=>{});}});
+      const saved=Number.isFinite(row.saved_xp_delta)?`${xp(row.saved_xp_delta)} XP saved after ordinary logout`:`Level ${row.initial_level} → ${row.final_level}; no fixed-level XP delta`;
+      card.append(video,node('p',`${seconds(row.program_elapsed_ms)} execution · 180s ceiling`),
+        node('p',`${seconds(row.recording.duration_ms)} original video · ${row.actions} acknowledged inputs`),
+        node('p',saved),node('p',`Includes ${seconds(row.post_recording_settlement_ms)} of post-recording settlement`),
+        node('p',`${row.alive_at_logout?'Alive':'Dead'} at logout · ${row.clock_evidence.capture_fps.toFixed(1)} capture FPS`),
+        full,node('small',`Run ${row.id}`,'environment-run-id'));
+      $('environment-check-grid').append(card);
+    }
+  }
   function renderRedesign(){
     const {generated_at_ms,...presentation}=snapshot;
     const identity=JSON.stringify(presentation);if(identity===presentationIdentity)return;presentationIdentity=identity;
@@ -478,7 +510,7 @@
     for(const id of ['comparison-select','showcase-select']){const select=$(id);select.replaceChildren();for(const g of snapshot.comparisons){const option=node('option',groupLabel(g));option.value=g.id;select.append(option);}}
     const group=snapshot.comparisons.find(g=>g.id===previous)||snapshot.comparisons.find(g=>g.attempt_ids.includes(snapshot.featured_run_id))||snapshot.comparisons[0];
     if(group){$('comparison-select').value=group.id;$('showcase-select').value=group.id;}
-    renderMontage();renderComparison();
+    renderEnvironmentChecks();renderMontage();renderComparison();
     const featured=recordings.find(r=>r.id===selected?.id)||recordings.find(r=>r.id===snapshot.featured_run_id)||recordings[0];
     if(featured){filterModel=model(featured);renderModels();renderRunOptions();selectRun(featured);}else{$('player-status').textContent='No recordings available.';}
     $('snapshot-date').textContent=`Saved ${new Date(snapshot.generated_at_ms).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`;
@@ -493,42 +525,42 @@
   $('run-select').addEventListener('change',()=>selectRun(recordings.find(r=>r.id===$('run-select').value)));
   $('history-filter').addEventListener('change',renderHistory);
   document.addEventListener('visibilitychange',()=>{if(document.hidden){setPreviews(false);runPlayer.pause();}});
-  const architectureTabs = [...document.querySelectorAll('[data-architecture]')];
-  function showArchitecture(key, focus = false) {
-    for (const tab of architectureTabs) {
-      const active = tab.dataset.architecture === key;
-      tab.setAttribute('aria-selected', String(active));
-      tab.tabIndex = active ? 0 : -1;
-      $(tab.getAttribute('aria-controls')).hidden = !active;
-      if (active && focus) tab.focus();
+  const sectionLinks = [...document.querySelectorAll('.site-nav a')];
+  function markSection(id) {
+    for (const link of sectionLinks) {
+      if (link.getAttribute('href') === `#${id}`) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
     }
   }
-  for (const tab of architectureTabs) {
-    tab.addEventListener('click', () => showArchitecture(tab.dataset.architecture));
-    tab.addEventListener('keydown', event => {
-      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-      event.preventDefault();
-      const index = architectureTabs.indexOf(tab);
-      const next = event.key === 'Home' ? 0 : event.key === 'End' ? architectureTabs.length - 1
-        : (index + (event.key === 'ArrowRight' ? 1 : -1) + architectureTabs.length) % architectureTabs.length;
-      showArchitecture(architectureTabs[next].dataset.architecture, true);
-    });
+  const navSections = sectionLinks.map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+  let sectionFramePending = false;
+  function updateCurrentSection() {
+    sectionFramePending = false;
+    const readingLine = Math.max(document.querySelector('.site-header').getBoundingClientRect().bottom + 24, innerHeight / 2);
+    let current = navSections[0];
+    for (const section of navSections) {
+      if (section.getBoundingClientRect().top <= readingLine) current = section;
+    }
+    if (scrollY + innerHeight >= document.documentElement.scrollHeight - 4) current = navSections.at(-1);
+    if (current) markSection(current.id);
   }
-  const worldSteps = {
-    see: { title: 'Game state, not a video feed.', description: 'The model receives the character’s position, HP, MP, XP, level, map, and nearby monster positions. Journey WASM supplies the client observations; the recordings are for people to inspect.', nodes: ['client','controller'] },
-    think: { title: 'Observe, program, adapt.', description: 'The trusted controller sends the task, SDK instructions, and current state to OpenAI. The model returns a JavaScript program. Adaptive pilots repeat this cycle within a fixed wall budget. The game world continues running during inference.', nodes: ['provider','controller'] },
-    act: { title: 'A plan becomes actual key presses.', description: 'The generated program runs in a bounded, networkless Node.js container. It calls observe(), pressKeys(), and wait() through the trusted controller. Journey handles movement and combat through the ordinary game connection.', nodes: ['sandbox','controller','client','proxy'] },
-    save: { title: 'The score has to survive logout.', description: 'Cosmic saves character state in MySQL after ordinary logout. The runner compares persisted XP with the starting baseline, including penalties. Live client XP remains diagnostic; it is not the final score.', nodes: ['server','database','controller'] }
-  };
-  function showWorldStep(key) {
-    const step = worldSteps[key];
-    if (!step) return;
-    for (const button of document.querySelectorAll('[data-world-step]')) button.setAttribute('aria-pressed', String(button.dataset.worldStep === key));
-    for (const mapNode of document.querySelectorAll('.map-node')) mapNode.classList.toggle('is-highlighted', step.nodes.some(name => mapNode.classList.contains(name)));
-    $('world-step-detail').replaceChildren(node('h3',step.title),node('p',step.description));
+  function scheduleSectionUpdate() {
+    if (sectionFramePending) return;
+    sectionFramePending = true;
+    requestAnimationFrame(updateCurrentSection);
   }
-  for (const button of document.querySelectorAll('[data-world-step]')) button.addEventListener('click', () => showWorldStep(button.dataset.worldStep));
-  showWorldStep('see');
+  addEventListener('scroll', scheduleSectionUpdate, { passive: true });
+  addEventListener('resize', scheduleSectionUpdate, { passive: true });
+  addEventListener('load', scheduleSectionUpdate);
+  document.addEventListener('toggle', scheduleSectionUpdate, true);
+  scheduleSectionUpdate();
+  const labDetails = $('lab-details');
+  function revealLab() {
+    if (location.hash === '#approach') labDetails.open = true;
+  }
+  document.querySelector('.site-nav a[href="#approach"]').addEventListener('click', () => { labDetails.open = true; });
+  addEventListener('hashchange', revealLab);
+  revealLab();
 
   function freshness(){
     if(!snapshot)return;

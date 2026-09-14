@@ -152,6 +152,9 @@ class SkillPreviewPublicationTests(unittest.TestCase):
             for path in (Path(original['site']) / 'cohorts').rglob('*'):
                 if path.is_file(): self.assertEqual(path.read_bytes(), (site / path.relative_to(original['site'])).read_bytes())
             self.assertIn('Short skill previews', (site / 'index.html').read_text())
+            html = (site / 'index.html').read_text()
+            self.assertLess(html.index('id="overview"'), html.index('id="skill-previews"'))
+            self.assertIn('id="skill-previews" class="section section-card"', html)
             self.assertNotIn('must-never-export', (site / 'results.json').read_text())
             self.assertEqual(len(new['development_previews']), 1)
             self.assertNotEqual(outcome['primary_content_sha256'], original['primary_content_sha256'])

@@ -50,7 +50,7 @@ class CatalogTests(unittest.TestCase):
         source=Path(package['package']);target=self.root/('mutated-'+str(len(list(self.root.iterdir()))))
         shutil.copytree(source,target);site=target/'site';change(site)
         manifest=json.loads((target/'package-manifest.json').read_text())
-        manifest['content']['files']=publication.file_inventory(site,maximum_video=publication.MAX_ADAPTIVE_VIDEO)
+        manifest['content']['files']=publication.file_inventory(site,maximum_video=publication.MAX_ADAPTIVE_VIDEO,presentation_assets=manifest['content'].get('presentation_assets'))
         manifest['content_sha256']=publication.digest(publication.encoded(manifest['content']))
         (target/'package-manifest.json').write_bytes(publication.encoded(manifest))
         return {'package':str(target),'content_sha256':manifest['content_sha256']}

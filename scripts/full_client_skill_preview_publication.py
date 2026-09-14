@@ -203,7 +203,7 @@ def preview_panel(rows):
             + '<th scope="col">Skill</th><th scope="col">SDK key</th><th scope="col">Inputs</th>'
             + '</tr></thead><tbody>' + items + '</tbody></table></details><p class="skill-preview-id">Run '
             + row['id'] + '</p></article>')
-    return ('<!-- skill-previews:start --><section id="skill-previews" class="section" aria-labelledby="skill-previews-title">'
+    return ('<!-- skill-previews:start --><section id="skill-previews" class="section section-card" aria-labelledby="skill-previews-title">'
         '<h2 id="skill-previews-title">Short skill previews</h2><p>Recent model experiments with expanded class controls. '
         'Playback opens at the first acknowledged input. These development clips are outside the benchmark comparisons.</p>'
         '<p>Input counts show what the model requested. They do not prove successful casts or damage.</p>'
@@ -232,7 +232,11 @@ def attach_previews(catalog, selections, output_root, *, probe_video=None):
     snapshot['development_previews'] = rows
     html = stable_bytes(original / 'index.html', 4 * 1024**2).decode('utf-8')
     require('<!-- skill-previews:start -->' not in html and html.count('<main>') == 1, 'preview_html_anchor')
-    html = html.replace('<main>', '<main>\n' + preview_panel(rows), 1)
+    if '<!-- development-previews -->' in html:
+        require(html.count('<!-- development-previews -->') == 1, 'preview_html_anchor')
+        html = html.replace('<!-- development-previews -->', preview_panel(rows), 1)
+    else:
+        html = html.replace('<main>', '<main>\n' + preview_panel(rows), 1)
     style = (stable_bytes(original / 'style.css', 4 * 1024**2) + b'\n'
         b'#skill-previews{max-width:1200px;margin-left:auto;margin-right:auto;padding-left:24px;padding-right:24px;box-sizing:border-box}'
         b'.skill-preview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:start}'

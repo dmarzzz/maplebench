@@ -31,6 +31,8 @@ CLASSES={'hero':'Hero','bowmaster':'Bowmaster','ice_lightning_arch_mage':'Ice/Li
 ROW_FIELDS=set(project_attempt(Reader(),'0'*32,None,None,{},None,0,'/recordings/'))|{
     'controller_status','live','renderer_fresh','protocol_id','adaptive','sdk_calls','research','recording_publication',
     'authoritative_peak_xp_per_minute','native_xp'}
+from full_client_presentation_assets import illustration_files, policy_for_ui, validate_package_art
+
 SNAPSHOT_FIELDS={'schema_version','generated_at_ms','source','verification','live_status_available','ranked',
     'recording_prefix','truncated','attempts','comparisons','featured_run_id','cohort','research_matrix'}
 
@@ -105,7 +107,10 @@ def cohort_content(manifest,site):
     """Check public cohort semantics after the caller binds its exact file bytes."""
     require(type(manifest['schema_version']) is int,'catalog_package_schema')
     content=manifest['content'];site=directory(site)
-    require(set(content)-{'presentation_parent_sha256','horizon_seconds','skill_preview_payload_sha256'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+    require('presentation_assets' not in content or bool(illustration_files(content['presentation_assets'])),'presentation_art_policy')
+    require(set(content)-{'presentation_parent_sha256','horizon_seconds','skill_preview_payload_sha256','presentation_assets','environment_checks_payload_sha256'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+        and ('environment_checks_payload_sha256' not in content or (isinstance(content['environment_checks_payload_sha256'], str)
+            and SHA.fullmatch(content['environment_checks_payload_sha256'])))
         and ('skill_preview_payload_sha256' not in content or (isinstance(content['skill_preview_payload_sha256'],str)
             and SHA.fullmatch(content['skill_preview_payload_sha256'])))
         and ('presentation_parent_sha256' not in content or (isinstance(content['presentation_parent_sha256'],str)
@@ -114,6 +119,7 @@ def cohort_content(manifest,site):
         and content['protocol'] in (ADAPTIVE_PROTOCOL,XP_PROTOCOL) and content['archive_replacement'] is False
         and SHA.fullmatch(str(content['plan_sha256']))
         and content['target_path']=='/cohorts/'+content['plan_sha256'][:16]+'/','catalog_nested_adaptive_package_required')
+    validate_package_art(content['files'],content.get('presentation_assets'))
     protocol=content['protocol'];verifier=XP_VERIFIED if protocol==XP_PROTOCOL else VERIFIED
     snapshot=Reader().json(site,'results.json',content['files']['results.json']['sha256']);rows=public_snapshot(snapshot,adaptive=True)
     require(snapshot.get('source')=='full_client_private_receipt_projection' and snapshot.get('verification')==verifier
@@ -309,13 +315,16 @@ def compose(request,output_root):
     if notes:snapshot['catalog']['annotations']=notes
     if request['schema_version']==2:snapshot['catalog']['previous_cohorts']=previous_metadata
     snapshot['research_matrix']=summarize(snapshot) if request['schema_version']==1 else summarize(snapshot|{'attempts':new_rows,'comparisons':[g for g in comparisons if g.get('scope')!='previous_cohort']})
-    root_names=set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}
+    ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
+    art=illustration_files(policy_for_ui(ui))
+    root_names=set(ASSETS)|set(art)|{'results.json','recording-manifest.json','vercel.json'}
     planned_files={name:value for name,value in old_files.items() if name not in root_names} if old and not retired else {}
     for p in packages+retained_previous:
         content=p['manifest']['content'];prefix=content['target_path'].lstrip('/')
         planned_files.update({prefix+name:value for name,value in content['files'].items()})
     ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
-    root_data={name:stable_bytes(ui/name,MAX_UI_ASSET) for name in ASSETS}
+    root_data={name:stable_bytes(ui/name,MAX_UI_ASSET) for name in (*ASSETS,*art)}
+    require(all({'bytes':len(root_data[name]),'sha256':digest(root_data[name])}==ref for name,ref in art.items()),'presentation_art_binding')
     if notes:root_data['index.html']=annotated_index(root_data['index.html'],notes)
     root_data.update({'results.json':encoded(snapshot),
         'vercel.json':encoded({'framework':None,'buildCommand':None,'outputDirectory':'.'}),
@@ -331,13 +340,15 @@ def compose(request,output_root):
     try:
         if old and not retired:
             for name,value in old_files.items():
-                if name not in set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}:
+                if name not in root_names:
                     copy_file(old_site,name,site/name,value)
         for p in packages+retained_previous:
             content=p['manifest']['content'];prefix=content['target_path'].lstrip('/')
             (site/prefix/'recordings').mkdir(parents=True,mode=0o755)
             for name,value in content['files'].items():copy_file(p['site'],name,site/prefix/name,value)
-        for name,raw in root_data.items():write_new(site/name,raw,0o644)
+        for name,raw in root_data.items():
+            (site/name).parent.mkdir(parents=True,exist_ok=True)
+            write_new(site/name,raw,0o644)
         files={p.relative_to(site).as_posix():stable_fingerprint(p,MAX_LONG_VIDEO if p.suffix=='.webm' else 4*1024**2)
                for p in sorted(site.rglob('*')) if p.is_file()}
         require(same_json(files,planned_files),'catalog_source_changed')
