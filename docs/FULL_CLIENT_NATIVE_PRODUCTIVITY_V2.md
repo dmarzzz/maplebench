@@ -57,3 +57,18 @@ the decoder with `maximum_ms=185000` and the frozen encoded policy, and preserve
 owned locks, ordinary logout, source/fixture pins, cleanup reserve and one-shot
 operation semantics. Frozen V1 results remain available under their original
 identities. Source tests alone do not authorize or attest a new live run.
+
+## Recording cadence
+
+The production controller selects synchronous post-render snapshots at most
+once per 1/60 second, with the first and final actual render hooks always
+captured. The VP8 configuration requests 60 FPS and retains the 2,000,000-bit
+per-second target. This prevents a 120 Hz display from sending every render to
+the encoder; the codec's frame-rate hint alone does not limit submissions.
+
+Captured frames keep their measured timestamps and pixels. Low render rates
+remain visible as real gaps; the existing gap, byte, frame and deadline limits
+still apply. The final frame can be closer than the regular cadence interval.
+No duplicated frames or time scaling are introduced, and the game's simulation
+clock is unchanged. The new controller source must be frozen separately from
+older captures; source tests alone do not verify a live recording.

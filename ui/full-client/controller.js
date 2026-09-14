@@ -325,6 +325,13 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     const animate = () => {
       if(capture!==item||(item.encodedMode&&item.autoRunId!==run.id)) { item.failFinalFrame?.(Error('capture_owner_changed')); return; }
       if(item.stopping && !item.finalFrameRequested) return;
+      // Select real post-render hooks at at most 60 FPS. The first and final
+      // hooks are always captured; skipped hooks never snapshot stale pixels
+      // or invent media timestamps. The simulation continues on every hook.
+      if(item.encodedRecorder && !item.encodedRecorder.failed && item.frames && !item.finalFrameRequested) {
+        const since=performance.now()-item.lastFrameAt;
+        if(since>=0 && since<1000/60) return;
+      }
       draw();
       if(item.recorderStarted) {
         if(item.encodedRecorder) {

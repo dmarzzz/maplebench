@@ -107,7 +107,7 @@ export class PostRenderRecorder {
     this._snapshotContext=this.canvas.getContext?.('2d');
     need(this._snapshotContext&&typeof this._snapshotContext.getImageData==='function','invalid_canvas');
     const config={codec:'vp8',width:this._width,height:this._height,bitrate:2000000,
-      framerate:30,latencyMode:'quality',hardwareAcceleration:'prefer-software'};
+      framerate:60,latencyMode:'quality',hardwareAcceleration:'prefer-software'};
     const support=await bounded(this._VideoEncoder.isConfigSupported(config),this._limits.configurationTimeoutMs,'encoder_configuration_timeout');
     need(support.supported&&Object.entries(config).every(([k,v])=>support.config[k]===v),'vp8_configuration_unsupported');
     this._encoder=new this._VideoEncoder({output:(chunk,meta)=>this._output(chunk,meta),error:()=>this._fail('encoder_error')});

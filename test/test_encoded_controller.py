@@ -72,13 +72,13 @@ const uploadRecording=async()=>{uploads++;assert.equal(pendingUpload.metadata.sc
     def test_flush_precedes_upload_and_original_policy_is_retained(self):
         self.run_lifecycle("""
 await startRecording('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');assert.equal(created,1);assert.equal(capture.frames,0);
-Module.MapleBenchOnRendered();Module.MapleBenchOnRendered();assert.equal(capture.frames,2);
+Module.MapleBenchOnRendered();await advance(20);Module.MapleBenchOnRendered();assert.equal(capture.frames,2);
 capture.clockVerified=true;capture.clock={id:'clock'};capture.terminalToken='terminal';
 const ending=stopRecording();assert.equal(capture.stopping,true);assert.equal(uploads,0);
 assert.equal(capture.finalFrameRequested,true);assert.equal(stopCalls,0);
 await startRecording('another');assert.equal(created,1);
 run.nativeAcceptance.capture_duration_policy={id:'changed'};await advance(100);Module.MapleBenchOnRendered();
-assert.equal(stopCalls,1);assert.equal(stopClocks[0],200);assert.equal(capture.frames,3);
+assert.equal(stopCalls,1);assert.equal(stopClocks[0],220);assert.equal(capture.frames,3);
 Module.MapleBenchOnRendered();assert.equal(capture.frames,3);finish();await ending;
 assert.equal(capture,null);assert.equal(uploads,1);
 assert.equal(pendingUpload.metadata.capture_duration_policy,policy);
@@ -86,6 +86,39 @@ assert.equal(pendingUpload.metadata.encoder_receipt,receipt);
 assert.equal(pendingUpload.metadata.first_frame_offset_ms,0);
 assert.equal(pendingUpload.metadata.terminal_token,'terminal');
 assert.equal(pendingUpload.metadata.interrupted,false);
+""")
+
+    def test_120hz_hooks_have_bounded_cadence_and_force_the_actual_final_hook(self):
+        self.run_lifecycle("""
+await startRecording(run.id);Module.MapleBenchOnRendered();
+const selected=[];const original=capture.encodedRecorder.onRendered;
+capture.encodedRecorder.onRendered=function(){selected.push(now);return original.call(this);};
+// No wall-clock timer is advanced: this fixture exercises 176s of real hook
+// timestamps, independently of the shorter test lifecycle's deadline timer.
+for(let i=1;i<=21120;i++){now=100+i*1000/120;wall=1000+i*1000/120;Module.MapleBenchOnRendered();}
+assert.ok(capture.frames>176*30);assert.ok(capture.frames<=176*60+1);
+for(let i=1;i<selected.length;i++)assert.ok(selected[i]-selected[i-1]>=1000/60);
+assert.equal(capture.startedAt,100);assert.equal(capture.firstFrameAt,100);
+now+=20;wall=now+900;Module.MapleBenchOnRendered();
+const last=capture.lastFrameAt, before=capture.frames;
+now=last+1;wall=now+900;Module.MapleBenchOnRendered();assert.equal(capture.frames,before);
+// Force the next real hook within the regular cadence interval.
+capture.captureDeadlineAt=200000;
+const ending=stopRecording();now=last+8;wall=now+900;Module.MapleBenchOnRendered();
+assert.equal(capture.frames,before+1);assert.equal(selected.at(-1),last+8);
+assert.equal(stopClocks.at(-1),last+8);finish();await ending;assert.equal(uploads,1);
+""")
+
+    def test_low_fps_hooks_are_all_captured_without_synthetic_frames(self):
+        self.run_lifecycle("""
+await startRecording(run.id);
+for(let i=0;i<5;i++){now=100+i*100;wall=now+900;Module.MapleBenchOnRendered();assert.equal(capture.frames,i+1);}
+assert.equal(capture.firstFrameAt,100);assert.equal(capture.lastFrameAt,500);
+assert.equal(capture.maxGap,100);
+const ending=stopRecording();now=508;wall=1408;Module.MapleBenchOnRendered();
+assert.equal(capture.frames,6);assert.equal(capture.lastFrameAt,508);finish();await ending;
+assert.equal(pendingUpload.metadata.duration_ms,408);
+assert.equal(pendingUpload.metadata.rendered_frames,6);
 """)
 
     def test_preview_v2_uses_encoded_lifecycle_and_original_short_request_deadline(self):
