@@ -53,3 +53,23 @@ A known-bit mask alone does not distinguish every special-format body; in
 particular this change does not identify or implement `givePirateBuff` or the
 legacy composite Battleship format. No paired server change is needed for the
 checked ordinary packets.
+
+## Built candidate
+
+Source `169c326cbe0cbdaf84c045c4fdc92af3834f20a2` passed all nine focused
+compiled regressions with zero skips. The matching client C build completed
+in 176.392 seconds using one build job, two CPUs and a 2300 MiB physical memory
+limit. The pinned SDK container had no network access. Original source, shared
+caches and binaries were verified unchanged.
+
+| Candidate artifact | SHA-256 |
+| --- | --- |
+| Client JavaScript | `297f8b78a68dffd6c4491a2991f875487e9c26e4f6bd92143625ed9055c63efc` |
+| Client WebAssembly | `cae2ec1b924cf2f110081466a808444a87e4bbd23b9e73fae46e1a920f4b74b3` |
+| Client build receipt | `adc6bb86cf09436bfaca3f81a25eaa7d8278de73638ba87bd88ab59d43b9ad9d` |
+
+This candidate has not been activated or live-qualified. The preceding Night
+Lord recording retains client B's identity and its observed Haste failure.
+The unchanged server C retains source `d2fe0671db0bf4932b44fc117e581c0258f65dbb`
+and JAR SHA-256 `394c2afee55f3affee0bc7df720ec972a2bb36a96b0386b637fb113e87e9942c`;
+no server build or model API call was performed for this client repair.
