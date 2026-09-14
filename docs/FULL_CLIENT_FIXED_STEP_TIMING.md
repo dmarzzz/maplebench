@@ -24,7 +24,7 @@ valid observations. Their successful capture checks establish video integrity,
 not normal game speed. The controls must not qualify a normal-speed benchmark.
 Historical recordings and scores remain unchanged and explicitly diagnostic.
 
-## Candidate 0014
+## Repair 0014
 
 `0014-fixed-step-catch-up.patch` preserves 8ms simulation steps and increases the
 finite catch-up budget to 128 updates per rendered frame. This covers 1.024s of
@@ -60,9 +60,32 @@ Nine focused regressions compile the real original/repaired loop and show:
 - The emitted timing object survives the C macro boundary and parses as JS.
 - The real Timer header uses a monotonic clock.
 
-These are source tests. A new combined WASM build must verify real-time
-simulation, stable rendering and capture overhead during actual gameplay before
-replacement recordings are promoted. Low FPS can remain visually choppy even
-after game-time advancement is repaired. The three-minute scripted successor is
-a different control identity from the historical 120-second controls and the
-permanent five-minute agent baseline.
+These are source tests. The combined WASM build now includes this repair and
+0013. During live scripted attempt `2403bfa428944dd5b4645e0c98dca97a`, independent
+browser samples observed approximately one second of simulation per wall
+second on the native Apple GPU. That attempt did **not** produce a saved video:
+its recorder hit the byte limit. These timing observations alone do not qualify
+the attempt or a replacement recording.
+
+## High-refresh recording repair
+
+The browser rendered near 120 FPS, while the VP8 encoder declared 30 FPS and
+received every rendered frame. The recording reached its byte limit after
+114.117 seconds, with 13,696 frames submitted. The original failed attempt is
+retained; it is not a publishable clip.
+
+Revision `ce3b6d045a22e6ff1c1312722a4d51b621aa0c32` bounds frame submission to
+60 FPS and declares that cadence to the encoder. It selects actual post-render
+frames and retains their actual timestamps. The first and final rendered
+frames remain included. There is no interpolation, duplicate-frame insertion,
+time scaling, changed game speed, or increase to the existing recording caps.
+Low rendering rates and genuine gaps remain visible in the evidence.
+
+The recording change passes 48 focused Python tests and 39 recorder tests.
+Actual replacement clips must also pass independent decoding, complete capture
+ledger checks, and browser clock measurements covering the recorded interval.
+The clock gate requires simulation within one percent of wall time, less than
+one pending 8ms step, and at least 30 captured frames per second.
+
+The three-minute scripted successor is a different control identity from the
+historical 120-second controls and the permanent five-minute agent baseline.
