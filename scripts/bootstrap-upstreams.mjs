@@ -236,10 +236,20 @@ function installCosmicOverlay(cosmicDir) {
   const mainAnchor = '        Server.getInstance().init();';
   const mainReplacement = `${mainAnchor}\n        server.bots.MapleBenchControlServer.startFromEnvironment();`;
   replaceOnce(serverPath, mainAnchor, mainReplacement, 'control-plane startup hook');
-  const oldPersistenceStartup = `        server.bots.MapleBenchPersistence.initializeFromEnvironment();\n${mainAnchor}`;
-  const xpStartup = `        server.bots.MapleBenchPersistence.initializeFromEnvironment();\n        server.bots.MapleBenchXpLedger.initializeFromEnvironment();\n${mainAnchor}`;
-  replaceOnce(serverPath, readFileSync(serverPath, 'utf8').includes(oldPersistenceStartup) ? oldPersistenceStartup : mainAnchor,
-    xpStartup, 'persistence and XP ledger startup');
+  for (const type of ['MapleBenchPersistence', 'MapleBenchXpLedger', 'MapleBenchSkillLedger']) {
+    const call = `        server.bots.${type}.initializeFromEnvironment();`;
+    const current = readFileSync(serverPath, 'utf8');
+    if (current.includes(call)) {
+      if (current.indexOf(call) !== current.lastIndexOf(call) || current.indexOf(call) > current.indexOf(mainAnchor)) {
+        throw new Error(`Invalid ${type} startup ordering or duplicate initialization.`);
+      }
+    } else {
+      replaceOnce(serverPath, mainAnchor, `${call}\n${mainAnchor}`, `${type} startup`);
+    }
+  }
+  replaceOnce(serverPath, '        server.bots.MapleBenchControlServer.startFromEnvironment();',
+    '        server.bots.MapleBenchControlServer.startFromEnvironment();\n        server.bots.MapleBenchSkillControlServer.startFromEnvironment();',
+    'loopback skill ledger control startup');
 }
 
 const patchOnly = process.argv.includes('--patch-only');

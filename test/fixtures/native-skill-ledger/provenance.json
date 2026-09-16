@@ -1,0 +1,32 @@
+{
+  "upstream": "NDBellisario/cosmic",
+  "license": "AGPL-3.0-only; original notices retained",
+  "description": "Pinned previously built native source method fixtures; Character/Inventory excerpts retain only relevant methods. Private deployment state excluded.",
+  "files": {
+    "net/server/channel/handlers/UseItemHandler.java": {
+      "source_sha256": "af346937135b8377da33d4d2974f032df517c91b072d0a8cfbfeef3dd8293ee3",
+      "fixture_sha256": "af346937135b8377da33d4d2974f032df517c91b072d0a8cfbfeef3dd8293ee3",
+      "excerpt": false
+    },
+    "net/server/channel/handlers/MovePlayerHandler.java": {
+      "source_sha256": "ba69b408cfbdfd0feacede05adb84c447f752e7633b99d39790bffa055de6fd7",
+      "fixture_sha256": "ba69b408cfbdfd0feacede05adb84c447f752e7633b99d39790bffa055de6fd7",
+      "excerpt": false
+    },
+    "net/server/channel/handlers/SpecialMoveHandler.java": {
+      "source_sha256": "1d35e370410474b2190681954ae0dbbd6ff6d3f9f6e99720f0d63782024ea285",
+      "fixture_sha256": "1d35e370410474b2190681954ae0dbbd6ff6d3f9f6e99720f0d63782024ea285",
+      "excerpt": false
+    },
+    "client/Character.java": {
+      "source_sha256": "52b2188e76599c1aee4a349b3ec6c57321a87fb3334779f2afdf1113ed4c7dc8",
+      "fixture_sha256": "f02f17d8158f577a6e6be22c9bdc7b502998ec0640a59c97cd66911318409141",
+      "excerpt": true
+    },
+    "client/inventory/Inventory.java": {
+      "source_sha256": "4065fbe91ae5632aa2b6b9e8c31037e66e19c1c02fbb317a8a89b0d4607f4404",
+      "fixture_sha256": "9b88d47af7053a84af88e702a483a2c2677bf26c99228416278ee52a1613058c",
+      "excerpt": true
+    }
+  }
+}

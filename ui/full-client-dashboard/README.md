@@ -65,7 +65,9 @@ Methodology describes the published pilot's controls, signed XP equation,
 verification, limited replication, request reserve and failure accounting.
 Future scoring is a separate disclosure. Results uses selectable square cells
 with an evidence inspector; Class pilots reads the unchanged research matrix.
-Skill suite shows six proposed tasks as unrun and cannot supply model scores.
+Skill suite reads a separate versioned report, with positive/evaluable counts,
+coverage and invalid attempts per model/task. Development and comparative
+phases remain separate; historical XP pilots cannot supply skill results.
 Zero, loss, unknown and unrun have separate labels and colors. Detailed planning
 and exact proposed entry schedules live in `docs/NEXT_SIMULATION_PLAN.md`.
 The compact footer links to GitHub and Twitter with a non-affiliation notice.
@@ -95,3 +97,49 @@ The limits remain 4 MiB per non-video file, 100 public files and 512 MiB aggrega
 The donor's standalone Skillbook was an untested task-design study and is not
 included in this live-data presentation. No donor result JSON, recordings,
 private runtime evidence or credentials are copied into the source UI.
+
+## Skill-suite progress publication
+
+`full_client_skill_progress.py` binds the exact original design and both
+schedules. It assigns E001–E021 to phase/task experiments and T0001–T0852 to
+their planned entries, retaining each original public `plan_entry_id`, block,
+variant, repetition, model, admission slot and planned lane. The report exposes
+wall/API/token ceilings and the declared task parameters. These are planned
+settings; an absent execution-manifest registry is explicitly unverified.
+
+The publisher emits `/skill-suite-manifest.json` plus 21 task/phase shards.
+Root-relative URLs work on the root page and mounted cohort pages. Each shard
+contains at most 96 entries and is loaded on selection after its byte count and
+SHA-256 are checked. A failed check clears the selected rows. Missing reports,
+not-started entries, in-progress entries, positive outcomes, valid gameplay
+failures and invalid attempts have distinct labels. Native positive and negative
+controls report check passes/failures outside model counts. No overall score,
+training mean, final uncertainty estimate or invented outcome is generated.
+
+Python APIs for the operator are `load_plan()`, `validate_progress(progress, plan)`,
+`upsert_progress(progress, plan, plan_entry_id, entry)`, `project(progress, plan)`,
+`render_markdown(projection)`, `write_publication(projection, new_directory)` and
+`attach_progress(catalog_receipt, projection, existing_output_root)`. Upsert is
+pure and preserves the previous outcome, manifest and evidence in `updates`;
+reconcile the private durable journal before calling it. `execution_manifests`
+currently contains only SHA-256 strings. A recorded manifest is not a verified
+configuration or authorization. The public configuration registry will require
+a separately reviewed schema when the execution controller is frozen.
+
+`attach_progress` preserves every prior results/video/cohort byte, creates a
+fresh publication identity, and binds the entire payload inventory with
+`skill_progress_payload_sha256`. It updates existing preview/check payload
+bindings without copying old deployment intents. Refresh the root presentation
+through the existing presentation workflow before attachment. Deployment stays
+separate. Replacing a progress report creates another immutable package.
+
+The Vercel validator reconstructs the entire public report from strict entry
+fields and frozen schedules, including each planned setting and derived summary.
+A forged summary, unknown field, missing shard or arbitrary new JSON file fails
+closed even if its inventory was rehashed. Existing 100-file, 4-MiB non-video and
+512-MiB aggregate limits remain unchanged. Only public plan identifiers, safe
+scalar outcomes, allowlisted reason codes, artifact hashes and narrowly approved
+public evidence links are exposed; no raw prompts, code, runtime identifiers,
+hosts, private paths or geometry enter the report. The reporter checks the report
+contract, not the underlying native proof: receipt verification and admission
+remain the operator's separate responsibilities.

@@ -183,6 +183,14 @@ def validate_rpc(message, scenario):
     method, args = message['method'], message['args']
     if type(method) is not str or type(args) is not list:
         raise ValueError('Invalid SDK request')
+    task_keys = None
+    if scenario.get('protocol') == 'full-client-skill-tasks-v1':
+        from full_client_skill_tasks import allowed_keys
+        task_keys = allowed_keys(scenario.get('skill_task'))
+        if scenario.get('adapter') != 'full-client' or method not in ('observe', 'wait', 'pressKeys'):
+            raise ValueError('SDK method is not allowed in this skill task')
+    elif 'skill_task' in scenario:
+        raise ValueError('Skill task requires its versioned protocol')
     if method == 'observe' and not args:
         return method, None
     if method == 'wait' and len(args) == 1:
@@ -200,6 +208,10 @@ def validate_rpc(message, scenario):
             if scenario.get('protocol') not in ('full-client-adaptive-pilot-v1',NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,'full-client-skill-preview-v1','full-client-skill-preview-v2','full-client-skill-preview-v3','scripted-native-productivity-v1','scripted-native-productivity-v2'):
                 raise ValueError('Skill toolkit requires a supported full-client protocol')
             allowed=allowed_keys(scenario['skill_toolkit'])
+        if task_keys is not None:
+            if 'skill_toolkit' in scenario:
+                raise ValueError('Skill task cannot mix toolkit protocols')
+            allowed = set(task_keys)
         if (type(keys) is not list or not 1 <= len(keys) <= 3
                 or any(type(key) is not str or key not in allowed for key in keys)
                 or len(set(keys)) != len(keys)

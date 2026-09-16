@@ -108,7 +108,9 @@ def cohort_content(manifest,site):
     require(type(manifest['schema_version']) is int,'catalog_package_schema')
     content=manifest['content'];site=directory(site)
     require('presentation_assets' not in content or bool(illustration_files(content['presentation_assets'])),'presentation_art_policy')
-    require(set(content)-{'presentation_parent_sha256','horizon_seconds','skill_preview_payload_sha256','presentation_assets','environment_checks_payload_sha256'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+    require(set(content)-{'presentation_parent_sha256','horizon_seconds','skill_preview_payload_sha256','presentation_assets','environment_checks_payload_sha256','skill_progress_payload_sha256'}=={'schema_version','plan_sha256','archive_replacement','target_path','protocol','files'}
+        and ('skill_progress_payload_sha256' not in content or (isinstance(content['skill_progress_payload_sha256'], str)
+            and SHA.fullmatch(content['skill_progress_payload_sha256'])))
         and ('environment_checks_payload_sha256' not in content or (isinstance(content['environment_checks_payload_sha256'], str)
             and SHA.fullmatch(content['environment_checks_payload_sha256'])))
         and ('skill_preview_payload_sha256' not in content or (isinstance(content['skill_preview_payload_sha256'],str)

@@ -793,3 +793,23 @@ html { scroll-behavior: auto; } }
 .skill-preview-card td,.skill-preview-card th{padding:7px}.skill-preview-id{overflow-wrap:anywhere}
 @media(max-width:760px){.environment-check-grid{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:24px}.skill-preview-grid{grid-template-columns:minmax(0,1fr)}.matrix-heading{flex-direction:row;align-items:end}#research-matrix td>strong{font-size:20px}}
 @media(max-width:540px){.environment-video-title{align-items:flex-start;flex-direction:column;gap:2px;padding:8px 10px}.environment-check-card .environment-class-copy{min-height:4.8em}}
+
+/* Versioned suite journal: the existing paper treatment, with explicit states. */
+.skill-progress{margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--line,#d5d5c7)}
+.skill-progress h3{margin:.15rem 0}.skill-progress .eyebrow{margin:0;font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:#53654d}
+.skill-report-state{font-weight:700;font-size:1.02rem;margin:1rem 0 .4rem}.skill-blockers{font-size:.85rem;color:#705531;line-height:1.65;max-width:85ch}
+.skill-phase-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.6rem;margin:1.2rem 0}
+.skill-phase-counts button{text-align:left;border:1px solid #d5d8ca;border-radius:8px;background:#f7f8f0;padding:.7rem .8rem;color:inherit;font:inherit;cursor:pointer}
+.skill-phase-counts button[aria-pressed="true"]{border-color:#47724a;box-shadow:inset 0 0 0 1px #47724a;background:#edf3e7}
+.skill-phase-counts strong,.skill-phase-counts small{display:block}.skill-phase-counts strong{font-size:.83rem}.skill-phase-counts small{font-size:.74rem;margin-top:.25rem;color:#5a6254}
+.skill-progress-filters{display:grid;grid-template-columns:1fr 1.4fr 1fr 1fr;gap:.65rem}.skill-progress-filters label,.skill-matrix-phase{display:flex;flex-direction:column;gap:.3rem;font-size:.73rem;font-weight:700;color:#4c5d46}
+.skill-progress-filters select,.skill-matrix-phase select{min-width:0;width:100%;background:#fffdf5;border:1px solid #bfc8b5;border-radius:5px;padding:.5rem;color:#283627;font:inherit;font-weight:500}
+.skill-matrix-phase{max-width:23rem;margin:.6rem 0}.skill-matrix-phase[hidden]{display:none}
+.skill-trial-table{max-height:34rem;margin-top:.75rem;border:1px solid #d7dacd;border-radius:7px}.skill-trial-table table{width:100%;border-collapse:collapse;font-size:.76rem;min-width:850px}
+.skill-trial-table th{position:sticky;top:0;background:#edf0e4;z-index:1;text-align:left}.skill-trial-table th,.skill-trial-table td{padding:.65rem .6rem;vertical-align:top;border-bottom:1px solid #dde0d3}.skill-trial-table td:first-child{max-width:200px}
+.skill-trial-table small{display:block;font-size:.68rem;margin-top:.3rem;overflow-wrap:anywhere;color:#566250}.skill-trial-table details{min-width:12rem;max-width:24rem}.skill-trial-table summary{cursor:pointer;color:#355d3c}
+.skill-trial-table dl{display:grid;grid-template-columns:auto 1fr;gap:.3rem .65rem;margin:.7rem 0}.skill-trial-table dd{margin:0;overflow-wrap:anywhere}.skill-trial-table dt{font-weight:650}.skill-trial-table pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.7rem}
+.skill-state{display:inline-block;padding:.2rem .42rem;border:1px solid #c1c9b5;border-radius:4px;font-weight:650;white-space:nowrap}.skill-state.unreported,.skill-state.not_started{border-style:dashed;color:#63715b;background:#f7f8f1}.skill-state.in_progress{background:#f7edcc;color:#725412}.skill-state.success{background:#e2eed9;color:#295331}.skill-state.gameplay_failure{background:#f3e2d4;color:#824729}.skill-state.invalid{background:#e7e6ee;color:#5d546c}
+.skill-hash{overflow-wrap:anywhere;font-size:.73rem;line-height:1.7}.skill-coverage{font-size:.75rem;color:#4b5c43}.skill-empty{padding:1rem;color:#61695a}
+@media(max-width:760px){.skill-phase-counts{grid-template-columns:repeat(2,minmax(0,1fr))}.skill-progress-filters{grid-template-columns:1fr 1fr}.skill-progress .section-heading{align-items:flex-start;gap:.8rem}.skill-progress h3{font-size:1.3rem}}
+@media(max-width:420px){.skill-progress-filters{grid-template-columns:1fr}.skill-phase-counts{gap:.4rem}.skill-phase-counts button{padding:.6rem}}

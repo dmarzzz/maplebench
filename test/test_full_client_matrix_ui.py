@@ -53,10 +53,10 @@ researchButtons[3].emit('click');assert.match($('matrix-inspector').textContent,
 const links=$('matrix-inspector').children.at(-1);links.children[0].emit('click');assert.equal(played,'d');
 assert.equal(researchButtons.filter(b=>b.attrs['aria-pressed']==='true').length,1);
 const retained=researchButtons;renderResearch();assert.equal(researchButtons,retained);
-researchView='skill';renderResearch();assert.equal(researchButtons.length,12);
-assert.ok(researchButtons.every(b=>b.textContent==='—Unrun'||b.textContent==='— Unrun'));
+researchView='skill';renderResearch();assert.equal(researchButtons.length,24);
+assert.ok(researchButtons.every(b=>b.textContent==='—No report'||b.textContent==='— No report'));
 researchButtons[11].emit('click');assert.match($('matrix-inspector').textContent,/GPT-5.6 Sol.*Recovery/);
-assert.match($('matrix-inspector').textContent,/no runs yet/);
+assert.match($('matrix-inspector').textContent,/No report loaded/);
 assert.equal(JSON.stringify(snapshot),frozen);
 researchView='class';renderResearch();assert.equal(researchButtons.length,6);
 assert.equal(JSON.stringify(snapshot),frozen);

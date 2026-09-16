@@ -264,8 +264,9 @@
       <div class="section-title"><div class="section-heading-copy"><img class="inventory-sprite section-emblem" src="./illustrations/meso-pouch.png" width="1254" height="1254" alt="" aria-hidden="true" loading="lazy" decoding="async"><div><h2>Results</h2></div></div><span class="status-label">Development results</span></div>
       <p class="results-intro">Select a square to inspect the task, score and recording.</p>
       <div class="research-intro" aria-labelledby="research-title">
-        <div class="matrix-views" role="group" aria-label="Matrix view"><button type="button" id="matrix-class-view" aria-pressed="true">Class pilots</button><button type="button" id="matrix-skill-view" aria-pressed="false">Skill suite <span>Planned</span></button></div>
+        <div class="matrix-views" role="group" aria-label="Matrix view"><button type="button" id="matrix-class-view" aria-pressed="true">Class pilots</button><button type="button" id="matrix-skill-view" aria-pressed="false">Skill suite <span id="skill-matrix-status">Planned</span></button></div>
         <div class="section-heading matrix-heading"><h3 id="research-title" class="sr-only">Models by class and task</h3><label id="research-protocol-label">Protocol<select id="research-protocol" aria-label="Evidence protocol"></select></label><a class="data-link" href="./results.json">Download data</a></div>
+        <label id="skill-matrix-phase-label" class="skill-matrix-phase" hidden>Skill cohort <select id="skill-matrix-phase"><option value="skill-comparative">Comparative · 24 planned per cell</option><option value="skill-development">Development · separate pilot</option></select></label>
         <p id="matrix-context" class="matrix-context"></p>
         <div id="matrix-layout" class="matrix-layout">
           <div class="matrix-grid-area"><div id="research-matrix" class="table-wrap" tabindex="0" role="region" aria-label="Model evaluation matrix"></div>
@@ -296,6 +297,27 @@
     </section>
 </details>
     </div>
+    <section id="skill-suite-progress" class="skill-progress" aria-labelledby="skill-progress-title">
+      <div class="section-heading"><div><p class="eyebrow">Execution journal</p><h3 id="skill-progress-title">Every experiment, every trial</h3></div><a class="data-link" href="/skill-suite-manifest.json" id="skill-progress-download" hidden>Download manifest</a></div>
+      <p class="note">Stable experiment and trial numbers match the GitHub progress table. Native control checks, development trials and comparative cohorts have separate counts.</p>
+      <p id="skill-progress-state" class="skill-report-state" role="status">Checking for a published skill-suite report…</p>
+      <p id="skill-progress-blockers" class="skill-blockers"></p>
+      <div id="skill-progress-controls" hidden>
+        <div id="skill-phase-counts" class="skill-phase-counts" aria-label="Progress by phase"></div>
+        <div class="skill-progress-filters">
+          <label>Phase<select id="skill-progress-phase"></select></label>
+          <label>Experiment<select id="skill-progress-experiment"></select></label>
+          <label>Model / control<select id="skill-progress-model"><option value="all">All models / controls</option></select></label>
+          <label>Status<select id="skill-progress-filter"><option value="all">All statuses</option><option value="unreported">Unreported</option><option value="not_started">Not started</option><option value="in_progress">In progress</option><option value="success">Positive / native passed</option><option value="gameplay_failure">Gameplay / check failure</option><option value="invalid">Invalid</option></select></label>
+        </div>
+        <p id="skill-experiment-context" class="note"></p>
+        <p id="skill-trials-state" class="small" role="status"></p>
+        <div class="table-wrap skill-trial-table" tabindex="0" role="region" aria-label="Selected experiment trials">
+          <table><caption class="sr-only">Stable trial numbers and planned settings; expand a row for configuration and evidence</caption><thead><tr><th scope="col">Trial / plan entry</th><th scope="col">Model / control</th><th scope="col">Variant / repeat</th><th scope="col">Slot / lane</th><th scope="col">Wall / API / tokens</th><th scope="col">Status</th><th scope="col">Configuration &amp; evidence</th></tr></thead><tbody id="skill-trial-rows"></tbody></table>
+        </div>
+        <details class="audit-disclosure"><summary>How to read this report</summary><p>Missing reports do not prove a trial was never submitted. A planned lane is an assignment, not a live worker. An execution-manifest hash records a configuration reference; it does not establish runtime admission or native qualification.</p><p>Native positive and negative controls pass when the expected behavior is verified. Their passes never count as model successes. Model gameplay failures are evaluable; invalid attempts are excluded from the success-rate denominator and remain visible. Unfinished cohorts are provisional. Training results remain separate; there is no overall model score.</p><p id="skill-schedule-hashes" class="skill-hash"></p></details>
+      </div>
+    </section>
     <!-- results-development-previews -->
 </section>
     <section id="trajectories" class="section section-card">

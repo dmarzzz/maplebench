@@ -270,6 +270,121 @@
       goal:'Recover from a fixed low-resource return-to-town state, reach the hunting map and earn native XP.',
       evidence:'Matched initial setback, route transitions, resource use and a positive native XP event.',phase:'Second batch'}
   ];
+  // Skill-suite reporting is separate from historical XP results and runtime admission.
+  let skillManifest=null,skillEntries=[],skillLoadGeneration=0,skillTimer;
+  const skillCache=new Map();
+  const skillPhases=['native-initial','skill-development','native-remaining','skill-comparative','training-qualification','training-long-proposed'];
+  const skillTaskIds=['platforming-v1','native-teleport-v1','potion-use-v1','buff-upkeep-v1','portal-navigation-v1','return-to-hunt-v1','training-hero','training-bowmaster','training-ice-lightning'];
+  const skillModels=['gpt-6-astra','gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna'];
+  const skillStatus=row=>!row.reported?'unreported':row.status;
+  const skillStatusLabel=row=>!row.reported?'Unreported':row.kind==='native_control'&&['success','gameplay_failure'].includes(row.status)?`Native check ${row.outcome}`:({not_started:'Not started',in_progress:'In progress',success:'Positive',gameplay_failure:'Gameplay failure',invalid:'Invalid'})[row.status]||'Unknown';
+  const expNumber=value=>`E${String(value).padStart(3,'0')}`,trialNumber=value=>`T${String(value).padStart(4,'0')}`;
+  const skillPretty=value=>value.replaceAll('_',' ').replaceAll('-',' ');
+  const skillSHA=async raw=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',raw)),v=>v.toString(16).padStart(2,'0')).join('');
+  async function skillFetch(path,maximum){
+    const response=await fetch(path,{cache:'no-store',signal:AbortSignal.timeout(5000)});
+    if(!response.ok||Number(response.headers.get('content-length'))>maximum)throw Error('report unavailable');
+    const reader=response.body.getReader(),chunks=[];let size=0;
+    try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>maximum)throw Error('report limit');chunks.push(value);}}
+    finally{await reader.cancel();}
+    const raw=new Uint8Array(size);let offset=0;for(const chunk of chunks){raw.set(chunk,offset);offset+=chunk.length;}return raw;
+  }
+  function validSkillManifest(value){
+    if(value?.schema_version!==1||value.protocol!=='full-client-skill-progress-v1'||value.design_id!=='skill-suite-v1-draft-2026-09-14'||value.planned_entries!==852||!Number.isInteger(value.reported_entries)||value.reported_entries<0||value.reported_entries>852||value.overall_score!==null||!Array.isArray(value.experiments)||value.experiments.length!==21||!Array.isArray(value.phases)||value.phases.length!==6||JSON.stringify(value.models)!==JSON.stringify(skillModels))return false;
+    const paths=new Set();
+    return value.experiments.every(e=>Number.isInteger(e.experiment_number)&&e.experiment_number>=1&&e.experiment_number<=21&&skillPhases.includes(e.phase)&&skillTaskIds.includes(e.task_id)&&e.path===`skill-suite/${e.phase}/${e.task_id}.json`&&!paths.has(e.path)&&paths.add(e.path)&&/^[a-f0-9]{64}$/.test(e.sha256)&&Number.isInteger(e.bytes)&&e.bytes>0&&e.bytes<=4*1024*1024&&Number.isInteger(e.planned)&&e.planned>0&&e.planned<=96&&Array.isArray(e.model_cells))&&value.phases.every((p,i)=>p.id===skillPhases[i])&&Array.isArray(value.blockers)&&value.blockers.length<=32;
+  }
+  function skillSelectOptions(node,options){const prior=node.value;node.replaceChildren();for(const [value,label]of options){const option=el('option',label);option.value=value;node.append(option);}if(options.some(([value])=>value===prior))node.value=prior;}
+  function renderSkillReport(){
+    const m=skillManifest;
+    $('skill-progress-state').textContent=`${m.reported_entries} reported / ${m.planned_entries} planned · ${skillPretty(m.status)}${m.last_updated_at_utc?` · updated ${m.last_updated_at_utc}`:''}`;
+    $('skill-progress-blockers').textContent=m.blockers.length?`Pending: ${m.blockers.map(skillPretty).join(' · ')}`:'No blockers recorded; admission still requires verified execution bindings.';
+    $('skill-progress-controls').hidden=false;$('skill-progress-download').hidden=false;
+    $('skill-matrix-status').textContent=m.reported_entries?'Reported':'Planned';
+    skillSelectOptions($('skill-progress-phase'),m.phases.map(p=>[p.id,p.label]));
+    skillSelectOptions($('skill-progress-model'),[['all','All models / controls'],...skillModels.map(model=>[model,names[model]||model]),['native','Native controls only']]);
+    $('skill-schedule-hashes').textContent=Object.entries(m.source_sha256).map(([name,sha])=>`${name}: ${sha}`).join(' · ');
+    renderSkillExperiments();
+    if(researchView==='skill')renderResearch();
+  }
+  function renderSkillExperiments(){
+    const phase=$('skill-progress-phase').value;
+    skillSelectOptions($('skill-progress-experiment'),skillManifest.experiments.filter(e=>e.phase===phase).map(e=>[String(e.experiment_number),`${expNumber(e.experiment_number)} · ${e.label}`]));
+    const counts=$('skill-phase-counts');counts.replaceChildren();
+    for(const p of skillManifest.phases){const button=el('button');button.type='button';button.setAttribute('aria-pressed',String(p.id===phase));button.append(el('strong',p.label),el('small',`${p.summary.terminal}/${p.summary.planned} terminal · ${p.summary.in_progress} active · ${p.summary.invalid} invalid`));button.addEventListener('click',()=>{$('skill-progress-phase').value=p.id;renderSkillExperiments();});counts.append(button);}
+    loadSkillExperiment();
+  }
+  async function loadSkillExperiment(){
+    const generation=++skillLoadGeneration,e=skillManifest.experiments.find(e=>String(e.experiment_number)===$('skill-progress-experiment').value);
+    skillEntries=[];$('skill-trial-rows').replaceChildren();if(!e)return;
+    $('skill-experiment-context').textContent=`${expNumber(e.experiment_number)} · ${e.label} · ${e.summary.terminal}/${e.planned} terminal. ${e.kind==='native_control'?'Positive and negative native controls; no model calls.':e.phase.startsWith('training-')?'Training metrics are separate from skill success rates.':'Success counts use evaluable trials; invalid and missing reports stay separate.'} ${e.summary.final?'All planned entries have terminal reports.':'Incomplete cohort; provisional counts.'}`;
+    $('skill-trials-state').textContent='Loading the hash-bound experiment report…';
+    try{
+      let shard=skillCache.get(e.sha256);
+      if(!shard){const raw=await skillFetch('/'+e.path,e.bytes);if(raw.length!==e.bytes||await skillSHA(raw)!==e.sha256)throw Error('hash mismatch');shard=JSON.parse(new TextDecoder().decode(raw));
+        if(shard.protocol!==skillManifest.protocol||shard.experiment?.experiment_number!==e.experiment_number||!Array.isArray(shard.entries)||shard.entries.length!==e.planned||shard.entries.length>96)throw Error('invalid shard');
+        if(skillCache.size>=21)skillCache.clear();skillCache.set(e.sha256,shard);}
+      if(generation!==skillLoadGeneration||closed)return;skillEntries=shard.entries;renderSkillTrials();
+    }catch{if(generation===skillLoadGeneration){$('skill-trials-state').textContent='Experiment report unavailable or failed its content-hash check. No trial outcomes shown.';$('skill-trial-rows').replaceChildren();}}
+  }
+  function renderSkillTrials(){
+    const model=$('skill-progress-model').value,status=$('skill-progress-filter').value;
+    const rows=skillEntries.filter(r=>(model==='all'||(model==='native'?r.kind==='native_control':r.model===model))&&(status==='all'||skillStatus(r)===status));
+    const target=$('skill-trial-rows');target.replaceChildren();
+    $('skill-trials-state').textContent=`${rows.length} of ${skillEntries.length} planned trials shown. Settings below are planned ceilings, not measured usage.`;
+    for(const r of rows){
+      const tr=el('tr'),identity=cell(tr,trialNumber(r.trial_number));identity.append(el('small',r.plan_entry_id));
+      const who=cell(tr,r.model?names[r.model]||r.model:r.control);if(!r.model)who.append(el('small',r.expected_positive?'Expected positive':'Expected negative'));
+      cell(tr,`${r.variant} / ${r.repetition}`);cell(tr,`${r.admission_slot??'—'} / ${r.planned_lane}`);cell(tr,`${r.wall_seconds}s / ${r.max_api_requests} / ${r.token_ceiling.toLocaleString()}`);
+      const state=el('span',skillStatusLabel(r));state.className=`skill-state ${skillStatus(r)}`;cell(tr,null).append(state);
+      const details=el('details');details.append(el('summary',r.execution_manifest_sha256?'Manifest recorded':'Execution config unverified'));
+      const dl=el('dl');for(const [k,v]of [['Experiment',expNumber(r.experiment_number)],['Task',r.task_id],['Phase',r.phase],['Block',r.block??'—'],['Class',r.class_id],['Level',r.level??'Not specified'],['Planned fixture',r.design_fixture_binding],['Design admission',skillPretty(r.design_admission)],['Reported at',r.updated_at_utc||'No report'],['Reason',r.reason_code?skillPretty(r.reason_code):'—']])dl.append(el('dt',k),el('dd',v));details.append(dl);
+      if(r.planned_parameters){details.append(el('p','Planned task parameters'),el('pre',JSON.stringify(r.planned_parameters,null,2)));}
+      if(r.execution_manifest_sha256)details.append(el('p','Execution manifest SHA-256'),el('p',r.execution_manifest_sha256));
+      details.append(el('p',r.outcome===null?'No verified outcome reported.':typeof r.outcome==='string'?`Native check ${r.outcome}`:'Verified reported metrics'));
+      if(r.outcome&&typeof r.outcome==='object')details.append(el('pre',JSON.stringify(r.outcome,null,2)));
+      for(const hash of r.evidence_sha256||[])details.append(el('p',`Evidence SHA-256: ${hash}`));
+      for(const url of r.public_evidence_urls||[]){if(!/^https:\/\/(?:maplebench\.vercel\.app\/skill-suite\/evidence\/[a-f0-9]{64}\.(?:json|webm)|github\.com\/dmarzzz\/maplebench\/(?:pull\/\d+|commit\/[a-f0-9]{40}))$/.test(url))continue;const link=el('a','Public evidence');link.href=url;link.rel='noopener noreferrer';details.append(link);}
+      if(r.updates?.length){const history=el('details');history.append(el('summary',`${r.updates.length} reporting updates`));for(const u of r.updates)history.append(el('p',`${u.updated_at_utc}: ${u.previous_status||'unreported'} → ${u.new_status} · ${skillPretty(u.reason_code)}`),el('pre',JSON.stringify({previous_outcome:u.previous_outcome,previous_evidence_sha256:u.previous_evidence_sha256},null,2)));details.append(history);}
+      details.className='skill-hash';cell(tr,null).append(details);target.append(tr);
+    }
+    if(!rows.length){const tr=el('tr'),td=cell(tr,'No planned trials match these filters.','skill-empty');td.colSpan=7;target.append(tr);}
+  }
+  async function refreshSkillReport(){
+    if(closed)return;
+    try{const raw=await skillFetch('/skill-suite-manifest.json',256*1024),m=JSON.parse(new TextDecoder().decode(raw));if(!validSkillManifest(m))throw Error('invalid manifest');if(JSON.stringify(skillManifest)!==JSON.stringify(m)){skillManifest=m;renderSkillReport();}}
+    catch{$('skill-progress-state').textContent=skillManifest?'Report refresh unavailable · showing the last verified publication':'No skill-suite report published here yet. This is not proof that no execution occurred.';}
+    finally{if(!closed)skillTimer=setTimeout(refreshSkillReport,30000);}
+  }
+  $('skill-progress-phase').addEventListener('change',renderSkillExperiments);
+  $('skill-progress-experiment').addEventListener('change',loadSkillExperiment);
+  $('skill-progress-model').addEventListener('change',renderSkillTrials);
+  $('skill-progress-filter').addEventListener('change',renderSkillTrials);
+  $('skill-matrix-phase').addEventListener('change',()=>{if(researchView==='skill')renderResearch();});
+  function renderSkillMatrix(){
+    researchIdentity='';
+    const phase=$('skill-matrix-phase').value,columns=plannedSkillTasks;
+    $('research-empty').hidden=true;$('research-matrix').hidden=false;$('matrix-layout').hidden=false;
+    $('matrix-class-view').setAttribute('aria-pressed','false');$('matrix-skill-view').setAttribute('aria-pressed','true');
+    $('research-protocol-label').hidden=true;$('skill-matrix-phase-label').hidden=false;$('matrix-legend').hidden=true;$('matrix-layout').classList.add('planned');
+    $('matrix-context').textContent=skillManifest?'Positive / evaluable · coverage and invalid trials stay visible':'Planned skills · no published skill-suite report loaded';
+    $('matrix-limits').textContent='Development and comparative trials are separate. Incomplete cells are provisional, with no overall score or ranking. Native controls do not count here.';
+    const table=el('table'),head=el('thead'),hr=el('tr'),body=el('tbody');hr.append(el('th','Model'));
+    for(const c of columns){const th=el('th',c.label);th.scope='col';hr.append(th);}head.append(hr);table.append(head,body);researchButtons=[];const picks=[];
+    for(const model of skillModels){const tr=el('tr'),label=el('th',names[model]||model);label.scope='row';tr.append(label);
+      for(const [index,c]of columns.entries()){
+        const e=skillManifest?.experiments.find(e=>e.phase===phase&&e.task_id===skillTaskIds[index]),s=e?.model_cells.find(cell=>cell.model===model)?.summary;
+        const text=s?.evaluable?`${s.success}/${s.evaluable}`:s?.invalid?'Invalid only':s?.in_progress?'…':'—',button=el('button');button.type='button';button.className=`matrix-square ${s?.evaluable?'low':s?.in_progress?'pending':'unrun'}`;button.setAttribute('aria-pressed','false');
+        button.append(el('strong',text),el('small',s?`${s.evaluable}/${s.planned} coverage${s.invalid?` · ${s.invalid} invalid`:''}`:skillManifest?(e?'Unreported':'Not scheduled'):'No report'));
+        button.setAttribute('aria-label',`${names[model]||model}, ${c.label}: ${text}, ${s?`${s.evaluable} of ${s.planned} evaluable`:'no report'}`);
+        const show=()=>{for(const b of researchButtons)b.setAttribute('aria-pressed',String(b===button));const box=$('matrix-inspector');box.replaceChildren(el('p',names[model]||model),el('h4',c.label),el('p',c.goal));box.append(el('p',`Required evidence: ${c.evidence}`));
+          if(s){box.append(el('p',`${s.success} positive / ${s.evaluable} evaluable; ${s.invalid} invalid; ${s.in_progress} in progress; ${s.unreported} unreported.`),el('p',s.final?'All planned entries have terminal reports. Descriptive evidence; no ranking.':'Incomplete cohort. Counts are provisional; uncertainty has not been estimated.'));const link=el('button',`Inspect ${expNumber(e.experiment_number)} trials`);link.type='button';link.addEventListener('click',()=>{$('skill-progress-phase').value=phase;$('skill-progress-model').value=model;$('skill-progress-filter').value='all';renderSkillExperiments();$('skill-progress-experiment').value=String(e.experiment_number);loadSkillExperiment();$('skill-suite-progress').scrollIntoView({block:'start',behavior:'smooth'});});box.append(link);}else box.append(el('p',skillManifest?'This task is outside the selected pilot cohort.':'No report loaded. Planned settings do not establish execution or qualification.'));};
+        button.addEventListener('click',show);cell(tr,null,'research-cell').append(button);researchButtons.push(button);picks.push(show);
+      }body.append(tr);
+    }
+    $('research-matrix').replaceChildren(table);picks[0]?.();
+  }
+
   function matrixCellState(value,maximum){
     if(!value||!value.attempt_ids?.length)return {tone:'unrun',text:'—',label:'Not run'};
     if(!Number.isFinite(value.mean)&&value.in_progress)return {tone:'pending',text:'…',label:'In progress'};
@@ -305,6 +420,8 @@
     if(first){const links=el('div');links.className='matrix-recording-link';recording(links,first);box.append(links);}
   }
   function renderResearch(){
+    if(researchView==='skill'){renderSkillMatrix();return;}
+    $('skill-matrix-phase-label').hidden=true;
     const matrix=snapshot.research_matrix,container=$('research-matrix'),select=$('research-protocol');
     const available=matrix?.schema_version===1&&Array.isArray(matrix.protocols)&&Array.isArray(matrix.columns)&&Array.isArray(matrix.models);
     $('research-empty').hidden=available;container.hidden=!available;select.disabled=!available;$('matrix-layout').hidden=!available;
@@ -663,6 +780,7 @@
     }catch{$('load-status').textContent=snapshot?'Results feed unavailable · showing saved results':'Results feed unavailable';}
     finally{if(!closed&&(snapshot?.live_status_available!==false||[1,2].includes(snapshot?.catalog?.schema_version)))timer=setTimeout(refresh,[1,2].includes(snapshot?.catalog?.schema_version)?10000:2000);}
   }
-  window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();setPreviews(false);runPlayer.pause();});
+  window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);clearTimeout(skillTimer);stopReplay();setPreviews(false);runPlayer.pause();});
   refresh();
+  refreshSkillReport();
 })();

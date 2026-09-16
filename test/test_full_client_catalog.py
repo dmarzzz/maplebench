@@ -210,7 +210,7 @@ class CatalogUITests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'),'Node is required for public catalog UI checks')
     def test_root_links_and_saved_progress_refresh_use_actual_dashboard_code(self):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client-dashboard/dashboard.js').read_text()
-        render=source[source.index('  function renderCatalog(){'):source.index('  function renderResearch(){')]
+        render=source[source.index('  function renderCatalog(){'):source.index('  const plannedSkillTasks=')]
         refresh=source[source.index('  async function refresh(){'):source.index("  window.addEventListener('pagehide'")]
         fixture="""
 const assert=require('node:assert/strict');

@@ -38,7 +38,7 @@ MAX_PAYLOAD=512*1024**2
 MAX_OUTPUT=2*1024**2
 from full_client_presentation_assets import PUBLIC_ART, validate_payload_art
 
-PUBLIC_NAME=re.compile(r'(?:(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:index\.html|dashboard\.js|style\.css|results\.json|recording-manifest\.json|vercel\.json|README\.md|'+PUBLIC_ART+r'|recordings/[a-f0-9]{32}\.webm)|previews/([a-f0-9]{32})/recordings/\1\.webm|checks/([a-f0-9]{32})/recordings/\2\.webm)\Z')
+PUBLIC_NAME=re.compile(r'(?:(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:index\.html|dashboard\.js|style\.css|results\.json|recording-manifest\.json|vercel\.json|README\.md|'+PUBLIC_ART+r'|recordings/[a-f0-9]{32}\.webm)|previews/([a-f0-9]{32})/recordings/\1\.webm|checks/([a-f0-9]{32})/recordings/\2\.webm|skill-suite-manifest\.json|skill-suite/(?:native-initial|skill-development|native-remaining|skill-comparative|training-qualification|training-long-proposed)/(?:platforming-v1|native-teleport-v1|potion-use-v1|buff-upkeep-v1|portal-navigation-v1|return-to-hunt-v1|training-hero|training-bowmaster|training-ice-lightning)\.json)\Z')
 DEPLOYMENT=re.compile(r'dpl_[A-Za-z0-9]{8,80}\Z')
 
 
@@ -74,6 +74,13 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
             and SHA.fullmatch(content['environment_checks_payload_sha256'])
             and content['environment_checks_payload_sha256'] == digest(encoded(files)),
             'environment_checks_payload_binding_mismatch')
+    skill_files = {name for name in files if isinstance(name, str)
+        and (name == 'skill-suite-manifest.json' or name.startswith('skill-suite/'))}
+    require(bool(skill_files) == ('skill_progress_payload_sha256' in content), 'skill_progress_payload_binding_required')
+    if skill_files:
+        require(isinstance(content['skill_progress_payload_sha256'], str)
+            and SHA.fullmatch(content['skill_progress_payload_sha256'])
+            and content['skill_progress_payload_sha256'] == digest(encoded(files)), 'skill_progress_payload_binding_mismatch')
     video_limits=cohort_video_limits(supplied,files,package_manifest)
     total=0
     for name,expected in files.items():
@@ -85,6 +92,9 @@ def checked_payload(payload,inventory_path,inventory_sha,package_manifest):
         total+=expected['bytes'];require(total<=MAX_PAYLOAD,'public_payload_size_limit')
         require(expected['bytes']<=maximum,'public_payload_file_limit')
         require(stable_fingerprint(payload/name,maximum)==expected,'public_payload_changed')
+    if skill_files:
+        from full_client_skill_progress import verify_publication
+        verify_publication({name: (payload / name).read_bytes() for name in skill_files})
     validate_payload_art(files)
     actual=set()
     for count,path in enumerate(payload.rglob('*'),1):
