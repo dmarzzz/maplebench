@@ -492,6 +492,35 @@ class RuntimeTests(unittest.TestCase):
                 with self.assertRaisesRegex(runtime.RuntimeErrorCode,reason): self.backend.load_pins()
         self.host.command.assert_not_called(); self.host.admin.assert_not_called()
 
+    def test_builder_scenario_loads_and_a_stale_prompt_hash_fails_closed(self):
+        """frozen_prompt_mismatch had no coverage, and the committed freeze builder
+        had never been checked against the runtime's own validator."""
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        import full_client_scenario_freeze as freeze
+        from full_client_adaptive import DEFAULT_PROTOCOL
+
+        protocol = freeze.build_protocol(DEFAULT_PROTOCOL["profile"], recipe="encoded")
+        scenario = freeze.build_scenario("hero-180-v1-pilot-cohort-v1", protocol, 1)
+        # The runtime binds the protocol profile's level to the baseline character,
+        # so a fixture for hero-180 must persist level 180.
+        self.ref('baseline_snapshot', {'account_logged_in': 0,
+                                      'character': {'character_id': 10, 'account_id': 20,
+                                                    'map_id': 1, 'level': 180}})
+        self.ref('runtime_manifest', {'schema_version': 2, 'docker_binding': self.binding,
+                                      'working_directory': str(self.root), 'wz_path': str(self.root / 'wz')})
+        self.ref('scenario', scenario)
+        self.backend.baseline = {'character': {'map_id': 1, 'level': 180}}
+        self.backend.load_pins()
+        self.assertEqual(self.backend.scenario["program_seconds"], 300)
+
+        stale = copy.deepcopy(scenario)
+        stale["instructions_sha256"] = "b" * 64
+        self.ref('scenario', stale)
+        with self.assertRaisesRegex(runtime.RuntimeErrorCode, 'frozen_prompt_mismatch'):
+            self.backend.load_pins()
+        self.host.command.assert_not_called()
+        self.host.admin.assert_not_called()
+
     def test_runtime_forwards_the_validated_policy_in_single_start(self):
         self.controller_fixture()
         original=self.backend.admin

@@ -4,13 +4,24 @@ Decision snapshot: September 8, 2026. This is the current product roadmap; older
 implementation plans remain useful technical references. Checkboxes mean the
 stated acceptance evidence exists, not merely that code or tests exist.
 
-Current execution priority: complete one four-model, five-minute group per class
-for Hero, Bowmaster, Ice/Lightning Arch Mage and Night Lord (sixteen results).
-Night Lord was selected as the fourth class on September 8. Two isolated workers
-prepare and run separate whole class groups in parallel, with one publication
-owner adding each accepted result. Their provisioning is not native qualification.
-Preserve completed pilot results and disclose port limitations; never tune a
-fixture during a group or substitute scripted checks for model runs.
+Current execution priority, revised September 18: **depth before breadth.** Complete
+one four-model, five-minute group on the accepted Hero-180 fixture, repeated four
+times — sixteen attempts on one fixture rather than sixteen single attempts spread
+across four classes. See [the v1 cohort plan](V1_COHORT.md).
+
+The earlier priority was one group per class for Hero, Bowmaster, Ice/Lightning
+Arch Mage and Night Lord (sixteen results); Night Lord was selected as the fourth
+class on September 8. That allocation spends the same sixteen trials on four new
+qualification gates and yields **no** variance estimate, so it cannot tell a model
+difference from combat RNG — the four-model acceptance already showed +4,500
+against 0 within one cohort. Repetitions on one proven fixture answer "does the
+machinery work reliably" and "how noisy is a single attempt" first; class breadth
+moves to M5 with a declared sampling plan.
+
+Two isolated workers can still prepare and run groups in parallel, with one
+publication owner adding each accepted result. Their provisioning is not native
+qualification. Preserve completed pilot results and disclose port limitations;
+never tune a fixture during a group or substitute scripted checks for model runs.
 
 ## Goal
 

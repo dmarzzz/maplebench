@@ -18,9 +18,29 @@ what v1 will not claim.
 
 `hero-cave` is deferred to v2. It has no level-150 baseline snapshot or verified
 keymap for map `240050300`, and its nine invocable skills do not yet map onto the
-protocol's four neutral slots. Its reference pack is committed at
-`knowledge/hero-cave/` and its extraction pattern transfers; a Hero-180 pack for
-this map still has to be written, and adding one changes the frozen prompt.
+protocol's four neutral slots. The runtime binds the profile's level to the
+baseline character's level and refuses a mismatch with `baseline_identity_mismatch`,
+so a level-150 fixture genuinely needs its own baseline — this is enforced, not
+merely conventional.
+
+## Two deliberate departures
+
+**Depth before breadth.** The roadmap's earlier priority spent sixteen trials as
+one attempt per model across four classes. This plan spends them as four
+repetitions on one fixture. Same trial count; the class-breadth version yields no
+variance estimate and adds four qualification gates, and the four-model acceptance
+already produced +4,500 against 0 within a single cohort. Class breadth moves to
+M5 with a declared sampling plan.
+
+**No knowledge pack in v1.** The reference pack at `knowledge/hero-cave/` is
+committed and hashed, but it is **not** wired into the prompt and v1 does not add
+one. The SDK surface is `observe` / `pressKeys` / `wait` with no file access, so
+the only delivery channel is the prompt itself — and the prompt is re-sent on every
+one of up to twelve cycles, so a ~10 KB pack is a material change to the token
+budget and therefore to the measured system. Changing the prompt contract and the
+knowledge axis in the same release would also make any shift in results
+unattributable. Knowledge becomes its own versioned axis in v2, which is what the
+pack's independent hash exists for.
 
 ## Freeze
 
