@@ -104,9 +104,11 @@ Frozen SDK:
   sdk.pressKeys(keys, milliseconds): hold 1..3 keys for 30..1500ms, then release.
     LEFT RIGHT UP DOWN JUMP ATTACK PRIMARY_SKILL SECONDARY_SKILL BUFF_1 BUFF_2 HP_POTION MP_POTION
   sdk.wait(milliseconds): wait 1..3000ms.
-PRIMARY_SKILL, SECONDARY_SKILL, BUFF_1 and BUFF_2 press A, S, D and F.
-The profile declares the actual skill behind each mapped key; undeclared skill
-keys are not promised to be useful. Coordinates increase right/down. Face nearby
+Those names are the complete list of accepted sdk.pressKeys strings. Physical key
+letters, keyboard codes, numeric skill IDs and skill names are not SDK controls
+and are rejected before any game action.
+The profile's skill_keys declares the actual skill behind each mapped slot;
+unmapped skill slots are not promised to be useful. Coordinates increase right/down. Face nearby
 monsters on your platform to attack. Re-observe and respond to HP/MP and movement.
 No arbitrary position edits, stat edits, shell, imports, network, assets or
 account credentials are available. A mapped native Teleport skill is allowed. Each program gets at most {p['program_seconds']} seconds and the

@@ -11,12 +11,13 @@ never reads private baseline snapshots. The caller supplies `expected_map_id`,
 which must equal the frozen baseline character's map id — this module cannot
 verify that and does not pretend to.
 
-    python3 scripts/full_client_scenario_freeze.py hash --level 180 --class Hero
+    python3 scripts/full_client_scenario_freeze.py hash
     python3 scripts/full_client_scenario_freeze.py build \
-        --id hero-cave-v1-pilot --expected-map-id 240050300 \
-        --profile-id hero-150 --class Hero --level 150 \
-        --primary Brandish --secondary 'Combo Attack' \
-        --buff1 Booster --buff2 Rage --output scenario.json
+        --id hero-180-v1-pilot-cohort-v1 --expected-map-id 240040511 \
+        --output scenario.json
+    python3 scripts/full_client_scenario_freeze.py check scenario.json
+
+The defaults are the accepted Hero-180 profile and the `encoded` cohort recipe.
 
 Exit codes: 0 success, 1 invalid inputs, 2 unwritable or existing output.
 """
@@ -32,7 +33,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import full_client_readiness as readiness
-from full_client_adaptive import (DEFAULT_PROTOCOL, FULL_HORIZON_POLICY, PROTOCOL, AdaptiveError,
+from full_client_adaptive import (DEFAULT_PROTOCOL, PROTOCOL, AdaptiveError,
+                                  capture_cohort_protocol, encoded_capture_cohort_protocol,
                                   prompt, validate_protocol)
 
 # Mirrors full_client_runtime.SETTLEMENT_POLICY. Importing the runtime here would
@@ -69,14 +71,26 @@ def build_profile(profile_id, class_name, level, skill_keys):
     return profile
 
 
-def build_protocol(profile, *, full_horizon=True, max_total_tokens=240000):
-    """A frozen protocol for one cohort. Defaults are never mutated."""
-    protocol = copy.deepcopy(DEFAULT_PROTOCOL)
-    protocol["profile"] = copy.deepcopy(profile)
-    protocol["max_total_tokens"] = max_total_tokens
-    if full_horizon:
-        protocol["horizon_policy"] = copy.deepcopy(FULL_HORIZON_POLICY)
+RECIPES = ('encoded', 'capture', 'bare')
+
+
+def build_protocol(profile, *, recipe='encoded'):
+    """A frozen protocol for one cohort, using the repo's own cohort recipes.
+
+    `encoded` is what the accepted five-minute cohorts actually ran: full-horizon
+    reserve plus the explicit frame-accounted capture policy. `capture` is the
+    earlier cohort preset. `bare` is the original pilot default with no optional
+    policies, which yields schema-1 capture receipts rather than encoder receipts.
+    Defaults are never mutated.
+    """
+    require(recipe in RECIPES, 'invalid_cohort_recipe')
     try:
+        if recipe == 'encoded':
+            return encoded_capture_cohort_protocol(copy.deepcopy(profile))
+        if recipe == 'capture':
+            return capture_cohort_protocol(copy.deepcopy(profile))
+        protocol = copy.deepcopy(DEFAULT_PROTOCOL)
+        protocol['profile'] = copy.deepcopy(profile)
         return validate_protocol(protocol)
     except AdaptiveError as error:
         raise ScenarioError(str(error)) from None
@@ -142,12 +156,19 @@ def build_scenario(scenario_id, protocol, expected_map_id, *, total_seconds=1200
             "settlement_policy": dict(SETTLEMENT_POLICY)}
 
 
-def check_scenario(scenario):
+def check_scenario(scenario, *, verify_prompt=True):
     """Re-derive every computed field. Raises on the first disagreement.
 
     This is the offline half of what the runtime enforces before it will start a
     controller. Passing here does not authorize a trial and does not prove the
     baseline snapshot, runtime manifest or keymap match.
+
+    `verify_prompt=False` checks structure and budgets but skips the
+    `instructions_sha256` comparison. Use it only to inspect a scenario frozen
+    against an *earlier* prompt version: a historical freeze keeps its own
+    recorded prompt bytes and stays valid on its own terms, but its hash will not
+    match the current prompt text. The runtime always verifies the prompt, so a
+    scenario that needs this flag cannot be run today without re-freezing.
     """
     require(isinstance(scenario, dict), "invalid_frozen_scenario")
     require(set(scenario) == {"schema_version", "id", "protocol", "program_seconds",
@@ -160,8 +181,13 @@ def check_scenario(scenario):
     require(scenario["program_seconds"] == protocol["wall_seconds"], "invalid_program_seconds")
     require(scenario["reasoning"] == {"effort": "low"}, "invalid_reasoning")
     require(scenario["settlement_policy"] == SETTLEMENT_POLICY, "invalid_settlement_policy")
-    digest, _ = instructions_sha256(protocol)
-    require(scenario["instructions_sha256"] == digest, "frozen_prompt_mismatch")
+    require(isinstance(scenario["instructions_sha256"], str)
+            and len(scenario["instructions_sha256"]) == 64
+            and all(character in "0123456789abcdef" for character in scenario["instructions_sha256"]),
+            "invalid_instructions_sha256")
+    if verify_prompt:
+        digest, _ = instructions_sha256(protocol)
+        require(scenario["instructions_sha256"] == digest, "frozen_prompt_mismatch")
     require(scenario["budgets"] == budgets_for(protocol), "frozen_bridge_budgets_mismatch")
     expected_map = scenario["readiness_policy"].get("expected_map_id") \
         if isinstance(scenario["readiness_policy"], dict) else None
@@ -203,8 +229,8 @@ def main(argv=None):
         target.add_argument('--secondary', default='Combo Attack')
         target.add_argument('--buff1', default='Booster')
         target.add_argument('--buff2', default='Maple Warrior')
-        target.add_argument('--no-full-horizon', action='store_true')
-        target.add_argument('--max-total-tokens', type=int, default=240000)
+        target.add_argument('--recipe', choices=RECIPES, default='encoded',
+                            help='cohort recipe; encoded matches the accepted runs')
 
     hash_cmd = sub.add_parser('hash', help='print the prompt and its frozen hash')
     add_profile_args(hash_cmd)
@@ -219,19 +245,22 @@ def main(argv=None):
 
     check_cmd = sub.add_parser('check', help='re-derive every computed field of a scenario')
     check_cmd.add_argument('path')
+    check_cmd.add_argument('--no-verify-prompt', action='store_true',
+                           help='skip the instructions_sha256 comparison, to inspect a '
+                                'scenario frozen against an earlier prompt version')
 
     args = parser.parse_args(argv)
 
     try:
         if args.command == 'check':
             with open(args.path, encoding='utf-8') as handle:
-                check_scenario(json.load(handle))
-            sys.stdout.write('ok\n')
+                check_scenario(json.load(handle), verify_prompt=not args.no_verify_prompt)
+            sys.stdout.write('ok\n' if not args.no_verify_prompt
+                             else 'ok (prompt hash not verified)\n')
             return 0
 
         profile = build_profile(args.profile_id, args.class_name, args.level, _skill_keys(args))
-        protocol = build_protocol(profile, full_horizon=not args.no_full_horizon,
-                                  max_total_tokens=args.max_total_tokens)
+        protocol = build_protocol(profile, recipe=args.recipe)
         if args.command == 'hash':
             digest, text = instructions_sha256(protocol)
             if args.show_prompt:

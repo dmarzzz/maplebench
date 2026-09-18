@@ -175,6 +175,18 @@ class AdaptiveTests(unittest.TestCase):
         self.assertIn('A mapped native Teleport skill is allowed.',text)
         self.assertNotIn('No teleport',text)
 
+    def test_prompt_names_only_sdk_controls_and_never_physical_keys(self):
+        """Luna sent a raw D where the SDK requires BUFF_1; the guard rejected the
+        first RPC before any game action. The prompt must not advertise the
+        physical keys behind the neutral slots."""
+        text=adaptive.prompt(self.h.p)
+        self.assertNotIn('press A, S, D and F',text)
+        self.assertIn('complete list of accepted sdk.pressKeys strings',text)
+        self.assertIn('Physical key',text)
+        self.assertIn('are rejected before any game action',text)
+        for slot in ('PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2'):
+            self.assertIn(slot,text)
+
     def test_neutral_skill_slots_are_versioned_and_legacy_keys_unchanged(self):
         from maple_agent import validate_rpc
         rpc={'type':'rpc','id':1,'method':'pressKeys','args':[['PRIMARY_SKILL'],100]}

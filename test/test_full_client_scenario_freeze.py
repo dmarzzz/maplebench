@@ -48,6 +48,31 @@ class ScenarioFreezeTest(unittest.TestCase):
                                      protocol, overrides.pop('expected_map_id', 240050300),
                                      **overrides)
 
+    def test_default_profile_is_the_accepted_hero_180_cohort_profile(self):
+        """v1 reuses the profile the accepted five-minute runs actually used."""
+        self.assertEqual(DEFAULT_PROTOCOL['profile'],
+                         {'id': 'hero-180', 'class_name': 'Hero', 'level': 180,
+                          'skill_keys': {'PRIMARY_SKILL': 'Brandish',
+                                         'SECONDARY_SKILL': 'Combo Attack',
+                                         'BUFF_1': 'Booster', 'BUFF_2': 'Maple Warrior'}})
+
+    def test_encoded_recipe_reproduces_the_accepted_cohort_policies(self):
+        protocol = freeze.build_protocol(DEFAULT_PROTOCOL['profile'], recipe='encoded')
+        self.assertEqual(protocol['max_total_tokens'], 240000)
+        self.assertEqual(protocol['horizon_policy']['id'], 'full-horizon-reserve-v1')
+        self.assertEqual(protocol['capture_duration_policy']['id'], 'post-render-encoded-frame-v1')
+
+    def test_bare_recipe_carries_no_optional_policies(self):
+        protocol = freeze.build_protocol(DEFAULT_PROTOCOL['profile'], recipe='bare')
+        self.assertNotIn('horizon_policy', protocol)
+        self.assertNotIn('capture_duration_policy', protocol)
+        self.assertEqual(protocol['max_total_tokens'], 120000)
+
+    def test_unknown_recipe_is_refused(self):
+        with self.assertRaises(freeze.ScenarioError) as caught:
+            freeze.build_protocol(DEFAULT_PROTOCOL['profile'], recipe='future')
+        self.assertEqual(str(caught.exception), 'invalid_cohort_recipe')
+
     def test_settlement_policy_matches_the_runtime(self):
         """The duplicated constant must not drift from full_client_runtime."""
         self.assertEqual(freeze.SETTLEMENT_POLICY, runtime_settlement_policy())
@@ -209,18 +234,38 @@ class ScenarioFreezeTest(unittest.TestCase):
                 subprocess.run([sys.executable, SCRIPT, 'check', os.path.join(root, 'nope.json')],
                                capture_output=True).returncode, 2)
 
-    def test_accepted_live_scenario_still_validates_when_available(self):
+    def test_accepted_live_scenario_structure_still_validates_when_available(self):
         """Regression against a real accepted freeze, when the operator supplies one.
 
         Set MAPLEBENCH_FROZEN_SCENARIO to a private accepted scenario path. The file
-        is never committed; this only guards the builder against drifting away from
-        what actually ran.
+        is never committed; this guards the builder's budget and structure
+        derivations against drifting away from what actually ran.
+
+        The prompt hash is deliberately not compared: a historical freeze was made
+        against an earlier prompt version and keeps its own recorded bytes. Only
+        the derivations that must stay stable across prompt versions are checked.
         """
         path = os.environ.get('MAPLEBENCH_FROZEN_SCENARIO')
         if not path or not os.path.isfile(path):
             self.skipTest('MAPLEBENCH_FROZEN_SCENARIO not supplied')
         with open(path, encoding='utf-8') as handle:
-            freeze.check_scenario(json.load(handle))
+            accepted = json.load(handle)
+        freeze.check_scenario(accepted, verify_prompt=False)
+
+    def test_verify_prompt_false_still_rejects_a_malformed_hash(self):
+        scenario = self.scenario()
+        scenario['instructions_sha256'] = 'not-a-hash'
+        with self.assertRaises(freeze.ScenarioError) as caught:
+            freeze.check_scenario(scenario, verify_prompt=False)
+        self.assertEqual(str(caught.exception), 'invalid_instructions_sha256')
+
+    def test_verify_prompt_false_accepts_an_earlier_prompt_version(self):
+        scenario = self.scenario()
+        scenario['instructions_sha256'] = 'a' * 64
+        freeze.check_scenario(scenario, verify_prompt=False)
+        with self.assertRaises(freeze.ScenarioError) as caught:
+            freeze.check_scenario(scenario)
+        self.assertEqual(str(caught.exception), 'frozen_prompt_mismatch')
 
 
 if __name__ == '__main__':
