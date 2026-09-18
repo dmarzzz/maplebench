@@ -131,7 +131,11 @@ def _extend_across_empty(pixels, start_x, y, width, height, cap):
         return 0
     if not is_track_background(pixels[start_x, y][:3]):
         return 0
-    anchor = _column_profile(pixels, start_x, y, height)
+    # Anchor a few pixels in. The first column of a track is its bevelled
+    # border and does not match the track's own profile, so anchoring on it
+    # made the walk stop after two pixels.
+    anchor_x = min(start_x + 4, width - 1)
+    anchor = _column_profile(pixels, anchor_x, y, height)
     extended = 0
     while start_x + extended < width and extended < cap:
         here = _column_profile(pixels, start_x + extended, y, height)
@@ -227,9 +231,40 @@ def find_exp(image, hp, mp):
     width, height = image.size
     pixels = image.load()
     y = hp['y']
-    gauge = find_on_row(image, is_exp, y, mp['x'] + mp['length'])
+    origin = mp['x'] + mp['length']
+    gauge = find_on_row(image, is_exp, y, origin)
     if gauge is None:
-        return None
+        # Immediately after a level-up the bar is empty, so there is no filled
+        # run to find -- and XP is the one gauge whose reading is the score.
+        # Fall back to locating the empty track itself, which sits just right
+        # of MP on the same row.
+        # An entirely empty bar *is* one long run of track background, so
+        # measure that run directly and return: there is nothing to extend
+        # across, and the profile walk anchored on the track's bevelled edge
+        # stops within a couple of pixels. Anything right of `origin` is past
+        # the MP track, so the longest such run is the EXP track.
+        empty = find_on_row(image, is_track_background, y, origin)
+        if empty is None:
+            return None
+        # Trim the bevel. The border pixels either side of the track are also
+        # light and desaturated, so the raw run overshoots by ~16px (234 for a
+        # 218px track) and would bias every later XP reading low by ~7%.
+        mid = pixels[empty['x'] + empty['length'] // 2, y][:3]
+
+        def is_track_body(x):
+            pixel = pixels[x, y][:3]
+            return all(abs(pixel[i] - mid[i]) <= 8 for i in range(3))
+
+        left = empty['x']
+        right = empty['x'] + empty['length'] - 1
+        while left < right and not is_track_body(left):
+            left += 1
+        while right > left and not is_track_body(right):
+            right -= 1
+        empty['x'] = left
+        empty['length'] = right - left + 1
+        empty['filled_at_calibration'] = 0
+        return empty
     start, length = gauge['x'], gauge['length']
     # The EXP track is drawn slightly wider than HP/MP (218px against 210px
     # on this client), so it must not be capped at their length. It has no

@@ -47,7 +47,36 @@ def _osascript(script, attempts=3, pause=0.7):
 
 
 def window_bounds():
-    """Return (x, y, width, height) of the client window in screen points."""
+    """Return (x, y, width, height) of the client window in screen points.
+
+    Quartz first. The Accessibility route below throws a transient "Can't get
+    window 1 ... Invalid index (-1719)" whenever the client's window briefly
+    leaves the AX tree -- during a map transition, or for no visible reason at
+    all -- and that killed a run at startup. The window server's own list has
+    no such gap.
+    """
+    try:
+        import Quartz
+        listing = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionAll, Quartz.kCGNullWindowID) or []
+        best = None
+        for entry in listing:
+            if entry.get('kCGWindowOwnerName') != PROCESS:
+                continue
+            bounds = entry.get('kCGWindowBounds') or {}
+            width = int(bounds.get('Width', 0))
+            height = int(bounds.get('Height', 0))
+            if width < 320 or height < 240:
+                continue
+            area = width * height
+            if best is None or area > best[0]:
+                best = (area, (int(bounds.get('X', 0)), int(bounds.get('Y', 0)),
+                               width, height))
+        if best is not None:
+            return best[1]
+    except ImportError:
+        pass
+
     script = (
         'tell application "System Events" to tell process "%s"\n'
         '  set w to window 1\n'

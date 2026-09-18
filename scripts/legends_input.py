@@ -54,6 +54,7 @@ def code_for(key):
 # would otherwise receive nothing and the keystrokes would land in the user's
 # actual foreground app.
 _target_pid = None
+_held = set()
 
 
 def target_pid(pid):
@@ -61,7 +62,12 @@ def target_pid(pid):
     _target_pid = pid
 
 
-def _post(code, down):
+def _post(code, down, key=None):
+    if key is not None:
+        if down:
+            _held.add(key)
+        else:
+            _held.discard(key)
     event = Quartz.CGEventCreateKeyboardEvent(None, code, down)
     if _target_pid is not None:
         Quartz.CGEventPostToPid(_target_pid, event)
@@ -70,42 +76,47 @@ def _post(code, down):
 
 
 def key_down(key):
-    _post(code_for(key), True)
+    _post(code_for(key), True, key)
 
 
 def key_up(key):
-    _post(code_for(key), False)
+    _post(code_for(key), False, key)
 
 
 def tap(key, hold_ms=45):
     code = code_for(key)
-    _post(code, True)
+    _post(code, True, key)
     time.sleep(hold_ms / 1000.0)
-    _post(code, False)
+    _post(code, False, key)
 
 
 def hold(key, duration_ms):
     """Hold any key down for a while. This is what walking needs."""
     code = code_for(key)
-    _post(code, True)
+    _post(code, True, key)
     try:
         time.sleep(duration_ms / 1000.0)
     finally:
-        _post(code, False)
+        _post(code, False, key)
+
 
 
 def release_all():
-    """Release every key this adapter can press.
+    """Release only the keys this adapter actually pressed.
 
-    Called on every exit path. A key left down after a crash keeps the
-    character walking into a wall, or worse, holds a modifier over the
-    desktop.
+    It used to post a key-up for every code in the table. A key-up with no
+    matching key-down should be inert, but the client treats the stray ones as
+    toggles: g, s and i opened Guild, Character Stats and Item Inventory over
+    the game, which blocks play entirely and left the bot swinging at a wall
+    of its own UI. Tracking held keys keeps the safety property that matters
+    -- nothing is left held down -- without inventing key presses.
     """
-    for key in KEY_CODES:
+    for key in sorted(_held):
         try:
-            key_up(key)
+            _post(code_for(key), False)
         except InputError:
             pass
+    _held.clear()
 
 
 def click(x, y):
@@ -134,29 +145,46 @@ def click(x, y):
         time.sleep(0.09)
 
 
-def walk(direction, duration_ms, attack_key=None, swing_every_ms=None):
-    """Walk left or right, optionally swinging while moving.
+def attack_hold(attack_key, duration_ms):
+    """Hold the attack key down instead of tapping it repeatedly.
 
-    Movement and attack are interleaved here rather than sequenced because
-    the client accepts both at once, and a stationary swing cycle wastes most
-    of an episode's wall clock.
+    The client auto-repeats an attack while its key is held, so this swings at
+    the same rate as tapping. It exists because the default attack key is
+    Control and macOS treats *two Control presses in quick succession* as the
+    Dictation shortcut. Tapping to swing therefore raised a system modal over
+    the client roughly once a minute, which swallowed every subsequent key and
+    click -- including the ones trying to dismiss it. One key-down per burst
+    cannot trigger a double-press, whatever the key is bound to.
+    """
+    code = code_for(attack_key)
+    _post(code, True, attack_key)
+    try:
+        time.sleep(duration_ms / 1000.0)
+    finally:
+        _post(code, False, attack_key)
+
+
+def walk(direction, duration_ms, attack_key=None, swing_every_ms=None):
+    """Walk left or right, holding the attack key throughout if given.
+
+    Movement and attack overlap rather than alternating: the client accepts
+    both at once, and a stationary swing cycle wastes most of an episode's
+    wall clock. swing_every_ms is accepted for call compatibility and ignored
+    -- the attack is held, not pulsed, for the reason in attack_hold().
     """
     if direction not in ('arrow-left', 'arrow-right'):
         raise InputError('walk direction must be an arrow key, got %r' % direction)
     code = code_for(direction)
-    _post(code, True)
-    started = time.time()
-    last_swing = 0.0
+    attack_code = code_for(attack_key) if attack_key else None
+    _post(code, True, direction)
+    if attack_code is not None:
+        _post(attack_code, True, attack_key)
     try:
-        while (time.time() - started) * 1000 < duration_ms:
-            if attack_key and swing_every_ms:
-                now = time.time()
-                if (now - last_swing) * 1000 >= swing_every_ms:
-                    tap(attack_key, 40)
-                    last_swing = now
-            time.sleep(0.02)
+        time.sleep(duration_ms / 1000.0)
     finally:
-        _post(code, False)
+        if attack_code is not None:
+            _post(attack_code, False, attack_key)
+        _post(code, False, direction)
 
 
 if __name__ == '__main__':
