@@ -27,7 +27,9 @@ import websockets
 import ws_proxy
 from full_client_bridge import FullClientBridge, read_private_file, validate_private_file
 validate_private_file(DEMO_ACCOUNT)
-BRIDGE = FullClientBridge(OUTPUT/'runs', os.environ.get('MAPLEBENCH_API_KEY_FILE'))
+BRIDGE = FullClientBridge(OUTPUT/'runs',
+    os.environ.get('MAPLEBENCH_OPENAI_API_KEY_FILE', os.environ.get('MAPLEBENCH_API_KEY_FILE')),
+    provider_key_files={'anthropic': os.environ.get('MAPLEBENCH_ANTHROPIC_API_KEY_FILE')})
 ADMIN_SOCKET = os.environ.get('MAPLEBENCH_ADMIN_SOCKET')
 from full_client_session import AdminServer, SessionCoordinator
 SESSION = SessionCoordinator(BRIDGE,lock_paths={

@@ -29,6 +29,7 @@ const clearTimeout=id=>timers.delete(id);
 const advance=async ms=>{now+=ms;wall+=ms;for(const [id,timer] of [...timers])if(timer.at<=now&&timers.has(id)){timers.delete(id);timer.fn();}
  for(let i=0;i<12;i++)await Promise.resolve();};
 const ink={},leafPath='',Path2D=function(){},fitText=()=>{};
+const keyNames={},skillKeyNames={},held=new Set(),physical=new Set();
 const view=()=>({mode:'Native',state:'Running',hp:'HP',mp:'MP',xp:'XP',keys:'Keys',hpFraction:1,mpFraction:1,alive:true});
 const relayConnected=true;
 const MediaRecorder={isTypeSupported:()=>{throw Error('Unexpected legacy fallback');}};

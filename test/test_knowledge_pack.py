@@ -10,6 +10,7 @@ SCRIPT = os.path.join(ROOT, 'scripts', 'knowledge_pack.py')
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
 import knowledge_pack  # noqa: E402
+import full_client_skill_qualification as qualification  # noqa: E402
 
 
 def write(root, rel, text):
@@ -77,6 +78,12 @@ class KnowledgePackTest(unittest.TestCase):
             with self.assertRaises(knowledge_pack.PackError):
                 knowledge_pack.build(linked)
 
+            linked_dir = os.path.join(root, 'linked-dir')
+            write(linked_dir, 'real/a.md', 'real\n')
+            os.symlink(os.path.join(linked_dir, 'real'), os.path.join(linked_dir, 'alias'))
+            with self.assertRaises(knowledge_pack.PackError):
+                knowledge_pack.build(linked_dir)
+
             missing = os.path.join(root, 'absent')
             with self.assertRaises(knowledge_pack.PackError):
                 knowledge_pack.build(missing)
@@ -119,6 +126,89 @@ class KnowledgePackTest(unittest.TestCase):
         self.assertEqual(manifest['pack_id'], 'hero-cave')
         self.assertIn('README.md', [entry['path'] for entry in manifest['files']])
         self.assertEqual(len(manifest['pack_sha256']), 64)
+
+    def test_frozen_reference_renders_exact_files_and_refuses_mutation(self):
+        with tempfile.TemporaryDirectory() as root:
+            pack = os.path.join(root, 'fixture')
+            write(pack, 'guide.md', 'guide\n')
+            write(pack, 'plan.json', '{"status":"planned"}\n')
+            reference = knowledge_pack.build(pack)
+            rendered = knowledge_pack.prompt_text(pack, reference)
+            self.assertIn('--- BEGIN guide.md ---', rendered)
+            self.assertIn('--- BEGIN plan.json ---', rendered)
+            write(pack, 'guide.md', 'changed\n')
+            with self.assertRaises(knowledge_pack.PackError) as caught:
+                knowledge_pack.prompt_text(pack, reference)
+            self.assertEqual(str(caught.exception), 'pack_manifest_mismatch')
+
+    def test_manifest_validation_rejects_unbound_or_unsafe_entries(self):
+        with tempfile.TemporaryDirectory() as root:
+            pack = os.path.join(root, 'fixture')
+            write(pack, 'guide.md', 'guide\n')
+            manifest = knowledge_pack.build(pack)
+            knowledge_pack.validate_manifest(manifest)
+            manifest['files'][0]['path'] = '../guide.md'
+            with self.assertRaises(knowledge_pack.PackError):
+                knowledge_pack.validate_manifest(manifest)
+
+    def test_committed_v1_pack_is_scoped_and_all_release_checks_are_planned(self):
+        pack = os.path.join(ROOT, 'knowledge', 'hero-180-map-240040511-v1')
+        manifest = knowledge_pack.build(pack)
+        self.assertEqual(manifest['pack_id'], 'hero-180-map-240040511-v1')
+        plan = qualification.load(os.path.join(pack, 'skill-qualification.json'))
+        self.assertEqual(plan['fixture']['expected_map_id'], 240040511)
+        self.assertTrue(all(row['release_status'] == 'planned' for row in plan['controls']))
+        self.assertIsNone(plan['native_release_result'])
+
+    def test_qualification_plan_cannot_invent_a_successful_cast(self):
+        path = os.path.join(ROOT, 'knowledge', 'hero-180-map-240040511-v1',
+                            'skill-qualification.json')
+        with open(path, encoding='utf-8') as handle:
+            plan = json.load(handle)
+        plan['controls'][6]['release_status'] = 'native_accepted'
+        plan['native_release_result'] = {'successful_cast': True}
+        with self.assertRaises(qualification.QualificationError):
+            qualification.validate(plan)
+
+    def test_expanded_hero_toolkit_is_exact_and_keeps_exclusions_visible(self):
+        kit = qualification.hero_toolkit.toolkit()
+        self.assertEqual([(row['slot'], row['name'], row['skill_id'], row['level'])
+                          for row in kit['skills']], [
+            ('PRIMARY_SKILL','Brandish',1121008,30),
+            ('SECONDARY_SKILL','Combo Attack',1111002,30),
+            ('BUFF_1','Sword Booster',1101004,20),
+            ('BUFF_2','Maple Warrior',1121000,20),
+            ('SKILL_5','Rush',1121006,30),
+            ('SKILL_6','Sword Coma',1111005,30),
+            ('SKILL_7','Sword Panic',1111003,30),
+            ('SKILL_8','Power Stance',1121002,30),
+            ('SKILL_9','Rage',1101006,20),
+            ('SKILL_10','Power Guard',1101007,30),
+            ('SKILL_11','Enrage',1121010,8),
+            ('SKILL_12',"Hero's Will",1121011,5),
+            ('SKILL_13','Shout',1111008,30),
+            ('SKILL_14','Armor Crash',1111007,20),
+            ('SKILL_15','Iron Body',1001003,6),
+            ('SKILL_16','Power Strike',1001004,20),
+            ('SKILL_17','Slash Blast',1001005,20)])
+        self.assertEqual([row['name'] for row in kit['passives']],
+                         ['Sword Mastery','Advanced Combo','Achilles',
+                          'Final Attack: Sword','Improved HP Recovery',
+                          'Improved Max HP Increase','Improved MP Recovery',
+                          'Axe Mastery'])
+        self.assertTrue(any('Monster Magnet' in item for item in kit['unsupported']))
+        self.assertTrue(any('Guardian' in item for item in kit['unsupported']))
+        self.assertEqual(qualification.hero_toolkit.expected_keymap(kit), [
+            [30,1,1121008],[31,1,1111002],[32,1,1101004],[33,1,1121000],
+            [34,1,1121006],[35,1,1111005],[39,1,1001005],
+            [44,1,1111003],[45,1,1121002],
+            [46,1,1101006],[47,1,1101007],[48,1,1121010],[49,1,1121011],
+            [50,1,1111008],[51,1,1111007],[52,1,1001003],[53,1,1001004]])
+        self.assertEqual(len(qualification.hero_toolkit.expected_skills(kit)), 25)
+        altered = json.loads(json.dumps(kit))
+        altered['skills'][5]['release_qualification'] = 'native_accepted'
+        with self.assertRaises(ValueError):
+            qualification.hero_toolkit.validate_toolkit(altered)
 
 
 if __name__ == '__main__':

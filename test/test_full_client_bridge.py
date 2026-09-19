@@ -431,6 +431,7 @@ class FullClientTests(unittest.TestCase):
                         self.assertEqual(receipt['initial_observation_sha256'],observation_sha256(json.loads(payload['input'])['observation']))
                         self.assertEqual(intent['readinessSha256'],hashlib.sha256((bridge.output/run['id']/'readiness.json').read_bytes()).hexdigest())
                         return {'id':'response','model':'gpt-6-astra','status':'completed','metadata':payload['metadata'],
+                            'usage':{'input_tokens':1,'output_tokens':1,'total_tokens':2},
                             'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps({'note':'test','code':'return;'})}]}]}
                     with mock.patch.object(bridge.lock,'wait',side_effect=wake),mock.patch.object(bridge,'_wait_for_capture'), \
                          mock.patch('full_client_bridge.write_json',side_effect=save), \
@@ -601,7 +602,8 @@ class FullClientTests(unittest.TestCase):
                      mock.patch('full_client_bridge.time.monotonic',return_value=100), \
                      mock.patch('full_client_bridge.time.time',return_value=1200), \
                      mock.patch.object(bridge,'_wait_for_capture'), \
-                     mock.patch('full_client_bridge.model_decision',return_value=({'note':'test','code':'return;'}, {'model':'gpt-6-astra'})) as decision, \
+                     mock.patch('full_client_bridge.model_decision',return_value=({'note':'test','code':'return;'},
+                        {'model':'gpt-6-astra','usage':{'input_tokens':1,'output_tokens':1,'total_tokens':2}})) as decision, \
                      mock.patch('full_client_bridge.execute_program',side_effect=execute) as executor:
                     bridge._run(run)
                 executor.assert_called_once()
@@ -916,6 +918,7 @@ class FullClientTests(unittest.TestCase):
                     readiness_policy=self.policy(),lease_fds=(world.fileno(),queue.fileno()))
             response={'id':'test-response','model':'gpt-6-astra','status':'completed',
                 'metadata':{'maplebench_run_id':'d'*32},
+                'usage':{'input_tokens':1,'output_tokens':1,'total_tokens':2},
                 'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps({'note':'test','code':'return;'})}]}]}
             with mock.patch.object(bridge,'request',return_value=self.observation()), \
                  mock.patch('full_client_bridge.bounded_request',return_value=response), \

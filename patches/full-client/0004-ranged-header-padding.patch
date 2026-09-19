@@ -1,0 +1,16 @@
+--- a/src/client/Net/Packets/AttackAndSkillPackets.h
++++ b/src/client/Net/Packets/AttackAndSkillPackets.h
+@@ -55,7 +55,12 @@
+                 skip(1);
+                 write_byte(attack.toleft);
+                 skip(7);
+-                // skip(4); if hurricane, piercing arrow or rapidfire
++                // v83's ranged header has four more bytes for these skills.
++                if (attack.skill == 3121004 || attack.skill == 3221001
++                    || attack.skill == 5221004 || attack.skill == 13111002)
++                {
++                    skip(4);
++                }
+             }
+             else
+             {

@@ -16,8 +16,10 @@ import uuid
 from pathlib import Path
 
 from maple_agent import MODELS, PRESS_KEYS_ACK_SECONDS, bounded_request, execute_program, model_decision, validate_rpc
+from model_providers import (bind_request_identity, endpoint_for_model, exchange_receipt,
+                             provider_for_model, request_token_upper_bound, response_identity_matches)
 from full_client_capture import capture_receipt
-from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, validate_contract as validate_native, program as native_program
+from full_client_native import PROTOCOL as NATIVE_PROTOCOL, NATIVE_V2_PROTOCOL, HERO_TOOLKIT_PROTOCOL, validate_contract as validate_native, program as native_program
 from full_client_docker import DockerBindingError, validate_binding
 from full_client_readiness import ReadinessError, observation_matches, observation_sha256, validate_policy
 from full_client_adaptive import AdaptiveError, PROTOCOL as ADAPTIVE_PROTOCOL, run_adaptive, validate_protocol
@@ -237,11 +239,23 @@ for (let i=0;i<12;i++) {
 
 
 class FullClientBridge:
-    def __init__(self, output, key_file=None):
+    def __init__(self, output, key_file=None, *, provider_key_files=None):
         self.output = Path(output)
+        if (provider_key_files is not None and (not isinstance(provider_key_files, dict)
+                or not set(provider_key_files) <= {'openai', 'anthropic'})):
+            raise ControlError('invalid_provider_key_configuration')
+        self.provider_key_files = {name: Path(path) for name, path in (provider_key_files or {}).items() if path}
+        if 'openai' in self.provider_key_files:
+            if key_file and Path(key_file) != self.provider_key_files['openai']:
+                raise ControlError('conflicting_openai_key_configuration')
+            key_file = self.provider_key_files.pop('openai')
+        # The legacy key_file setting is exclusively OpenAI, never a fallback
+        # credential for another provider. Retain it for existing installations.
         self.key_file = Path(key_file) if key_file else None
         if self.key_file is not None:
             validate_private_file(self.key_file)
+        for path in self.provider_key_files.values():
+            validate_private_file(path)
         self.lock = threading.Condition()
         self.client = None
         self.last_seen = 0
@@ -258,6 +272,10 @@ class FullClientBridge:
         self.quarantines = {}
         self.run = {'status': 'idle', 'mode': 'manual', 'model': None}
         self._recover_incomplete()
+
+    def _api_key_file(self, model):
+        provider = provider_for_model(model)
+        return self.key_file if provider == 'openai' else self.provider_key_files.get(provider)
 
     def _recover_incomplete(self):
         if not self.output.is_dir():
@@ -701,8 +719,12 @@ class FullClientBridge:
                 return self._snapshot()
             if not url.endswith('/v1/action') or not isinstance(payload, dict) or payload.get('type') != 'press_keys':
                 raise ValueError('Only full-client keyboard actions are supported')
-            _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},
-                SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL) else {}))
+            scenario=SCENARIO | ({'protocol':self.run['protocol']} if self.run.get('protocol') in (ADAPTIVE_PROTOCOL,NATIVE_PROTOCOL,NATIVE_V2_PROTOCOL,HERO_TOOLKIT_PROTOCOL) else {})
+            owner=self.run.get('adaptiveProtocol') or self.run.get('nativeAcceptance') or {}
+            if owner.get('skill_toolkit') is not None:
+                from full_client_hero_toolkit import sdk_scenario
+                scenario=SCENARIO|sdk_scenario(owner)
+            _, action = validate_rpc({'type':'rpc','id':1,'method':'pressKeys','args':[payload.get('keys'),payload.get('durationMs')]},scenario)
             if self.pending:
                 raise ValueError('Another input is in flight')
             pending = {'id': uuid.uuid4().hex, 'keys': action['keys'], 'durationMs': action['durationMs'],
@@ -852,7 +874,7 @@ class FullClientBridge:
         if native_acceptance is not None:
             try:native_acceptance=validate_native(native_acceptance)
             except (ValueError,TypeError) as error:raise ControlError('invalid_native_acceptance') from None
-            if (not private or mode!='script' or model is not None or duration_seconds!=30
+            if (not private or mode!='script' or model is not None or duration_seconds!=native_acceptance['wall_seconds']
                     or adaptive_protocol is not None or trial_context is not None or readiness_policy is not None
                     or total_token_limit is not None or run_id is None or run_id!=request_id
                     or docker_binding is None or docker_image_id is None
@@ -864,7 +886,7 @@ class FullClientBridge:
             except AdaptiveError as error:raise ControlError(str(error)) from None
             if mode!='api' or duration_seconds!=300 or total_token_limit!=adaptive_protocol['max_total_tokens']:
                 raise ControlError('adaptive_controller_budget_mismatch')
-        if type(duration_seconds) is not int or duration_seconds not in ((30,) if native_acceptance is not None else (300,) if adaptive_protocol is not None else (22, 60)):
+        if type(duration_seconds) is not int or duration_seconds not in ((native_acceptance['wall_seconds'],) if native_acceptance is not None else (300,) if adaptive_protocol is not None else (22, 60)):
             raise ValueError('Run duration must be 22 or 60 seconds')
         if mode == 'script' and native_acceptance is None and duration_seconds != 22:
             raise ValueError('Scripted smoke runs last at most 22 seconds')
@@ -929,7 +951,8 @@ class FullClientBridge:
             if trial_context is not None and (not isinstance(lease_fds,(tuple,list)) or len(lease_fds)!=2
                     or not all(type(fd) is int for fd in lease_fds)):
                 raise ControlError('trial_requires_guard_lock_descriptors')
-            if mode == 'api' and (not self.key_file or not self.key_file.is_file()):
+            key_file = self._api_key_file(model) if mode == 'api' else None
+            if mode == 'api' and (not key_file or not key_file.is_file()):
                 raise ControlError('api_key_not_configured')
             if (self.run['status'] in ('requesting', 'running') or self.run.get('workerActive') or self.leases
                     or self._cancelled(self.run.get('id')) and self.run.get('id') not in self.release_acks
@@ -959,7 +982,8 @@ class FullClientBridge:
                         'workerActive':True,
                         'client':self.client, 'recordingStatus':'pending', 'evidenceStatus':'pending'}
             if native_acceptance is not None:
-                value.update(actionLimit=12,sdkRequestLimit=100,controllerSeconds=30,apiOutcome='not_started',publicationEligible=False)
+                value.update(actionLimit=native_acceptance['max_actions'],sdkRequestLimit=native_acceptance['max_sdk_requests'],
+                    controllerSeconds=native_acceptance['wall_seconds'],apiOutcome='not_started',publicationEligible=False)
             if adaptive_protocol is not None:
                 value.update(actionLimit=adaptive_protocol['max_actions'],sdkRequestLimit=adaptive_protocol['max_sdk_requests'],
                     controllerSeconds=adaptive_protocol['wall_seconds'],cycleProgramSeconds=adaptive_protocol['program_seconds'],
@@ -1038,7 +1062,7 @@ class FullClientBridge:
             code, meta = native_program(run['nativeAcceptance']) if run.get('nativeAcceptance') else SMOKE_CODE, None
             if run['mode'] == 'api':
                 api_started = None
-                key = read_private_file(self.key_file).strip()
+                key = read_private_file(self._api_key_file(run['model'])).strip()
                 prompt = PROMPT.format(program_seconds=program_seconds,
                                        action_limit=action_limit, sdk_request_limit=sdk_request_limit)
                 phase = 'api_request'
@@ -1047,22 +1071,24 @@ class FullClientBridge:
                     'totalTokenLimit':run.get('totalTokenLimit'),'tokenUpperBound':None}
                 write_json(out/'api-request.json', intent)
                 requested = False
+                api_exchange = None
 
                 def api_request(url, payload, credential, timeout):
-                    nonlocal requested, api_outcome, api_started, readiness_receipt, readiness_sha256
+                    nonlocal requested, api_outcome, api_started, readiness_receipt, readiness_sha256, api_exchange
                     if requested:
                         raise ControlError('api_request_limit')
+                    if url != endpoint_for_model(run['model']) or payload.get('model') != run['model']:
+                        raise ControlError('api_provider_mismatch')
                     with self.lock:
                         self._check_cancelled(run['id'])
                     if run.get('trialContext'):
                         if run.get('dockerBinding') is None:
                             raise ControlError('docker_binding_required')
                         validate_binding(run['dockerBinding'])
-                    payload = payload | {'metadata':dict(payload.get('metadata', {}),maplebench_run_id=run['id'])}
+                    payload = bind_request_identity(run['model'], payload, run['id'])
                     # Conservative preflight estimate, not a provider-guaranteed
                     # input cap: UTF-8 bytes plus fixed envelope/metadata allowance.
-                    bound = (len(payload['instructions'].encode())+len(payload['input'].encode())
-                             +len(json.dumps(payload['text']['format']['schema']).encode())+1024+payload['max_output_tokens'])
+                    bound = request_token_upper_bound(run['model'], payload)
                     run['apiTokenUpperBound'] = bound
                     with self.lock:
                         self.run['apiTokenUpperBound'] = bound
@@ -1098,9 +1124,10 @@ class FullClientBridge:
                     response = bounded_request(url, payload, credential, timeout)
                     write_json(out/'api-response.json', response)
                     api_outcome = 'receipt_saved'
-                    if run.get('trialContext') and (not isinstance(response.get('metadata'),dict)
-                            or response['metadata'].get('maplebench_run_id')!=run['id']):
+                    if run.get('trialContext') and not response_identity_matches(run['model'], response, run['id']):
                         raise ControlError('api_run_identity_mismatch')
+                    if provider_for_model(run['model']) == 'anthropic':
+                        api_exchange = exchange_receipt(run['model'], payload, response, run['id'])
                     return response
 
                 try:
@@ -1108,6 +1135,8 @@ class FullClientBridge:
                                                  output_tokens=3000, timeout=50, request_fn=api_request)
                 finally:
                     del key
+                if api_exchange is not None:
+                    meta['provider_exchange'] = api_exchange
                 api_ms = round((time.monotonic()-api_started)*1000) if api_started is not None else 0
                 timeline['api_ended_ms'] = round((time.monotonic()-started)*1000)
                 write_json(out/'response.json', meta)
@@ -1119,6 +1148,14 @@ class FullClientBridge:
                     raise ControlError('api_invalid_program')
                 if meta.get('model') != run['model']:
                     raise ControlError('api_model_mismatch')
+                usage = meta.get('usage')
+                if (not isinstance(usage, dict) or not all(type(usage.get(k)) is int and usage[k] >= 0
+                        for k in ('input_tokens', 'output_tokens', 'total_tokens'))
+                        or usage['input_tokens'] + usage['output_tokens'] != usage['total_tokens']):
+                    raise ControlError('api_usage_missing_or_invalid')
+                if (usage['output_tokens'] > 3000 or run.get('totalTokenLimit') is not None
+                        and usage['total_tokens'] > run['totalTokenLimit']):
+                    raise ControlError('api_actual_token_limit_exceeded')
                 code = choice['code']
                 write_json(out/'program.json', choice)
             else:
@@ -1148,7 +1185,11 @@ class FullClientBridge:
             phase = 'program_execution'
             program_started=time.monotonic()
             input_deadline=program_started+program_seconds
-            result = execute_program(code, SCENARIO | ({'protocol':run['nativeAcceptance']['id']} if run.get('nativeAcceptance') else {}), 'http://127.0.0.1:8840',
+            scenario=SCENARIO
+            if run.get('nativeAcceptance'):
+                from full_client_hero_toolkit import sdk_scenario
+                scenario=SCENARIO|sdk_scenario(run['nativeAcceptance'])
+            result = execute_program(code, scenario, 'http://127.0.0.1:8840',
                                      deadline=time.monotonic()+program_seconds+2, program_seconds=program_seconds,
                                      max_actions=action_limit, max_requests=sdk_request_limit,
                                      request_fn=run_request, step_callback=record_progress,cancel_event=cancel_event,
@@ -1280,8 +1321,14 @@ class FullClientBridge:
         def request(url,payload=None,timeout=3):
             sent=time.monotonic()
             value=self.request(url,payload,timeout,run_id=run['id'],input_deadline=input_deadline)
-            if url.endswith('/v1/action') and value.get('accepted') is True and not first_input:
-                first_input.update(started=sent,acked=time.monotonic())
+            acknowledged=time.monotonic()
+            if url.endswith('/v1/action') and value.get('accepted') is True:
+                if not first_input:
+                    first_input.update(started=sent,acked=acknowledged)
+                if run['adaptiveProtocol'].get('input_timeline_policy') is not None:
+                    value=value|{'input_timing':{'basis':'relay_request_ack_v1',
+                        'requested_ms':round((sent-adaptive_started)*1000),
+                        'acknowledged_ms':round((acknowledged-adaptive_started)*1000)}}
             return value
         def phase(**value):
             nonlocal input_deadline,adaptive_started,readiness
@@ -1310,13 +1357,19 @@ class FullClientBridge:
         def provider(url,body,timeout):
             nonlocal readiness,api_outcome
             check_cancelled()
+            if url!=endpoint_for_model(run['model']) or body.get('model')!=run['model']:
+                raise AdaptiveError('adaptive_api_provider_mismatch')
             remaining=min(timeout,input_deadline-time.monotonic())
             if remaining<=0:raise AdaptiveError('adaptive_wall_deadline')
-            key=read_private_file(self.key_file).strip();api_outcome='uncertain'
+            key=read_private_file(self._api_key_file(run['model'])).strip();api_outcome='uncertain'
             try:return bounded_request(url,body,key,remaining)
             finally:del key
         def execute(code,**kwargs):
-            return execute_program(code,SCENARIO|{'protocol':ADAPTIVE_PROTOCOL},'http://127.0.0.1:8840',request_fn=request,
+            scenario=SCENARIO|{'protocol':ADAPTIVE_PROTOCOL}
+            if run['adaptiveProtocol'].get('skill_toolkit') is not None:
+                from full_client_hero_toolkit import sdk_scenario
+                scenario=SCENARIO|sdk_scenario(run['adaptiveProtocol'])
+            return execute_program(code,scenario,'http://127.0.0.1:8840',request_fn=request,
                 cancel_event=self.cancel_events.get(run['id']),
                 **({'docker_binding':run['dockerBinding']} if run.get('dockerBinding') else {}),
                 **({'docker_image':run['dockerImageId']} if run.get('dockerImageId') else {}),**kwargs)

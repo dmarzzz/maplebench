@@ -60,6 +60,28 @@ class PublicationTests(unittest.TestCase):
 
     def snapshot(self,result):return json.loads((Path(result['site'])/'results.json').read_text())
 
+    def test_theme_closure_is_hash_bound_and_partial_or_unknown_art_is_rejected(self):
+        result=self.prepare();site=Path(result['site'])
+        manifest=publication.verify_package(Path(result['package']),result['content_sha256'])
+        self.assertTrue(set(publication.THEME_ASSETS)<=set(manifest['content']['files']))
+        artwork=site/'henesys-world.png';original=artwork.read_bytes()
+        artwork.write_bytes(original+b'changed')
+        with self.assertRaisesRegex(ValueError,'package_content_changed'):
+            publication.verify_package(Path(result['package']),result['content_sha256'])
+        artwork.write_bytes(original);artwork.unlink()
+        with self.assertRaisesRegex(ValueError,'unexpected_public_file'):
+            publication.file_inventory(site)
+        artwork.write_bytes(original)
+        (site/'unreviewed.png').write_bytes(b'not approved')
+        with self.assertRaisesRegex(ValueError,'unexpected_public_file'):
+            publication.file_inventory(site)
+
+    def test_historical_three_asset_inventory_remains_accepted(self):
+        result=self.prepare();site=Path(result['site'])
+        for name in publication.THEME_ASSETS:(site/name).unlink()
+        inventory=publication.file_inventory(site)
+        self.assertEqual(set(inventory),set(publication.CORE_ASSETS)|{'results.json','recording-manifest.json','vercel.json'})
+
     def test_first_success_publishes_with_all_planned_models_and_no_private_data(self):
         self.attempt(0,xp=0,no_op=True)
         self.fixture.attempt('a'*32)  # A previous attempt must not leak into this cohort.

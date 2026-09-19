@@ -5,7 +5,8 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from full_client_collect import parse_snapshot, save_snapshot, snapshot_sql
+from full_client_collect import parse_snapshot, save_snapshot, snapshot_sql, validate_toolkit_snapshot
+from full_client_hero_toolkit import toolkit, expected_keymap, expected_skills
 
 
 class CollectorTest(unittest.TestCase):
@@ -53,6 +54,45 @@ class CollectorTest(unittest.TestCase):
             self.assertEqual(len(digest), 64)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             with self.assertRaises(FileExistsError): save_snapshot(path, self.parse())
+
+    def hero_raw(self):
+        policy=toolkit()
+        return '\n'.join(json.dumps(row) for row in [self.row,
+            *sorted(self.keys+expected_keymap(policy)),
+            *({'learned_skill':row} for row in expected_skills(policy))])
+
+    def parse_hero(self,raw=None):
+        return parse_snapshot(self.hero_raw() if raw is None else raw,run_id='attempt-hero',
+            captured_at_ms=1000,character_id=7,account_id=3,skill_toolkit=toolkit())
+
+    def test_optional_hero_snapshot_binds_seventeen_controls_and_twenty_five_learned_skills(self):
+        result=self.parse_hero()
+        self.assertEqual(result['learned_skills'],expected_skills(toolkit()))
+        self.assertEqual(result['skill_toolkit_id'],toolkit()['id'])
+        self.assertEqual(result['keymap'],sorted(self.keys+expected_keymap(toolkit())))
+        self.assertEqual(len(result['learned_skills']),25)
+        self.assertEqual(len(result['keymap']),20)
+        self.assertNotIn('learned_skills',self.parse())
+        self.assertNotIn('FROM skills',snapshot_sql(7,3))
+        sql=snapshot_sql(7,3,skill_toolkit=toolkit())
+        self.assertIn('READ ONLY',sql)
+        self.assertIn('FROM skills',sql)
+        self.assertIn('IN (29,30,31,32,33,34,35,39,44,45,46,47,48,49,50,51,52,53,57,85)',sql)
+        self.assertEqual(sql.count('COMMIT;'),1)
+
+    def test_hero_snapshot_rejects_missing_wrong_duplicate_or_misordered_skill_rows(self):
+        raw=self.hero_raw();rows=raw.splitlines()
+        for values in (rows[:-1],rows+[rows[-1]],rows[:-2]+[rows[-1],rows[-2]],
+                       rows[:-1]+[json.dumps({'learned_skill':[1121008,29]})]):
+            with self.subTest(values=values[-2:]),self.assertRaises(ValueError):
+                self.parse_hero('\n'.join(values))
+        for mutate in (lambda value:value['keymap'][1].__setitem__(1,4),
+                       lambda value:value['keymap'].pop(1),
+                       lambda value:value['learned_skills'][0].__setitem__(1,True),
+                       lambda value:value['character'].update(job=111),
+                       lambda value:value.update(skill_toolkit_id='unbound')):
+            value=self.parse_hero();mutate(value)
+            with self.assertRaises(ValueError):validate_toolkit_snapshot(value,toolkit())
 
 
 if __name__ == '__main__': unittest.main()

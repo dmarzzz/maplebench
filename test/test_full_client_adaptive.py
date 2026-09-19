@@ -187,6 +187,44 @@ class AdaptiveTests(unittest.TestCase):
         for slot in ('PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2'):
             self.assertIn(slot,text)
 
+    def test_optional_knowledge_axis_preserves_legacy_prompt_and_is_hash_bound(self):
+        legacy = adaptive.prompt(self.h.p)
+        self.assertNotIn('Frozen optional knowledge axis follows.', legacy)
+        protocol = copy.deepcopy(self.h.p)
+        protocol['skill_toolkit'] = adaptive.hero_toolkit.toolkit()
+        protocol['profile'] = adaptive.hero_toolkit.profile(protocol['skill_toolkit'])
+        protocol['knowledge_pack'] = adaptive.knowledge_reference()
+        protocol['input_timeline_policy'] = copy.deepcopy(adaptive.INPUT_TIMELINE_POLICY)
+        text = adaptive.prompt(protocol)
+        self.assertEqual(legacy, adaptive.prompt(copy.deepcopy(self.h.p)))
+        self.assertNotEqual(text, legacy)
+        self.assertIn('signed persisted net XP', text)
+        self.assertIn('hero-180-map-240040511-v1', text)
+        self.assertIn('relay command intervals', text)
+        self.assertIn('SKILL_10: Power Guard level 30', text)
+        self.assertIn('"native_release_result": null', text)
+        protocol['knowledge_pack']['files'][0]['sha256'] = '0' * 64
+        with self.assertRaises(adaptive.AdaptiveError) as caught:
+            adaptive.prompt(protocol)
+        self.assertEqual(str(caught.exception), 'adaptive_knowledge_pack_mismatch')
+
+    def test_hero_180_pack_cannot_be_attached_to_another_profile(self):
+        protocol = copy.deepcopy(self.h.p)
+        protocol['profile'] = {'id':'hero-150','class_name':'Hero','level':150,
+            'skill_keys':copy.deepcopy(self.h.p['profile']['skill_keys'])}
+        protocol['skill_toolkit'] = adaptive.hero_toolkit.toolkit()
+        protocol['knowledge_pack'] = adaptive.knowledge_reference()
+        with self.assertRaises(adaptive.AdaptiveError) as caught:
+            adaptive.validate_protocol(protocol)
+        self.assertEqual(str(caught.exception), 'invalid_adaptive_skill_toolkit')
+
+    def test_input_timeline_policy_is_exact(self):
+        protocol = copy.deepcopy(self.h.p)
+        protocol['input_timeline_policy'] = {'id':'relay-input-interval-v2'}
+        with self.assertRaises(adaptive.AdaptiveError) as caught:
+            adaptive.validate_protocol(protocol)
+        self.assertEqual(str(caught.exception), 'invalid_adaptive_input_timeline_policy')
+
     def test_neutral_skill_slots_are_versioned_and_legacy_keys_unchanged(self):
         from maple_agent import validate_rpc
         rpc={'type':'rpc','id':1,'method':'pressKeys','args':[['PRIMARY_SKILL'],100]}

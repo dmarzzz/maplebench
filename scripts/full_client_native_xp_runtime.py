@@ -323,7 +323,7 @@ class NativeXpRuntime(CosmicRuntime):
         self.collect_short_control()
         self.intent('collect_native_xp')
         arts = self.state['artifacts']
-        final = self.host.snapshot(self.config['mysql'], self.run_id)
+        final = self.snapshot()
         self.event('collection_completed', final['captured_at_ms'])
         arts['final_db'] = self.artifact('final-db.json', final)
         for key, filename, maximum in (('native_save', 'save.jsonl', JSON_LIMIT),
@@ -394,7 +394,7 @@ class NativeXpRuntime(CosmicRuntime):
             self.sql(ref_bytes(self.config['baseline'], MAX_SQL))
         # An uncertain initial restore (no reset proof), or a lost final SQL
         # reply, permits inspection only. Neither justifies another SQL write.
-        restored = self.host.snapshot(self.config['mysql'], self.run_id)
+        restored = self.snapshot()
         require(restored.get('account_logged_in') == 0
                 and same_json(restored['character'], self.baseline['character'])
                 and same_json(restored['keymap'], self.baseline['keymap']), 'native_xp_restore_unconfirmed')

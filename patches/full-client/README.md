@@ -9,6 +9,24 @@ From that checkout, apply `0001-demo-control-and-observation.patch` and
 Build with the upstream documented workflow. The verified ARM64 fallback used
 Emscripten 4.0.21, one build job, two CPUs, a 3500 MiB memory cap, and no swap.
 
+## Expanded v1 candidate
+
+The original two-patch instructions above describe the early integration. The
+expanded Hero candidate uses the complete ordered Client C series: `0001` through
+`0006`, then `0008` through `0023` (there is no `0007`). Exact patch and binary
+hashes, upstream revision and source revision are recorded in
+[V1_NATIVE_BUILD_INPUTS.json](../../docs/V1_NATIVE_BUILD_INPUTS.json).
+
+The recovered JavaScript and WebAssembly bytes independently matched those pins.
+Their historical build receipt is not fresh native skill qualification. Keep the
+whole patch series when reproducing that candidate: later patches depend on earlier
+combat, packet and observation changes. In particular, Combo/finishers and ordinary
+multi-field buffs require `0017` and `0023`. The included monster-status client
+decoder requires the matching Cosmic `0002-monster-status-order.patch`.
+
+Game binaries and assets remain private. A newly instrumented server receives its
+own build/runtime hash before the cohort; it does not inherit the old JAR's pin.
+
 The first patch:
 
 - Queues browser keyboard callbacks onto the game loop to avoid entering an

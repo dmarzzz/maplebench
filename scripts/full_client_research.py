@@ -4,6 +4,7 @@ This is a reporting layer, not a scorer. Adaptive and peak-rate scores remain
 unknown until their own aggregate evidence adapter is accepted.
 """
 import math
+import statistics
 from full_client_dashboard import model
 
 PROTOCOLS = {
@@ -23,6 +24,40 @@ TASKS = {'basic_combat':'Basic combat','sustained_hunting':'Sustained hunting',
 
 
 def finite(value):return type(value) in (int,float) and math.isfinite(value) and abs(value)<2**53
+
+
+def operational_reliability(rows):
+    """Evidence completion across four-attempt groups; no causal fault attribution.
+
+    Poor verified scores are valid. A failed attempt can be a model-program or
+    infrastructure failure, so the public disposition deliberately says neither.
+    """
+    if not isinstance(rows,list) or not 4<=len(rows)<=80 or len(rows)%4:
+        raise ValueError('reliability_group_shape')
+    groups=[];consecutive=0
+    for index in range(0,len(rows),4):
+        members=rows[index:index+4];causes={};scored=recorded=attempted=0
+        for row in members:
+            status=row.get('status')
+            if status!='not_started':attempted+=1
+            valid=(status=='completed' and row.get('score_verification')=='adaptive_runner_verified_receipts_rechecked'
+                and row.get('attribution')=='exact' and finite(row.get('persisted_xp'))
+                and row.get('adaptive',{}).get('verification')=='all_cycle_receipts_rechecked')
+            if valid:scored+=1
+            if valid and row.get('recording_publication')=='verified_bytes' and row.get('recording'):
+                recorded+=1;continue
+            cause=('recording_unavailable' if valid else
+                {'not_started':'not_started','running':'in_progress','requesting':'in_progress',
+                 'recovering':'in_progress','failed':'attempt_failed','interrupted':'interrupted',
+                 'recovered':'recovery_invalidated'}.get(status,'evidence_unavailable'))
+            causes[cause]=causes.get(cause,0)+1
+        clean=recorded==4
+        consecutive=consecutive+1 if clean else 0
+        groups.append({'group':index//4+1,'planned':4,'attempted':attempted,'verified_scores':scored,
+            'verified_recordings':recorded,'clean':clean,'causes':causes})
+    return {'schema_version':1,'groups':groups,'required_consecutive_clean_groups':3,
+        'consecutive_clean_groups':consecutive,'gate_passed':consecutive>=3,
+        'scope':'observed_release_operations_not_an_sla'}
 
 
 def summarize(snapshot):
@@ -80,6 +115,10 @@ def summarize(snapshot):
                            'mean':sum(samples)/len(samples) if samples else None,
                            'minimum':min(samples) if samples else None,'maximum':max(samples) if samples else None,
                            'uncertainty':'not_estimated','ranked':False})
+            if len(members)>1:
+                values[-1].update(samples=samples,median=statistics.median(samples) if samples else None,
+                    sample_standard_deviation=statistics.stdev(samples) if len(samples)>1 else None,
+                    eligible_fraction=len(samples)/attempted if attempted else None)
         table.append({'model':selected,'cells':values})
     used={column['protocol_id'] for column in columns.values()}
     return {'schema_version':1,'protocols':[{'id':key,**value} for key,value in PROTOCOLS.items() if key in used],

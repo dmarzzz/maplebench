@@ -1,0 +1,135 @@
+--- a/src/client/Character/Player.cpp
++++ b/src/client/Character/Player.cpp
+@@ -28,6 +28,8 @@
+ #include "../IO/UITypes/UIStatsInfo.h"
+ #include "../Net/Packets/GameplayPackets.h"
+ #include "../Net/Packets/InventoryPackets.h"
++#include "nlnx/node.hpp"
++#include "nlnx/nx.hpp"
+ 
+ namespace jrc
+ {
+@@ -325,6 +327,30 @@
+                 }
+             }
+         }
++
++        if (move.get_id() == 4111002)
++        {
++            // The server pays this ordinary item cost before granting the buff.
++            // Check current inventory only; never remove or synthesize items here.
++            const nl::node data = nl::nx::skill["411.img"]["skill"]["4111002"]
++                ["level"][std::to_string(level)];
++            const int32_t item = data["itemCon"];
++            const int32_t required = data["itemConNo"];
++            if (item <= 0 || required <= 0)
++                return SpecialMove::FBR_OTHER;
++            const InventoryType::Id type = InventoryType::by_item_id(item);
++            int32_t available = 0;
++            for (int16_t slot = 1; slot <= inventory.get_slotmax(type); ++slot)
++                if (inventory.get_item_id(type, slot) == item)
++                    available += std::max<int16_t>(0, inventory.get_item_count(type, slot));
++            if (available < required)
++                return SpecialMove::FBR_OTHER;
++        }
++        // Cosmic requires twice the projectile count while Partner is active,
++        // even with Shadow Stars. Its server alone decides actual consumption.
++        if (move.is_attack() && weapon == Weapon::CLAW
++            && has_buff(Buffstat::SHADOWPARTNER))
++            bullets /= 2;
+ 
+         return move.can_use(level, weapon, job, hp, mp, bullets);
+     }
+@@ -534,6 +560,22 @@
+         return buffs[stat].value > 0;
+     }
+ 
++    int32_t Player::shadow_partner_percent(bool skill) const
++    {
++        const Buff& partner = buffs[Buffstat::SHADOWPARTNER];
++        const int32_t level = get_skilllevel(4111002);
++        if (partner.stat != Buffstat::SHADOWPARTNER || partner.skillid != 4111002
++            || partner.value <= 0 || level < 1 || level > 30)
++            return 0;
++        const nl::node data = nl::nx::skill["411.img"]["skill"]["4111002"]
++            ["level"][std::to_string(level)];
++        // A learned-level change must not upgrade a previously received buff.
++        if (static_cast<int32_t>(data["x"]) != partner.value)
++            return 0;
++        const int32_t percent = data[skill ? "y" : "x"];
++        return percent > 0 && percent <= 100 ? percent : 0;
++    }
++
+     void Player::change_skill(int32_t skill_id, int32_t skill_level,
+         int32_t masterlevel, int64_t expiration) {
+ 
+--- a/src/client/Character/Player.h
++++ b/src/client/Character/Player.h
+@@ -112,6 +112,9 @@
+         /// Check if a skill is on cooldown.
+         bool has_cooldown(int32_t skill_id) const;
+ 
++        /// Damage percent from the received Hermit buff and its learned level.
++        int32_t shadow_partner_percent(bool skill) const;
++
+         /// Change the player's level, display the levelup effect.
+         void change_level(uint16_t level);
+         /// Change the player's job, display the job change effect.
+--- a/src/client/Gameplay/Combat/Combat.cpp
++++ b/src/client/Gameplay/Combat/Combat.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "Combat.h"
++#include "ShadowPartnerPolicy.h"
+ 
+ #include "../../Character/SkillId.h"
+ #include "../../Data/SkillData.h"
+@@ -142,7 +143,16 @@
+ 
+             move.apply_stats(player, attack);
+ 
++            const int32_t partner = attack.type == Attack::RANGED && attack.claw_projectile
++                ? player.shadow_partner_percent(move.is_skill()) : 0;
++            const bool paired = partner > 0 && attack.hitcount > 0 && attack.hitcount <= 7;
++            if (paired)
++                attack.hitcount *= 2;
++            // One native damage pass rolls every primary and partner hit. Keep
++            // second-half ordering for the server packet and local effects.
+             AttackResult result = mobs.send_attack(attack);
++            if (paired)
++                scale_shadow_partner(result, partner);
+             result.attacker = player.get_oid();
+             extract_effects(player, move, result);
+ 
+--- /dev/null
++++ b/src/client/Gameplay/Combat/ShadowPartnerPolicy.h
+@@ -0,0 +1,28 @@
++// MapleBench Shadow Partner packet-line scaling. AGPL-3.0-or-later.
++#pragma once
++#include "Attack.h"
++#include <algorithm>
++
++namespace jrc
++{
++    inline void scale_shadow_partner(AttackResult& result, int32_t percent)
++    {
++        if (result.type != Attack::RANGED || percent < 1 || percent > 100
++            || result.hitcount < 2 || result.hitcount > 14 || result.hitcount % 2)
++            return;
++        for (auto& target : result.damagelines)
++        {
++            auto& lines = target.second;
++            if (lines.size() != result.hitcount)
++                continue;
++            for (size_t i = result.hitcount / 2; i < lines.size(); ++i)
++            {
++                // Preserve independently rolled misses/crit flags. Scale the
++                // native defended final damage, without a second critical roll.
++                if (lines[i].first > 0)
++                    lines[i].first = static_cast<int32_t>(std::max<int64_t>(1,
++                        static_cast<int64_t>(lines[i].first) * percent / 100));
++            }
++        }
++    }
++}

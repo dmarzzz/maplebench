@@ -5,23 +5,23 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     .then(session => { Module.MapleBenchSession = session; }).catch(() => {});
   const game = document.getElementById('canvas');
   if (!game) return;
-  const ink = {base:'#10120f',panel:'#191d17',line:'#38432e',text:'#eef3dc',muted:'#a8b29b',
-    green:'#c3f45b',violet:'#b59af4',orange:'#ff9956',danger:'#ff776b'};
+  const ink = {base:'#fffefa',panel:'#f1f5e9',line:'#cad5bd',text:'#303631',muted:'#626d64',
+    green:'#376c51',violet:'#806299',orange:'#a96d24',danger:'#a53d38'};
   const leafPath = 'M12 1 15 7 20 5 18 11 23 13 15 18 13 17 13 23 11 23 11 17 9 18 1 13 6 11 4 5 9 7Z';
   const style = document.createElement('style');
   style.textContent = `
-    #maplebench-shell{--mb-signal:${ink.green};position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;background:${ink.base};color:${ink.text};font:12px system-ui,sans-serif;text-align:left;color-scheme:dark}
+    #maplebench-shell{--mb-signal:${ink.green};position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;background:${ink.base};color:${ink.text};font:12px system-ui,sans-serif;text-align:left;color-scheme:light}
     #maplebench-shell *{box-sizing:border-box}
-    #maplebench-shell header{flex:none;position:relative;padding:8px 12px 7px;border-top:3px solid #66528b;border-bottom:1px solid ${ink.line};display:grid;gap:4px;background:linear-gradient(105deg,#22202c 0%,${ink.base} 65%)}
+    #maplebench-shell header{flex:none;position:relative;padding:8px 12px 7px;border-top:3px solid #8fa96d;border-bottom:1px solid ${ink.line};display:grid;gap:4px;background:linear-gradient(105deg,#edf2e4 0%,${ink.base} 65%)}
     #maplebench-shell header::after{content:'';position:absolute;bottom:-1px;left:0;width:72px;height:2px;background:var(--mb-signal)}
     #maplebench-shell .mb-title{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
     #maplebench-shell .mb-brand{display:flex;align-items:center;gap:7px;min-width:0}
     #maplebench-shell .mb-leaf{width:20px;height:22px;flex:none;fill:${ink.orange}}
-    #maplebench-shell .mb-wordmark{font:900 20px/1 'Arial Narrow',Impact,sans-serif;letter-spacing:-.04em}
+    #maplebench-shell .mb-wordmark{font:900 20px/1 'Segoe UI',sans-serif;letter-spacing:-.04em}
     #maplebench-shell .mb-wordmark b{color:${ink.green};font-weight:inherit}
-    #maplebench-shell .mb-engine{font:9px/1.2 ui-monospace,monospace;letter-spacing:.06em;color:${ink.muted};border-left:1px solid #5e5074;padding-left:9px;margin-left:3px}
+    #maplebench-shell .mb-engine{font:9px/1.2 ui-monospace,monospace;letter-spacing:.06em;color:${ink.muted};border-left:1px solid #cad5bd;padding-left:9px;margin-left:3px}
     #maplebench-shell .mb-capture{flex:none;min-width:55px;text-align:center;font:700 10px/1.2 ui-monospace,monospace;letter-spacing:.06em;color:${ink.green};border:1px solid ${ink.line};padding:4px 7px;clip-path:polygon(0 0,calc(100% - 5px) 0,100% 5px,100% 100%,0 100%)}
-    #maplebench-shell .mb-capture[data-recording=true]{color:${ink.orange};border-color:#965830;background:#2e2118}
+    #maplebench-shell .mb-capture[data-recording=true]{color:${ink.orange};border-color:#c9a878;background:#fff1d8}
     #maplebench-shell .mb-controller{border-left:3px solid var(--mb-signal);padding-left:7px;font-weight:750;font-size:15px;line-height:1.2;overflow-wrap:anywhere}
     #maplebench-shell .mb-status{color:${ink.muted};font-size:10px;line-height:1.3;overflow-wrap:anywhere}
     #maplebench-shell[data-alert=true]{--mb-signal:${ink.orange}}
@@ -29,14 +29,14 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     #maplebench-shell .mb-telemetry{display:grid;grid-template-columns:1fr 1fr;gap:12px;font:11px/1.3 ui-monospace,monospace;font-variant-numeric:tabular-nums}
     #maplebench-shell .mb-vital{min-width:0;color:${ink.green}}
     #maplebench-shell .mb-vital-mp{color:${ink.violet}}
-    #maplebench-shell .mb-meter{height:4px;margin-top:3px;background:#30372a;overflow:hidden}
+    #maplebench-shell .mb-meter{height:4px;margin-top:3px;background:#dfe6d6;overflow:hidden}
     #maplebench-shell .mb-meter-fill{width:0;height:100%;background:repeating-linear-gradient(90deg,currentColor 0 8px,transparent 8px 10px)}
-    #maplebench-shell .mb-readout{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px;font:10px/1.3 ui-monospace,monospace;color:#d2dbc3}
+    #maplebench-shell .mb-readout{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px;font:10px/1.3 ui-monospace,monospace;color:#4b514d}
     #maplebench-shell .mb-note{color:${ink.muted};font-size:9px;line-height:1.2;letter-spacing:.04em}
     #maplebench-shell .mb-note strong{font-weight:700;color:${ink.orange}}
-    #maplebench-shell .mb-stage{flex:1;min-height:0;min-width:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#070906;border-inline:1px solid #262d21}
+    #maplebench-shell .mb-stage{flex:1;min-height:0;min-width:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#273b2e;border-inline:1px solid #b8c7a3}
     #maplebench-shell canvas{display:block!important;position:static!important;margin:0!important;border:0!important;flex:none;max-width:none!important;max-height:none!important;width:var(--mb-canvas-width)!important;height:var(--mb-canvas-height)!important}
-    #maplebench-shell footer{flex:none;background:${ink.panel};border-top:1px solid ${ink.line};border-left:3px solid #66528b;padding:6px 10px;max-height:45%;overflow:auto}
+    #maplebench-shell footer{flex:none;background:${ink.panel};border-top:1px solid ${ink.line};border-left:3px solid #8fa96d;padding:6px 10px;max-height:45%;overflow:auto}
     #maplebench-shell .mb-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
     #maplebench-shell details{flex:1;min-width:150px}
     #maplebench-shell details[open]{flex-basis:100%}
@@ -45,10 +45,10 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     #maplebench-shell summary::marker{color:${ink.orange}}
     #maplebench-shell .mb-controls{display:flex;flex-wrap:wrap;gap:5px;padding:5px 0}
     #maplebench-shell .mb-models{border-top:1px solid ${ink.line};margin-top:4px;padding-top:8px}
-    #maplebench-shell button{border:1px solid #515c44;border-radius:0;background:#252c20;color:${ink.text};padding:6px 8px;font:600 11px/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap}
-    #maplebench-shell .mb-models button{border-color:#6f5c94;background:#292333;color:#e0d4ff}
-    #maplebench-shell button.mb-record{border-color:#946037;color:${ink.orange};background:#30251c}
-    #maplebench-shell button:hover:not(:disabled){border-color:${ink.green};background:#354129;color:${ink.text}}
+    #maplebench-shell button{border:1px solid #c9d4bf;border-radius:4px;background:#f1f5e9;color:${ink.text};padding:6px 8px;font:600 11px/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+    #maplebench-shell .mb-models button{border-color:#c4b2d0;background:#f2ecf6;color:#78538b}
+    #maplebench-shell button.mb-record{border-color:#c9a878;color:${ink.orange};background:#fff1d8}
+    #maplebench-shell button:hover:not(:disabled){border-color:${ink.green};background:#e4edd9;color:${ink.text}}
     #maplebench-shell button:disabled{opacity:.4;cursor:default}
     #maplebench-shell button:focus-visible,#maplebench-shell summary:focus-visible{outline:2px solid ${ink.green};outline-offset:2px}
     #maplebench-shell .mb-notice{color:${ink.muted};font-size:10px;margin-top:4px;overflow-wrap:anywhere}
@@ -109,10 +109,15 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
 
   const keyNames = {LEFT:'ArrowLeft',RIGHT:'ArrowRight',UP:'ArrowUp',DOWN:'ArrowDown',JUMP:'Space',
     ATTACK:'ControlLeft',BRANDISH:'KeyA',COMBO:'KeyS',BOOSTER:'KeyD',MAPLE_WARRIOR:'KeyF',HP_POTION:'KeyQ',MP_POTION:'KeyW'};
-  const skillKeyNames={PRIMARY_SKILL:'KeyA',SECONDARY_SKILL:'KeyS',BUFF_1:'KeyD',BUFF_2:'KeyF'};
+  const skillKeyNames={PRIMARY_SKILL:'KeyA',SECONDARY_SKILL:'KeyS',BUFF_1:'KeyD',BUFF_2:'KeyF',
+    SKILL_5:'KeyG',SKILL_6:'KeyH',SKILL_7:'KeyZ',SKILL_8:'KeyX',SKILL_9:'KeyC',SKILL_10:'KeyV',
+    SKILL_11:'KeyB',SKILL_12:'KeyN',SKILL_13:'KeyM',SKILL_14:'Comma',SKILL_15:'Period',SKILL_16:'Slash',SKILL_17:'Semicolon'};
   const skillNamesByCode=Object.fromEntries(Object.entries(skillKeyNames).map(([name,code])=>[code,name]));
   const namesByCode = Object.fromEntries(Object.entries(keyNames).map(([name, code]) => [code, name]));
-  const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87};
+  const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,
+    KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87,KeyG:71,KeyH:72,KeyZ:90,KeyX:88,KeyC:67,KeyV:86,
+    KeyB:66,KeyN:78,KeyM:77,Comma:188,Period:190,Slash:191,Semicolon:186};
+  const punctuationKeys={Comma:',',Period:'.',Slash:'/',Semicolon:';'};
   const held = new Map(), physical = new Set(), manualButtons = [], runButtons = [];
   const cancelledRuns = new Set();
   let run = {status:'idle',mode:'manual',model:null}, baseline = null, baselineScope = 'session';
@@ -131,7 +136,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     baseline = fresh(observation) ? {exp:observation.character.exp,level:observation.character.level} : null;
   };
   const key = (code, type) => window.dispatchEvent(new KeyboardEvent(type, {
-    key:code.startsWith('Key') ? code.slice(3).toLowerCase() : code === 'Space' ? ' ' : code === 'ControlLeft' ? 'Control' : code,
+    key:code.startsWith('Key') ? code.slice(3).toLowerCase() : code === 'Space' ? ' ' : code === 'ControlLeft' ? 'Control' : punctuationKeys[code]||code,
     code,keyCode:codes[code],which:codes[code],bubbles:true,cancelable:true
   }));
   const release = code => { clearTimeout(held.get(code)); held.delete(code); key(code,'keyup'); };
@@ -177,7 +182,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
     const observation = observe(), available = fresh(observation), character = observation.character || {};
     if (!baseline && available) setBaseline(activeRun() ? 'run' : 'session');
     const model = run.mode === 'api' ? (run.model || 'model unavailable') : null;
-    const mode = activeRun() ? (run.mode === 'api' ? `OpenAI API · ${model}` : run.nativeAcceptance ? `Native acceptance · ${run.nativeAcceptance.profile.class_name} · no model` : 'Scripted SDK · no evaluated model')
+    const mode = activeRun() ? (run.mode === 'api' ? `${model?.startsWith('claude-') ? 'Anthropic' : 'OpenAI'} API · ${model}` : run.nativeAcceptance ? `Native acceptance · ${run.nativeAcceptance.profile.class_name} · no model` : 'Scripted SDK · no evaluated model')
       : held.size || physical.size ? 'Manual controls · no active model' : 'Idle · no active model';
     let state = !relayConnected ? 'Relay disconnected · inputs released'
       : !available ? 'Waiting for fresh client state'
@@ -251,7 +256,9 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
   async function startRecording(autoRunId = null) {
     if (capture) return;
     if (saving || pendingUpload || closed) return;
-    const output = document.createElement('canvas'), headerHeight = 120;
+    const expandedToolkit=run.adaptiveProtocol?.skill_toolkit||run.nativeAcceptance?.skill_toolkit;
+    const fullToolkit=expandedToolkit?.skills?.length>10;
+    const output = document.createElement('canvas'), headerHeight = fullToolkit?206:expandedToolkit?180:154;
     output.width = game.width; output.height = game.height + headerHeight;
     const ctx = output.getContext('2d');
     const durationPolicy=run.nativeAcceptance?.capture_duration_policy || run.adaptiveProtocol?.capture_duration_policy;
@@ -264,15 +271,15 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       const width=output.width, alert=data.stale || !relayConnected || data.alive===false;
       const signal=alert ? ink.orange : ink.green;
       ctx.fillStyle=ink.base;ctx.fillRect(0,0,width,headerHeight);
-      ctx.fillStyle='#24202e';ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(286,0);ctx.lineTo(262,29);ctx.lineTo(0,29);ctx.fill();
-      ctx.fillStyle='#66528b';ctx.fillRect(0,0,width,3);
+      ctx.fillStyle='#edf2e4';ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(286,0);ctx.lineTo(262,29);ctx.lineTo(0,29);ctx.fill();
+      ctx.fillStyle='#8fa96d';ctx.fillRect(0,0,width,3);
       ctx.save();ctx.translate(12,7);ctx.scale(.8,.8);ctx.fillStyle=ink.orange;ctx.fill(new Path2D(leafPath));ctx.restore();
-      ctx.font='900 20px "Arial Narrow",Impact,sans-serif';ctx.fillStyle=ink.text;
+      ctx.font='800 20px sans-serif';ctx.fillStyle=ink.text;
       ctx.fillText('MAPLE',39,24);const brandWidth=ctx.measureText('MAPLE').width;
       ctx.fillStyle=ink.green;ctx.fillText('BENCH',39+brandWidth,24);
       ctx.font='10px monospace';ctx.fillStyle=ink.muted;ctx.fillText('JOURNEY × COSMIC',283,21);
       ctx.fillStyle=ink.orange;ctx.font='bold 10px monospace';ctx.fillText('UNRANKED',width-186,21);
-      ctx.strokeStyle='#946037';ctx.strokeRect(width-116,8,104,19);
+      ctx.strokeStyle='#c9a878';ctx.strokeRect(width-116,8,104,19);
       ctx.fillText(item.encodedMode&&!item.frames?'● ARMING':`● REC ${((performance.now()-item.startedAt)/1000).toFixed(1)}s`,width-108,21);
       ctx.fillStyle=signal;ctx.fillRect(0,34,4,17);
       ctx.font='bold 17px sans-serif';ctx.fillStyle=ink.text;fitText(ctx,data.mode,12,47,width-24);
@@ -280,7 +287,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       const vitalWidth=Math.floor((width-36)*.3), mpX=24+vitalWidth, readoutX=mpX+vitalWidth+12;
       const meter=(label,value,x,color)=>{
         ctx.fillStyle=color;ctx.font='bold 12px monospace';fitText(ctx,label,x,82,vitalWidth);
-        ctx.fillStyle='#30372a';ctx.fillRect(x,88,vitalWidth,4);
+        ctx.fillStyle='#dfe6d6';ctx.fillRect(x,88,vitalWidth,4);
         ctx.fillStyle=color;
         for(let offset=0;offset<vitalWidth*value;offset+=10) ctx.fillRect(x+offset,88,Math.min(8,vitalWidth*value-offset),4);
       };
@@ -289,7 +296,22 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       ctx.fillStyle=ink.text;ctx.font='11px monospace';fitText(ctx,data.xp,readoutX,81,width-readoutX-12);
       ctx.fillStyle=ink.muted;fitText(ctx,data.keys,readoutX,97,width-readoutX-12);
       ctx.font='10px sans-serif';ctx.fillStyle=ink.muted;
-      fitText(ctx,'ACTUAL CLIENT CANVAS / Client telemetry · no server score',12,110,width-24);
+      fitText(ctx,'Actual client canvas · client telemetry, not persisted score',12,110,width-24);
+      // These keycaps reflect the browser's actual held-key state at this rendered
+      // frame. They make no claim that an input caused a cast, hit or XP award.
+      const controls=['LEFT','RIGHT','UP','DOWN','JUMP','ATTACK','PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2','HP_POTION','MP_POTION'];
+      const short=['←','→','↑','↓','Jump','Attack','Skill 1','Skill 2','Buff 1','Buff 2','HP','MP'];
+      if(expandedToolkit){controls.push('SKILL_5','SKILL_6','SKILL_7','SKILL_8','SKILL_9','SKILL_10');short.push('Rush','Coma','Panic','Stance','Rage','Guard');}
+      if(fullToolkit){controls.push('SKILL_11','SKILL_12','SKILL_13','SKILL_14','SKILL_15','SKILL_16','SKILL_17');short.push('Enrage','Will','Shout','Crash','Iron body','P. strike','S. blast');}
+      const columns=12,gap=3,keyWidth=(width-24-gap*(columns-1))/columns;
+      for(let index=0;index<controls.length;index++){
+        const name=controls[index],code=skillKeyNames[name]||keyNames[name];
+        const down=Boolean(code&&(held.has(code)||physical.has(code))),x=12+(index%columns)*(keyWidth+gap),y=119+Math.floor(index/columns)*26;
+        ctx.fillStyle=down?ink.orange:'#edf0e4';ctx.fillRect(x,y,keyWidth,23);
+        ctx.strokeStyle=down?ink.orange:ink.line;ctx.strokeRect(x+.5,y+.5,keyWidth-1,22);
+        ctx.fillStyle=down?ink.base:ink.muted;ctx.font='bold 10px sans-serif';
+        fitText(ctx,short[index],x+4,y+15,keyWidth-8);
+      }
       ctx.fillStyle=ink.line;ctx.fillRect(0,headerHeight-1,width,1);
       ctx.fillStyle=signal;ctx.fillRect(0,headerHeight-2,72,2);
       ctx.drawImage(game,0,headerHeight,output.width,game.height);

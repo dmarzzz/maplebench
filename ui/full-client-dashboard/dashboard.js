@@ -26,6 +26,62 @@
   }
   let replayFocus=null,replayRunId=null,replaySection=null,replayCue=null,replayStart=0;
   const replay=$('replay'),player=$('replay-video');
+  let replayEvents=null;
+  const replayControls=new Set(['LEFT','RIGHT','UP','DOWN','JUMP','ATTACK','PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2','HP_POTION','MP_POTION','SKILL_5','SKILL_6','SKILL_7','SKILL_8','SKILL_9','SKILL_10','SKILL_11','SKILL_12','SKILL_13','SKILL_14','SKILL_15','SKILL_16','SKILL_17']);
+  function checkedReplayTimeline(value){
+    if(!value||value.schema_version!==1||value.clock!=='recording_media_ms'||value.input_basis!=='relay_request_ack_v1'
+        ||!Number.isFinite(value.duration_ms)||value.duration_ms<=0||value.duration_ms>335000
+        ||!Number.isFinite(value.timing_uncertainty_ms)||value.timing_uncertainty_ms<0||value.timing_uncertainty_ms>100)return null;
+    for(const [field,max,width] of [['api_intervals',64,3],['input_intervals',2400,5]]){
+      const rows=value[field];if(rows===null&&field==='input_intervals')continue;
+      if(!Array.isArray(rows)||rows.length>max)return null;
+      let previous=-1,cycle=-1;
+      for(const row of rows){
+        if(!Array.isArray(row)||row.length!==width||!row.slice(0,3).every(Number.isInteger)
+            ||row[0]<0||row[1]<row[0]||row[1]>value.duration_ms||row[0]<previous||row[2]<cycle||row[2]<0||row[2]>=64)return null;
+        if(width===5&&(!Array.isArray(row[3])||row[3].length<1||row[3].length>8
+            ||!row[3].every(key=>replayControls.has(key))||new Set(row[3]).size!==row[3].length
+            ||!Number.isInteger(row[4])||row[4]<1||row[4]>10000))return null;
+        previous=row[1];cycle=row[2];
+      }
+    }
+    return value;
+  }
+  function replayEventState(value,at){
+    const api=value.api_intervals.find(item=>item[0]<=at&&at<item[1]);
+    const input=value.input_intervals?.find(item=>item[0]<=at&&at<item[1]);
+    return {api,input};
+  }
+  function updateReplayTimeline(){
+    if(!replayEvents)return;
+    const at=Math.max(0,Math.min(replayEvents.duration_ms,(player.currentTime||0)*1000));
+    const {api,input}=replayEventState(replayEvents,at);
+    $('replay-call-state').textContent=api?`Model call ${api[2]+1} · awaiting response`:'Between model calls';
+    $('replay-call-state').dataset.waiting=String(Boolean(api));
+    $('replay-position').textContent=`${seconds(at)} / ${seconds(replayEvents.duration_ms)}`;
+    if(document.activeElement!==$('replay-seek'))$('replay-seek').value=at/1000;
+    const keys=$('replay-input-state');keys.replaceChildren();
+    if(input){for(const key of input[3]){const cap=el('kbd',key);keys.append(cap);}keys.append(el('span',`${input[4]} ms requested · delivery interval`));}
+    else keys.append(el('span',replayEvents.input_intervals===null?'Input timing was not recorded for this attempt.':'No input delivery at this time.'));
+    const canvas=$('replay-event-chart'),ctx=canvas.getContext('2d'),width=canvas.width;
+    ctx.clearRect(0,0,width,66);ctx.fillStyle='#e9eddf';ctx.fillRect(0,0,width,66);
+    for(const [rows,y,color] of [[replayEvents.api_intervals,7,'#997daf'],[replayEvents.input_intervals||[],36,'#c58d43']]){
+      ctx.fillStyle=color;for(const row of rows)ctx.fillRect(row[0]/replayEvents.duration_ms*width,y,Math.max(1,(row[1]-row[0])/replayEvents.duration_ms*width),22);
+    }
+    ctx.fillStyle='#303631';ctx.fillRect(at/replayEvents.duration_ms*(width-2),0,2,66);
+  }
+  function renderReplayTimeline(row){
+    replayEvents=checkedReplayTimeline(row.recording?.timeline);
+    $('replay-events').hidden=!replayEvents;if(!replayEvents)return;
+    $('replay-seek').max=replayEvents.duration_ms/1000;
+    const jumps=$('replay-api-jumps');jumps.replaceChildren();
+    for(const item of replayEvents.api_intervals){
+      const button=el('button',`Call ${item[2]+1} · ${seconds(item[1]-item[0])}`);button.type='button';
+      button.addEventListener('click',()=>playFrom(item[0]/1000));jumps.append(button);
+    }
+    $('replay-clock-note').textContent=`Violet: model requests. Orange: input request through acknowledgment. Clock alignment uncertainty ≤ ${replayEvents.timing_uncertainty_ms} ms. The key HUD burned into the video shows held browser keys; delivery intervals do not prove a cast or hit.`;
+    updateReplayTimeline();
+  }
   function stopReplay(){player.pause();player.removeAttribute('src');player.load();}
   function replayVerification(row){
     $('replay-verification').textContent=row.persisted_xp!=null
@@ -56,6 +112,7 @@
     const hold=adaptiveHold(row);if(hold)$('replay-timing').textContent+=' '+hold.detail;
     $('replay-playback-status').textContent='Loading recording…';
     stopReplay();player.src=url.href;
+    if(typeof renderReplayTimeline==='function')renderReplayTimeline(row);
     if(!replay.open)replay.showModal();
     $('replay-close').focus();
   }
@@ -67,6 +124,17 @@
     player.play().catch(()=>{if(replay.open)$('replay-playback-status').textContent='Use Play to start the recording.';});
   }
   player.addEventListener('loadedmetadata',()=>playFrom(replayStart));
+  player.addEventListener('timeupdate',updateReplayTimeline);
+  player.addEventListener('seeked',updateReplayTimeline);
+  $('replay-seek').addEventListener('input',event=>{
+    if(replayEvents&&player.readyState>=1){player.currentTime=Number(event.target.value);updateReplayTimeline();}
+  });
+  $('replay-download').addEventListener('click',()=>{
+    if(!replayEvents)return;
+    const url=URL.createObjectURL(new Blob([JSON.stringify(replayEvents,null,2)+'\n'],{type:'application/json'}));
+    const link=el('a');link.href=url;link.download=`maplebench-${replayRunId}-timeline.json`;link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
   $('replay-agent').addEventListener('click',()=>{if(replayCue)playFrom(replayCue.start_ms/1000);});
   $('replay-full').addEventListener('click',()=>playFrom(0));
   $('replay-close').addEventListener('click',()=>replay.close());
@@ -132,6 +200,8 @@
     details.append(el('p',`${info.full_wall_budget_used?'Full wall budget used':'Ended early'} · ${info.end_reason.replaceAll('_',' ')}. Persisted XP covers the complete run. Peak-rate scoring is unavailable.`));
     const profile=info.class_profile;
     if(profile)details.append(el('p',`${profile.class_name}, level ${profile.level}. Declared skills: ${Object.values(profile.skill_keys).join(', ')}.`));
+    if(info.knowledge_pack)details.append(el('p',`Frozen knowledge: ${info.knowledge_pack.pack_id} · SHA-256 ${info.knowledge_pack.pack_sha256}.`));
+    if(Array.isArray(info.skill_toolkit?.unsupported))details.append(el('p',`Fixture limits: ${info.skill_toolkit.unsupported.join(' ')}`));
     const table=el('table'),head=el('tr'),body=el('tbody');
     for(const name of ['Cycle','Exact model returned','Model wait','Program interval','Inputs','Tokens'])head.append(el('th',name));
     const header=el('thead');header.append(head);table.append(header,body);
@@ -178,6 +248,47 @@
     $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
     $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
   }
+  let previewSignature='';
+  function renderOverview(){
+    const root=$('gameplay-preview');if(!root)return;
+    const rows=snapshot.attempts.filter(row=>row.status==='completed'&&row.recording
+      &&['runner_verified_receipts_rechecked','adaptive_runner_verified_receipts_rechecked'].includes(row.score_verification));
+    const latest=[...rows].sort((a,b)=>(b.updated_at_ms||0)-(a.updated_at_ms||0)).slice(0,2);
+    $('hero-summary').textContent=`${new Set(snapshot.attempts.map(row=>row.requested_model).filter(Boolean)).size} models · ${rows.length} verified recordings · ${snapshot.attempts.length} planned or recorded attempts`;
+    const signature=JSON.stringify(latest.map(row=>[row.id,row.recording.url,row.persisted_xp]));
+    if(signature===previewSignature)return;previewSignature=signature;
+    root.replaceChildren();
+    for(const row of latest){
+      // Reuse the same URL boundary and click handler as the evidence tables.
+      const slot=el('div');recording(slot,row);const button=slot.querySelector('button');if(!button)continue;
+      button.className='preview-run';button.replaceChildren();
+      button.setAttribute('aria-label',`Watch ${row.requested_model}, ${xp(row.persisted_xp)} saved XP`);
+      const video=el('video');video.src=new URL(row.recording.url,location.href).href;video.preload='metadata';video.muted=true;video.playsInline=true;video.setAttribute('aria-hidden','true');
+      const cue=row.recording?.playback?.start_ms;
+      if(Number.isFinite(cue)&&cue>=0)video.addEventListener('loadedmetadata',()=>{if(cue/1000<video.duration)video.currentTime=cue/1000;},{once:true});
+      const identity=el('span');identity.className='preview-identity';identity.append(el('strong',row.requested_model),el('span',`${xp(row.persisted_xp)} saved XP`));
+      const play=el('span','▶');play.className='preview-play';play.setAttribute('aria-hidden','true');
+      button.append(video,identity,play);root.append(button);
+    }
+    if(!root.children.length){const empty=el('p','Recorded attempts appear here once their evidence is verified.');empty.className='empty';root.append(empty);}
+  }
+  function renderNativeQualification(){
+    const root=$('native-qualification');if(!root)return;root.replaceChildren();
+    const entries=snapshot.native_qualification?[{value:snapshot.native_qualification,url:'./native-qualification.json'}]
+      :(snapshot.catalog?.cohorts||[]).filter(c=>c.native_qualification).map(c=>({value:c.native_qualification,url:c.native_qualification_url}));
+    for(const {value,url} of entries){
+      if(value?.status!=='core_toolkit_effects_qualified'||value.qualification_scope!=='core10'
+          ||value.runtime_lifecycle_verified!==true
+          ||value.baseline_restored!==true||!Array.isArray(value.qualified_skills)||value.qualified_skills.length!==10
+          ||!Array.isArray(value.available_skills)||value.available_skills.length!==17
+          ||!/^\.\/(?:cohorts\/[a-f0-9]{16}\/)?native-qualification\.json$/.test(url))continue;
+      const detail=el('details');detail.append(el('summary','Hero toolkit · 17 available skills, 10 with native effect checks'));
+      detail.append(el('p','A separate zero-model run checked native effects for the core ten skills, and verified the learned skills and bindings for all seventeen controls. The seven additional skills have not had their effects qualified by this run. The character was logged out normally and the baseline restored. Instrumentation was enabled for qualification only. This does not certify skill balance, proc probabilities or model proficiency.'));
+      if(Array.isArray(value.unsupported))for(const scope of value.unsupported)detail.append(el('p',scope));
+      const link=el('a','Download native qualification evidence');link.href=url;detail.append(link);root.append(detail);
+    }
+    root.hidden=!root.children.length;
+  }
   function renderCatalog(){
     const node=$('catalog-cohorts'),catalog=snapshot.catalog;
     if(!node)return;
@@ -191,12 +302,37 @@
       const group=el('div');
       group.append(el('p',isPrevious?'Previous pilot cohorts · separate frozen settings; excluded from the current matrix':'Current cohorts'));
       for(const cohort of cohorts){
-        if(!/^\.\/cohorts\/[a-f0-9]{16}\/$/.test(cohort.url)||!Number.isInteger(cohort.verified)||cohort.verified<0||cohort.verified>4)continue;
-        const link=el('a',`${names[cohort.class_id]||'Declared class'} · ${cohort.verified} / 4 verified`);
+        const planned=cohort.planned??4;
+        if(!/^\.\/cohorts\/[a-f0-9]{16}\/$/.test(cohort.url)||!Number.isInteger(planned)||planned<4||planned>80||planned%4
+          ||!Number.isInteger(cohort.verified)||cohort.verified<0||cohort.verified>planned)continue;
+        const link=el('a',`${names[cohort.class_id]||'Declared class'} · ${cohort.verified} / ${planned} verified`);
         link.href=cohort.url;link.className='pill';group.append(link,document.createTextNode(' '));
       }
       node.append(group);
     }
+  }
+  function renderReliability(){
+    const section=$('release-reliability'),container=$('reliability-groups');
+    if(!section||!container)return;
+    const cohorts=snapshot.cohort?[snapshot.cohort]:(snapshot.catalog?.cohorts||[]);
+    container.replaceChildren();let count=0;
+    for(const cohort of cohorts){
+      const value=cohort.reliability;
+      if(value?.schema_version!==1||!Array.isArray(value.groups)||value.groups.length>20
+          ||value.required_consecutive_clean_groups!==3||!value.groups.every(g=>
+            g.planned===4&&[g.attempted,g.verified_scores,g.verified_recordings].every(n=>Number.isInteger(n)&&n>=0&&n<=4)
+            &&g.verified_recordings<=g.verified_scores&&g.verified_scores<=g.attempted))continue;
+      const group=el('div'),table=el('table'),header=el('tr'),body=el('tbody');
+      group.append(el('p',`Cohort ${cohort.id.slice(0,12)} · ${value.consecutive_clean_groups} consecutive clean groups`));
+      for(const label of ['Group','Attempted / planned','Verified scores','Verified recordings','Disposition'])header.append(el('th',label));
+      const head=el('thead');head.append(header);table.append(head,body);
+      for(const item of value.groups){
+        const tr=el('tr');cell(tr,item.group);cell(tr,`${item.attempted} / 4`);cell(tr,item.verified_scores);cell(tr,item.verified_recordings);
+        cell(tr,item.clean?'Clean':Object.entries(item.causes||{}).map(([cause,n])=>`${n} ${cause.replaceAll('_',' ')}`).join(' · '));body.append(tr);
+      }
+      const wrap=el('div');wrap.className='table-wrap';wrap.append(table);group.append(wrap);container.append(group);count++;
+    }
+    section.hidden=count===0;
   }
   function renderResearch(){
     const matrix=snapshot.research_matrix,container=$('research-matrix'),select=$('research-protocol');
@@ -224,6 +360,12 @@
         if(value.valid>1)td.append(el('small',`Observed range ${xp(value.minimum)} to ${xp(value.maximum)}; uncertainty not estimated`));
         else if(value.valid===1)td.append(el('small','One sample; uncertainty not estimated'));
         if(value.no_ops)td.append(el('small',`${value.no_ops} verified no-input ${value.no_ops===1?'run':'runs'} retained`));
+        if(Array.isArray(value.samples)&&value.samples.length<=80&&value.samples.every(Number.isFinite)){
+          td.append(el('small',`Samples: ${value.samples.map(xp).join(', ')} XP`));
+          if(Number.isFinite(value.median))td.append(el('small',`Median ${xp(value.median)} XP`));
+          if(Number.isFinite(value.sample_standard_deviation))td.append(el('small',`Sample SD ${format(Math.round(value.sample_standard_deviation))} XP`));
+          if(Number.isFinite(value.eligible_fraction))td.append(el('small',`${(value.eligible_fraction*100).toFixed(0)}% of attempted runs have eligible scores`));
+        }
         for(const id of value.attempt_ids){const row=snapshot.attempts.find(item=>item.id===id);if(row?.recording){const link=el('span');recording(link,row);td.append(link);}}
       }
       body.append(tr);
@@ -274,7 +416,7 @@
     $('scope').textContent=snapshot.catalog
       ?`${snapshot.catalog.verified} of ${snapshot.catalog.planned} planned model/class runs have verified results. ${snapshot.catalog.archive_state==='retired'?'A complete four-model cohort replaced the public test recordings.':snapshot.catalog.archive_state==='retained'?'The public test archive remains until one four-model cohort is complete.':''} Saved progress refreshes every 10 seconds. No runs start from this page.`
       :snapshot.cohort
-      ?`${snapshot.cohort.verified} of ${snapshot.cohort.planned} planned models have verified results. ${snapshot.cohort.archive_replacement?'This completed cohort replaces the public test archive.':'Cohort progress; the existing public archive is retained.'} No runs start from this page.`
+      ?`${snapshot.cohort.verified} of ${snapshot.cohort.planned} planned attempts have verified results. ${snapshot.cohort.archive_replacement?'This completed cohort replaces the public test archive.':'Cohort progress; the existing public archive is retained.'} No runs start from this page.`
       :snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
   }
   function freshness(){
@@ -297,7 +439,7 @@
       const response=await fetch('./results.json',{cache:'no-store',signal:AbortSignal.timeout(3000)});
       if(!response.ok)throw Error();const next=await response.json();
       if(next.schema_version!==1||!Array.isArray(next.attempts)||next.attempts.length>100||!Array.isArray(next.comparisons)||!Number.isFinite(next.generated_at_ms))throw Error();
-      snapshot=next;renderCatalog();renderResearch();renderLive();renderComparisons();renderHistory();freshness();
+      snapshot=next;renderCatalog();renderReliability();renderResearch();renderLive();renderOverview();renderNativeQualification();renderComparisons();renderHistory();freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
     finally{if(!closed&&(snapshot?.live_status_available!==false||[1,2].includes(snapshot?.catalog?.schema_version)))timer=setTimeout(refresh,[1,2].includes(snapshot?.catalog?.schema_version)?10000:2000);}

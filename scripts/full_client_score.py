@@ -322,6 +322,16 @@ def verify_trial_bundle(evidence, artifact_root, artifacts):
         require(artifacts[name]["sha256"] == expected, f"artifacts.{name}: frozen input hash mismatch")
     require(same_json(read_json_artifact(artifact_root, artifacts, "persistence"), evidence),
             "artifacts.persistence: parsed evidence differs from supplied record")
+    scenario = read_json_artifact(artifact_root, artifacts, "scenario")
+    skill_toolkit = scenario.get('adaptive_protocol', {}).get('skill_toolkit')
+    if skill_toolkit is not None:
+        from full_client_collect import validate_toolkit_snapshot
+        baseline_snapshot = read_json_artifact(artifact_root, artifacts, 'baseline_snapshot')
+        for snapshot in (evidence['baseline'], evidence['initial'], evidence['final'], baseline_snapshot):
+            validate_toolkit_snapshot(snapshot, skill_toolkit)
+        require(all(same_json(baseline_snapshot.get(key), evidence['baseline'].get(key))
+                    for key in ('character', 'keymap', 'skill_toolkit_id', 'learned_skills')),
+                'artifacts.baseline_snapshot: expanded toolkit baseline mismatch')
     for name in ("reset", "session"):
         require(same_json(read_json_artifact(artifact_root, artifacts, name), evidence[name]),
                 f"artifacts.{name}: receipt differs from persistence evidence")

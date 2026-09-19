@@ -32,7 +32,7 @@ import full_client_score as scoring
 import full_client_docker as docker
 import full_client_readiness as readiness
 
-MODELS = ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
+from maple_agent import MODELS
 SHA = re.compile(r"[a-f0-9]{64}\Z")
 RUN = re.compile(r"[a-f0-9]{32}\Z")
 SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\Z")
@@ -199,7 +199,7 @@ def validate_runner(value):
     required = {str(Path(__file__).resolve()), str(Path(scoring.__file__).resolve()),
                 str(Path(docker.__file__).resolve()), str(Path(readiness.__file__).resolve())}
     deps = value["dependencies"]
-    require(isinstance(deps, list) and 2 <= len(deps) <= 32, "invalid_runner_dependencies")
+    require(isinstance(deps, list) and 2 <= len(deps) <= 64, "invalid_runner_dependencies")
     for ref in deps:
         reference(ref)
     require(len({ref["path"] for ref in deps}) == len(deps)
@@ -914,6 +914,19 @@ def verified_metrics(plan, entry, observed):
     fixture = fixture_for(plan, entry)
     require(all(isinstance(refs.get(name), dict) and refs[name].get("sha256") == fixture[name]["sha256"]
                 for name in ("scenario", "baseline", "runtime_manifest")), "score_fixture_mismatch")
+    if entry['spec'].get('protocol') == 'full-client-adaptive-pilot-v1':
+        from full_client_adaptive_publication import verified_adaptive_score
+        from full_client_dashboard import Reader
+        score,result,_,_,checked=verified_adaptive_score(Reader(),folder,journal)
+        require(scoring.same_json(artifact('persistence'),collected.get('evidence')),
+                'persistence_receipt_mismatch')
+        counters=checked['counters']
+        return {'net_xp':score['metrics']['net_xp'],'actions':counters['actions'],
+                'no_op':counters['actions']==0,'execution_verification':'complete_action_receipts',
+                'alive_at_logout':score['alive_at_logout'],'session_ms':score['timing']['session_ms'],
+                'controller_ms':score['timing']['controller_ms'],'api_ms':checked['api_ms'],
+                'cycles':len(result['adaptive']['cycles']),
+                'usage':{name:counters['actual_'+name] for name in ('input_tokens','output_tokens','total_tokens')}}
     evidence = artifact("persistence")
     require(scoring.same_json(evidence, collected.get("evidence")), "persistence_receipt_mismatch")
     recomputed = scoring.verify_trial_bundle(evidence, folder, refs)

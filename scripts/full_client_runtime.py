@@ -229,12 +229,12 @@ class Host:
         require(len(rows) == 1 and type(rows[0][0]) is int and rows[0][0] >= 0, "invalid_queue_status")
         return rows[0][0]
 
-    def snapshot(self, config, run_id):
+    def snapshot(self, config, run_id, *, skill_toolkit=None):
         try:
             return collect(mysql_command=config["command"], database=config["database"],
                            defaults_file=config.get("defaults_file"), run_id=run_id,
                            character_id=config["character_id"], account_id=config["account_id"],
-                           timeout=min(10, self.remaining()))
+                           timeout=min(10, self.remaining()), skill_toolkit=skill_toolkit)
         except ValueError as error:
             if str(error) == "account_still_online":
                 raise RuntimeErrorCode("account_still_online") from None
@@ -357,6 +357,12 @@ class CosmicRuntime:
         if adaptive:
             require(protocol["profile"]["level"] == self.baseline.get("character", {}).get("level"),
                     "baseline_identity_mismatch")
+            if protocol.get('skill_toolkit') is not None:
+                from full_client_collect import validate_toolkit_snapshot
+                try:
+                    validate_toolkit_snapshot(self.baseline,protocol['skill_toolkit'])
+                except (ValueError,TypeError,KeyError):
+                    raise RuntimeErrorCode('baseline_skill_toolkit_mismatch') from None
         self.readiness_policy()
         self.manifest = parse_json(ref_bytes(self.config["runtime_manifest"]))
         self.docker_binding()
@@ -458,6 +464,19 @@ class CosmicRuntime:
         require(web.get("ActiveState") == "active", "unprivileged_services_required")
         self.web_identity(web, verify_bytes=False)
 
+    def snapshot(self):
+        scenario=getattr(self,'scenario',{})
+        toolkit=(scenario.get('adaptive_protocol') or scenario.get('native_contract') or {}).get('skill_toolkit')
+        value=self.host.snapshot(self.config['mysql'],self.run_id,
+            **({'skill_toolkit':toolkit} if toolkit is not None else {}))
+        if toolkit is not None:
+            from full_client_collect import validate_toolkit_snapshot
+            try:
+                validate_toolkit_snapshot(value,toolkit)
+            except (ValueError,TypeError,KeyError):
+                raise RuntimeErrorCode('native_skill_toolkit_mismatch') from None
+        return value
+
     def web_identity(self, unit, *, verify_bytes=True):
         """Bind frozen files to the actual serving process and its import roots."""
         manifest = self.manifest
@@ -469,10 +488,27 @@ class CosmicRuntime:
         controls = script.parent.parent / "ui/full-client"
         # The executor reads the JavaScript dispatcher at each container launch;
         # pin it alongside imported modules, not just the Docker image.
-        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
+        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "model_providers.py", "knowledge_pack.py", "full_client_skill_qualification.py", "full_client_hero_toolkit.py", "agent-sandbox.mjs")),
                     controls / "controller.js", controls / "webcodecs-recorder.js", controls / "waiting.html",
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}
+        native_contract=getattr(self,'scenario',{}).get('native_contract') or {}
+        if native_contract.get('id')=='scripted-native-hero-toolkit-v1':
+            required.add(script.parent/'full_client_hero_native_evidence.py')
+        adaptive_protocol = getattr(self, 'scenario', {}).get('adaptive_protocol') or {}
+        knowledge = adaptive_protocol.get('knowledge_pack')
+        if knowledge is not None:
+            from knowledge_pack import validate_manifest
+            try:
+                knowledge = validate_manifest(knowledge)
+            except (ValueError, TypeError):
+                raise RuntimeErrorCode('invalid_frozen_knowledge_pack') from None
+            pack_root = script.parent.parent / 'knowledge' / knowledge['pack_id']
+            for entry in knowledge['files']:
+                path = pack_root / entry['path']
+                required.add(path)
+                require(extras.get(str(path), {}).get('sha256') == entry['sha256'],
+                        'knowledge_files_not_frozen')
         require(all(str(path) in extras for path in required), "serving_sources_not_frozen")
         asset_root = root / "assets"
         require(asset_root.is_dir() and not asset_root.is_symlink(), "client_asset_directory_required")
@@ -695,7 +731,7 @@ class CosmicRuntime:
                 "transactional_score_tables_required")
         self.sql(read_artifact_bytes(self.directory, self.state["artifacts"]["baseline"], "baseline", maximum=MAX_SQL))
         at = self.host.now()
-        snapshot = self.host.snapshot(self.config["mysql"], self.run_id)
+        snapshot = self.snapshot()
         require(same_json(snapshot["character"], self.baseline["character"])
                 and same_json(snapshot["keymap"], self.baseline["keymap"]), "restored_baseline_mismatch")
         reset = {"run_id": self.run_id, "baseline_sha256": self.config["baseline"]["sha256"],
@@ -1000,18 +1036,15 @@ class CosmicRuntime:
                 "controller_ms": verified["wall_elapsed_ms"], "recording_complete": True}
 
     def verify_api_result(self, prompt):
-        from full_client_publish import PROGRAM_FORMAT
+        from model_providers import (bind_request_identity, exchange_receipt, parse_program_response,
+                                     program_request, provider_for_model, response_identity_matches)
         arts, result = self.state["artifacts"], self.state["result"]
         request = parse_json(read_artifact_bytes(self.directory, arts["api_request"], "api_request"))
         response = parse_json(read_artifact_bytes(self.directory, arts["api_response"], "api_response"))
-        require(set(request) == {"model", "store", "reasoning", "instructions", "input",
-                                 "max_output_tokens", "text", "metadata"}
-                and request["model"] == self.context["request"]["model"] and request["store"] is False
-                and request["reasoning"] == {"effort": "low"} and request["instructions"] == prompt
-                and same_json(parse_json(request["input"]), {"observation": result["initial"]})
-                and request["max_output_tokens"] == 3000
-                and same_json(request["text"], {"format": PROGRAM_FORMAT})
-                and request["metadata"].get("maplebench_run_id") == self.run_id, "actual_api_request_mismatch")
+        model = self.context["request"]["model"]
+        _, expected_request = program_request(model,prompt,{"observation":result["initial"]},3000)
+        require(same_json(request,bind_request_identity(model,expected_request,self.run_id)),
+                "actual_api_request_mismatch")
         readiness=parse_json(read_artifact_bytes(self.directory,arts['readiness'],'readiness'))
         require(same_json(readiness,result.get('readiness'))
                 and arts['readiness']['sha256']==result.get('readinessSha256')
@@ -1020,15 +1053,15 @@ class CosmicRuntime:
                 and readiness.get('run_id')==self.run_id
                 and readiness.get('initial_observation_sha256')==observation_sha256(result['initial']),
                 'readiness_receipt_mismatch')
-        require(all(same_json(response.get(k), result["api"].get(k)) for k in ("id", "status", "model", "usage"))
-                and response.get("metadata", {}).get("maplebench_run_id") == self.run_id,
+        program, meta = parse_program_response(model,response)
+        compared = tuple(meta) if provider_for_model(model)=='anthropic' else ('id','status','model','usage')
+        require(all(same_json(meta.get(k), result["api"].get(k)) for k in compared)
+                and response_identity_matches(model,response,self.run_id),
                 "actual_api_response_mismatch")
-        text = "".join(part["text"] for item in response["output"] if item.get("type") == "message"
-                       for part in item["content"] if part.get("type") == "output_text")
-        program = parse_json(text)
-        require(set(program) == {"note", "code"} and isinstance(program["note"], str)
-                and isinstance(program["code"], str) and 0 < len(program["code"]) <= 12000
-                and len(program["note"]) <= 2000, "invalid_provider_program")
+        if provider_for_model(model)=='anthropic':
+            require(same_json(result['api'].get('provider_exchange'),
+                exchange_receipt(model,request,response,self.run_id)), 'actual_api_exchange_mismatch')
+        require(program is not None and meta.get('status')=='completed', "invalid_provider_program")
         raw = read_artifact_bytes(self.directory, arts["program"], "program", maximum=65536)
         require(raw == program["code"].encode() and arts["program"]["sha256"] == result["programSha256"],
                 "executed_program_mismatch")
@@ -1212,7 +1245,7 @@ class CosmicRuntime:
         self.disconnect()
         self.validate_settlement()
         self.copy_run()
-        final = self.host.snapshot(self.config["mysql"], self.run_id)
+        final = self.snapshot()
         self.event("collection_completed", final["captured_at_ms"])
         arts = self.state["artifacts"]
         arts["final_db"] = self.artifact("final-db.json", final)
@@ -1243,6 +1276,9 @@ class CosmicRuntime:
                     "final": final | {"evidence_sha256": arts["final_db"]["sha256"]}}
         if adaptive:
             evidence["protocol"] = self.scenario["protocol"]
+            if self.scenario['adaptive_protocol'].get('skill_toolkit') is not None:
+                evidence['baseline'].update(skill_toolkit_id=self.baseline['skill_toolkit_id'],
+                    learned_skills=self.baseline['learned_skills'])
         arts["session"] = self.artifact("session.json", session)
         windows = self.xp_window_contract()
         if windows is None:

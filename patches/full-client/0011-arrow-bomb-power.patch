@@ -1,0 +1,14 @@
+--- a/src/client/Data/SkillData.cpp
++++ b/src/client/Data/SkillData.cpp
+@@ -53,7 +53,10 @@
+         nl::node levelsrc = src["level"];
+         for (auto sub : levelsrc)
+         {
+-            float damage = (float)sub["damage"] / 100;
++            // Arrow Bomb stores its ordinary damage percent in x in v83.
++            // Do not treat x on buffs or other skills as damage.
++            float damage = static_cast<float>(sub["damage"].get_real(
++                id == 3101005 ? sub["x"].get_real() : 0.0)) / 100;
+             int32_t matk = sub["mad"];
+             int32_t fixdamage = sub["fixdamage"];
+             int32_t mastery = sub["mastery"];

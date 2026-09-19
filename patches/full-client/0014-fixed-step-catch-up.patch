@@ -1,0 +1,71 @@
+diff --git a/src/client/Journey.cpp b/src/client/Journey.cpp
+--- a/src/client/Journey.cpp
++++ b/src/client/Journey.cpp
+@@ -135,6 +135,12 @@
+     static int64_t accumulator = timestep;
+     static int64_t period = 0;
+     static int32_t samples = 0;
++    // The recorder permits at most one second between rendered frames. Keep
++    // enough fixed steps to cover that interval without tying game speed to FPS.
++    // Work stays bounded; debt beyond this budget is retained and reported.
++    static constexpr int MAX_CATCHUP_UPDATES = 128;
++    static int64_t total_wall_time = 0;
++    static int64_t total_simulation_time = 0;
+ 
+     void main_tick()
+     {
+@@ -148,13 +154,29 @@
+         int64_t elapsed = Timer::get().stop();
+ 
+         accumulator += elapsed;
+-        // Keep asset-I/O catch-up from starving rendering. Preserve the remaining
+-        // simulation time for the next frame instead of discarding physics ticks.
+-        for (int updates = 0; accumulator >= timestep && updates < 8; ++updates)
++        total_wall_time += elapsed;
++        int updates = 0;
++        for (; accumulator >= timestep && updates < MAX_CATCHUP_UPDATES; ++updates)
+         {
+             update();
+             accumulator -= timestep;
+-        }
++            total_simulation_time += timestep;
++        }
++
++        // This is measured client timing, not proof of real-time qualification.
++        // A slow host can still exhaust the budget; expose its remaining debt.
++        EM_ASM({
++            Module.MapleBenchSimulationTiming = ({
++                schema_version: 1, published_wall_ms: Date.now(),
++                timestep_ms: $0, max_updates_per_frame: $1, updates: $2,
++                elapsed_ms: $3, total_wall_ms: $4, total_simulation_ms: $5,
++                pending_ms: $6, catchup_limited: $6 >= $0
++            });
++        }, Constants::TIMESTEP, MAX_CATCHUP_UPDATES, updates,
++           static_cast<double>(elapsed) / 1000.0,
++           static_cast<double>(total_wall_time) / 1000.0,
++           static_cast<double>(total_simulation_time) / 1000.0,
++           static_cast<double>(accumulator) / 1000.0);
+ 
+         float alpha = std::min(1.0f, static_cast<float>(accumulator) / timestep);
+         draw(alpha);
+@@ -182,6 +204,8 @@
+ 
+ #ifdef MS_PLATFORM_WASM
+         accumulator = timestep;
++        total_wall_time = 0;
++        total_simulation_time = 0;
+         emscripten_set_main_loop(main_tick, 0, 1);
+ #else
+         int64_t timestep    = Constants::TIMESTEP * 1000;
+diff --git a/src/client/Timer.h b/src/client/Timer.h
+--- a/src/client/Timer.h
++++ b/src/client/Timer.h
+@@ -51,7 +51,7 @@
+         }
+ 
+     private:
+-        using clock = std::chrono::high_resolution_clock;
++        using clock = std::chrono::steady_clock;
+ 
+         clock::time_point point;
+     };

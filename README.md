@@ -1,27 +1,21 @@
 # MapleBench
 
-**Status: live full-client trials verified; no model ranking established.**
-The durable adapter restores a frozen offline baseline, runs one real browser
-through ordinary login and bounded API control, then verifies persisted net XP
-after normal logout. The results dashboard shows exact model attribution,
-actions, survival and saved gameplay. Matching frozen inputs did not produce
-equivalent live starting scenes in the first four trials; those attempts do not
-establish a ranking. See the
-[acceptance evidence](docs/FULL_CLIENT_ACCEPTANCE.md),
-[results dashboard](docs/FULL_CLIENT_DASHBOARD.md) and
-[full-client control](docs/FULL_CLIENT.md).
+**Status: preparing the first repeated cross-provider release; no model ranking established.**
+MapleBench runs a real game client through ordinary login, bounded model-generated
+keyboard programs, logout and verified persisted XP. The next release evaluates
+two OpenAI and two Claude models on the same Hero fixture, four attempts each,
+with frozen gameplay knowledge and a declared 17-skill Hero toolkit.
 
-The latest verified success completed with 34 acknowledged Astra actions and
-+9,250 persisted net XP. Fresh populated render frames were verified before the
-API request; its saved recording and publication evidence passed. Watch the
-[public replay](https://maplebench.vercel.app/latest/). The subsequent fresh group
-stopped during its first trial's logout collection and was recovered; a complete
-new four-model group remains outstanding.
+The release will include original gameplay recordings, held-key visualization,
+and a timeline of model calls and input delivery. Results are a descriptive pilot:
+signed session net XP, all planned attempts, spread and evidence-completion counts.
+See the [release requirements](docs/V1_COHORT.md) and [current status](docs/V1_STATUS.md).
+The [public site](https://maplebench.vercel.app/) currently contains earlier pilot
+evidence, which is separate from this candidate.
 
-The [current goal, roadmap and burn-down](docs/ROADMAP.md) separates the next
-four-model showcase from repeatable operations and a broader class/task suite.
-It tracks live acceptance and public delivery, alongside existing source work.
-Class/task coverage is described in the [benchmark design](docs/CLASS_BENCHMARK_DESIGN.md).
+MapleBench provides structured observations; this is not a vision-only benchmark.
+The [roadmap](docs/ROADMAP.md) and [benchmark design](docs/CLASS_BENCHMARK_DESIGN.md)
+cover longer horizons, class breadth and future authoritative XP-window scoring.
 
 Moving to another computer? See [the laptop handoff](docs/LAPTOP_HANDOFF.md) to
 reuse the existing runner without transferring its assets or credentials.

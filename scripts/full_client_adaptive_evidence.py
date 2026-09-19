@@ -6,6 +6,8 @@ Persisted net XP is verified separately from native logout/database receipts.
 from full_client_adaptive import PROTOCOL, PASSIVE_STOP_REASONS, digest, prompt, validate_protocol
 from full_client_score import EvidenceError, parse_json, read_artifact_bytes, same_json
 from maple_agent import model_decision, validate_rpc
+from model_providers import (bind_request_identity, endpoint_for_model, exchange_receipt,
+                             provider_for_model, request_input, response_identity_matches)
 import math
 import json
 
@@ -77,6 +79,10 @@ def native_level_check(trace, root, context):
 
 def verify_result(result, root, *, protocol, model, native_progression=None):
     p = validate_protocol(protocol)
+    sdk_contract={'adapter':'full-client','protocol':PROTOCOL}
+    if p.get('skill_toolkit') is not None:
+        from full_client_hero_toolkit import sdk_scenario
+        sdk_contract=sdk_contract|sdk_scenario(p)
     trace = result['adaptive']
     horizon=p.get('horizon_policy')
     progression=p.get('progression_policy')
@@ -114,6 +120,7 @@ def verify_result(result, root, *, protocol, model, native_progression=None):
              'actions', 'action_attempts', 'sdk_requests')}
     steps, intervals, recent = [], [], []
     last = 0; response_ids=set()
+    input_intervals=[];last_input_ack=0
     def observation(obs):
         require(isinstance(obs,dict) and obs.get('ready') is True and isinstance(obs.get('character'),dict)
                 and all(type(obs.get(k)) in (int,float) and math.isfinite(obs[k]) and 0<=obs[k]<1500
@@ -144,8 +151,10 @@ def verify_result(result, root, *, protocol, model, native_progression=None):
             last=t['window_closed_ms']
             if cycle['request'] is None:continue
         request = parse_json(read_artifact_bytes(root, cycle['request'], 'request'))
-        identity = {'maplebench_run_id': trace['run_id'], 'maplebench_cycle_index': str(index)}
-        value = parse_json(request['input'])
+        try:
+            value = parse_json(request_input(model, request))
+        except (KeyError, ValueError, TypeError):
+            raise EvidenceError('adaptive: invalid native provider input') from None
         require(set(value) == {'observation', 'recent_programs', 'remaining_seconds', 'remaining_actions',
                                'remaining_sdk_requests', 'cycle_index'}
                 and value['cycle_index'] == index and type(value['cycle_index']) is int
@@ -154,19 +163,25 @@ def verify_result(result, root, *, protocol, model, native_progression=None):
                 and same_json(value['recent_programs'], recent[-2:])
                 and value['remaining_actions'] == p['max_actions'] - total['action_attempts']
                 and value['remaining_sdk_requests'] == p['max_sdk_requests'] - total['sdk_requests']
-                and type(value['remaining_seconds']) in (int, float) and 0 < value['remaining_seconds'] <= 300
-                and request.get('metadata') == identity)
+                and type(value['remaining_seconds']) in (int, float) and 0 < value['remaining_seconds'] <= 300)
         if window_closed:
             def unsent_request(_url, body, _key, _timeout):
-                require(same_json(body | {'metadata':identity},request))
+                require(_url == endpoint_for_model(model)
+                        and same_json(bind_request_identity(model,body,trace['run_id'],index),request))
                 return {}
             model_decision(model,instructions,value,None,output_tokens=p['max_output_tokens'],
                            timeout=50,request_fn=unsent_request)
             continue
         response = parse_json(read_artifact_bytes(root, cycle['response'], 'response'))
-        require(response.get('metadata')==identity)
+        require(response_identity_matches(model,response,trace['run_id'],index))
+        if provider_for_model(model)=='anthropic':
+            require(same_json(cycle.get('provider_exchange'),
+                exchange_receipt(model,request,response,trace['run_id'],index)))
+        else:
+            require('provider_exchange' not in cycle)
         def saved_response(_url, body, _key, _timeout):
-            require(same_json(body | {'metadata': identity}, request))
+            require(_url == endpoint_for_model(model)
+                    and same_json(bind_request_identity(model,body,trace['run_id'],index),request))
             return response
         choice, meta = model_decision(model, instructions, value, None,
             output_tokens=p['max_output_tokens'], timeout=1, request_fn=saved_response)
@@ -177,7 +192,8 @@ def verify_result(result, root, *, protocol, model, native_progression=None):
                 and meta['status'] == cycle['response_status'] and cycle['api_outcome'] == 'confirmed'
                 and same_json(meta['usage'], cycle['usage']))
         usage = meta['usage']
-        require(all(type(usage.get(key)) is int and usage[key] >= 0 for key in ('input_tokens', 'output_tokens', 'total_tokens'))
+        require(isinstance(usage,dict)
+                and all(type(usage.get(key)) is int and usage[key] >= 0 for key in ('input_tokens', 'output_tokens', 'total_tokens'))
                 and usage['input_tokens'] + usage['output_tokens'] == usage['total_tokens']
                 and usage['output_tokens'] <= p['max_output_tokens'])
         reservation = len(json.dumps(request, ensure_ascii=False).encode()) + 1024 + p['max_output_tokens']
@@ -232,7 +248,7 @@ def verify_result(result, root, *, protocol, model, native_progression=None):
             if step.get('kind')=='rejected_rpc':
                 rpc=step.get('rpc'); invalid=False
                 try:
-                    validate_rpc(rpc,{'adapter':'full-client','protocol':PROTOCOL})
+                    validate_rpc(rpc,sdk_contract)
                     invalid=rpc['id'] in seen
                 except (ValueError,TypeError):invalid=True
                 require(invalid and isinstance(step.get('error'),str) and len(step['error'])<=512)
@@ -241,11 +257,25 @@ def verify_result(result, root, *, protocol, model, native_progression=None):
             seen.add(step['rpcId'])
             try:
                 method, argument=validate_rpc({'type':'rpc','id':step['rpcId'],'method':step.get('method'),
-                    'args':step.get('args')},{'adapter':'full-client','protocol':PROTOCOL})
+                    'args':step.get('args')},sdk_contract)
             except ValueError:raise EvidenceError('adaptive: invalid SDK arguments') from None
             receipt=step.get('result'); require(isinstance(receipt,dict) and receipt.get('error') in (None,''))
+            if not p.get('input_timeline_policy') or method!='pressKeys':
+                require('input_timing' not in receipt)
             if method=='pressKeys':
                 require(receipt.get('accepted') is True); observation(receipt.get('observation'))
+                if p.get('input_timeline_policy'):
+                    interval=receipt.get('input_timing')
+                    require(isinstance(interval,dict) and set(interval)=={'basis','requested_ms','acknowledged_ms'}
+                        and interval['basis']=='relay_request_ack_v1'
+                        and all(type(interval[k]) is int and interval[k]>=0 for k in ('requested_ms','acknowledged_ms'))
+                        and max(last_input_ack,t['program_started_ms']-1)<=interval['requested_ms']
+                        and interval['requested_ms']+argument['durationMs']-1<=interval['acknowledged_ms']
+                        and interval['acknowledged_ms']<=min(300001,t['program_ended_ms']+1))
+                    last_input_ack=interval['acknowledged_ms']
+                    input_intervals.append({'cycle_index':index,'rpc_id':step['rpcId'],
+                        'keys':list(argument['keys']),'duration_ms':argument['durationMs'],
+                        'requested_ms':interval['requested_ms'],'acknowledged_ms':interval['acknowledged_ms']})
                 if check_level:check_level(receipt['observation'],t['program_started_ms'],t['program_ended_ms'])
                 held_ms+=argument['durationMs']
             elif method=='observe':
@@ -325,9 +355,14 @@ def verify_result(result, root, *, protocol, model, native_progression=None):
                         for c in trace['cycles'])
                 and timeline.get('first_input_started_ms') == origin + first
                 and timeline.get('first_input_acked_ms') == origin + ack)
+        if p.get('input_timeline_policy'):
+            require(input_intervals and abs(first-input_intervals[0]['requested_ms'])<=1
+                    and abs(ack-input_intervals[0]['acknowledged_ms'])<=1)
     else:
         require(first is None and ack is None and timeline.get('first_input_started_ms') is None
                 and timeline.get('first_input_acked_ms') is None)
-    return {'counters': total, 'api_intervals': intervals, 'wall_elapsed_ms': timing['wall_elapsed_ms'],
+    return {'counters': total, 'api_intervals': intervals,
+            'input_intervals':input_intervals if p.get('input_timeline_policy') else None,
+            'wall_elapsed_ms': timing['wall_elapsed_ms'],
             'api_ms': sum(v['ended_at_ms'] - v['started_at_ms'] for v in intervals),
             'authoritative_peak_xp_per_minute': None, 'publication_eligible': False}

@@ -6,6 +6,32 @@ import unittest
 
 
 class ControllerTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'),'Node is required for browser keyboard regressions')
+    def test_every_declared_skill_dispatches_legacy_keycodes_and_punctuation(self):
+        source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()
+        declarations=source[source.index('  const keyNames ='):source.index('  const held =')]
+        dispatch=source[source.index('  const key ='):source.index('  const release =')]
+        code="""
+const assert=require('node:assert/strict'),events=[];
+const window={dispatchEvent:event=>events.push(event)};
+class KeyboardEvent{constructor(type,value){this.type=type;Object.assign(this,value);}}
+"""+declarations+dispatch+"""
+const expected={KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyG:71,KeyH:72,KeyZ:90,KeyX:88,KeyC:67,KeyV:86,KeyB:66,KeyN:78,KeyM:77,Comma:188,Period:190,Slash:191,Semicolon:186};
+assert.equal(Object.keys(skillKeyNames).length,17);
+for(const code of Object.values(skillKeyNames)){
+  for(const type of ['keydown','keyup']){
+    key(code,type);const event=events.pop();
+    assert.equal(event.type,type);assert.equal(event.code,code);
+    assert.equal(event.keyCode,expected[code]);assert.ok(event.keyCode>0);
+    assert.equal(event.which,event.keyCode);assert.equal(event.bubbles,true);
+    assert.equal(event.key,code.startsWith('Key')?code.slice(3).toLowerCase():{Comma:',',Period:'.',Slash:'/',Semicolon:';'}[code]);
+  }
+}
+"""
+        result=subprocess.run([shutil.which('node'),'--max-old-space-size=64','-e',code],
+            capture_output=True,text=True,timeout=5)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     @unittest.skipUnless(shutil.which('node'),'Node is required for browser timing regressions')
     def test_capture_offsets_use_post_render_monotonic_clock_and_frozen_policy(self):
         source=(Path(__file__).resolve().parents[1]/'ui/full-client/controller.js').read_text()

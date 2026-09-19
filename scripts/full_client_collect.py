@@ -21,12 +21,21 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 DATABASE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
 
 
-def snapshot_sql(character_id, account_id):
+def snapshot_sql(character_id, account_id, *, skill_toolkit=None):
     for value in (character_id, account_id):
         if type(value) is not int or not 1 <= value <= 2**31 - 1:
             raise ValueError("invalid_identity")
     # One consistent read includes account status and the entire score row. No
     # account names, login details, character names, or arbitrary SQL are exposed.
+    key_ids = [29,57,85]
+    skill_query = ''
+    if skill_toolkit is not None:
+        from full_client_hero_toolkit import expected_keymap, expected_skills
+        key_ids = sorted(set(key_ids) | {row[0] for row in expected_keymap(skill_toolkit)})
+        skill_ids = ','.join(str(row[0]) for row in expected_skills(skill_toolkit))
+        skill_query = ("SELECT JSON_OBJECT('learned_skill', JSON_ARRAY(skillid, skilllevel)) FROM skills\n"
+                       f"WHERE characterid={character_id} AND skillid IN ({skill_ids}) ORDER BY skillid;\n")
+    key_filter = ','.join(str(key) for key in key_ids)
     return f"""SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY;
 SELECT JSON_OBJECT('character', JSON_OBJECT('character_id', c.id, 'account_id', c.accountid,
@@ -35,12 +44,12 @@ SELECT JSON_OBJECT('character', JSON_OBJECT('character_id', c.id, 'account_id', 
 FROM characters c JOIN accounts a ON a.id=c.accountid
 WHERE c.id={character_id} AND c.accountid={account_id};
 SELECT JSON_ARRAY(`key`, `type`, `action`) FROM keymap
-WHERE characterid={character_id} AND `key` IN (29,57,85) ORDER BY `key`;
-COMMIT;
+WHERE characterid={character_id} AND `key` IN ({key_filter}) ORDER BY `key`;
+{skill_query}COMMIT;
 """
 
 
-def parse_snapshot(raw, *, run_id, captured_at_ms, character_id, account_id):
+def parse_snapshot(raw, *, run_id, captured_at_ms, character_id, account_id, skill_toolkit=None):
     if not isinstance(run_id, str) or not IDENTIFIER.fullmatch(run_id):
         raise ValueError("invalid_run_id")
     if len(raw) > 16384:
@@ -62,6 +71,18 @@ def parse_snapshot(raw, *, run_id, captured_at_ms, character_id, account_id):
     if any(not 0 <= character[key] <= 30000 for key in ("hp", "mp", "max_hp", "max_mp")):
         raise ValueError("invalid_vitals")
     bindings = rows[1:]
+    skills = None
+    if skill_toolkit is not None:
+        from full_client_hero_toolkit import validate_toolkit
+        skill_toolkit = validate_toolkit(skill_toolkit)
+        bindings=[];skills=[];reading_skills=False
+        for value in rows[1:]:
+            if isinstance(value, dict) and set(value)=={'learned_skill'}:
+                reading_skills=True;skills.append(value['learned_skill'])
+            elif isinstance(value, list) and not reading_skills:
+                bindings.append(value)
+            else:
+                raise ValueError('invalid_toolkit_snapshot')
     if (any(not isinstance(binding, list) or len(binding) != 3 or
             any(type(x) is not int for x in binding) for binding in bindings)
             or len({binding[0] for binding in bindings}) != len(bindings)):
@@ -71,12 +92,42 @@ def parse_snapshot(raw, *, run_id, captured_at_ms, character_id, account_id):
         raise ValueError("gameplay_keymap_invalid")
     if 85 in keymap and keymap[85] != [5, 52]:
         raise ValueError("gameplay_keymap_invalid")
-    return {"schema_version": 1, "source": "cosmic_persisted_character", "run_id": run_id,
+    snapshot = {"schema_version": 1, "source": "cosmic_persisted_character", "run_id": run_id,
             "captured_at_ms": captured_at_ms, "account_logged_in": 0,
             "character": character, "keymap": bindings}
+    if skill_toolkit is not None:
+        snapshot.update(skill_toolkit_id=skill_toolkit['id'], learned_skills=skills)
+        validate_toolkit_snapshot(snapshot, skill_toolkit)
+    return snapshot
 
 
-def collect(*, mysql_command, database, defaults_file, run_id, character_id, account_id, timeout=10):
+def validate_toolkit_snapshot(snapshot, skill_toolkit):
+    """Bind every declared control/learned level to a read-only native DB row."""
+    from full_client_hero_toolkit import expected_keymap, expected_skills, validate_toolkit
+    skill_toolkit = validate_toolkit(skill_toolkit)
+    keymap = snapshot.get('keymap')
+    if (not isinstance(keymap, list) or any(not isinstance(row, list) or len(row)!=3
+            or any(type(n) is not int for n in row) for row in keymap)
+            or len({row[0] for row in keymap})!=len(keymap)):
+        raise ValueError('invalid_toolkit_keymap')
+    expected = {row[0]:row[1:] for row in expected_keymap(skill_toolkit)} | {29:[5,52],57:[5,53]}
+    actual = {row[0]:row[1:] for row in keymap}
+    if (not set(expected)<=set(actual)<=set(expected)|{85}
+            or any(actual.get(key)!=binding for key,binding in expected.items())
+            or 85 in actual and actual[85]!=[5,52]):
+        raise ValueError('toolkit_keymap_mismatch')
+    skills = snapshot.get('learned_skills')
+    if (snapshot.get('skill_toolkit_id')!=skill_toolkit['id']
+            or snapshot.get('character',{}).get('job')!=skill_toolkit['job']
+            or not isinstance(skills,list) or any(not isinstance(row,list) or len(row)!=2
+                or any(type(n) is not int for n in row) for row in skills)
+            or skills!=expected_skills(skill_toolkit)):
+        raise ValueError('toolkit_learned_skills_mismatch')
+    return snapshot
+
+
+def collect(*, mysql_command, database, defaults_file, run_id, character_id, account_id, timeout=10,
+            skill_toolkit=None):
     if not isinstance(database, str) or not DATABASE.fullmatch(database):
         raise ValueError("invalid_database")
     if not isinstance(mysql_command, list) or not mysql_command or any(
@@ -100,12 +151,12 @@ def collect(*, mysql_command, database, defaults_file, run_id, character_id, acc
         credentials = ["--defaults-extra-file=" + str(path.resolve())]
     result = subprocess.run([*mysql_command, *credentials, "--batch", "--raw", "--skip-column-names",
                              "--connect-timeout=5", database],
-                            input=snapshot_sql(character_id, account_id), text=True,
+                            input=snapshot_sql(character_id, account_id,skill_toolkit=skill_toolkit), text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             timeout=timeout, check=True, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                                                            "LC_ALL": "C"})
     return parse_snapshot(result.stdout, run_id=run_id, captured_at_ms=time.time_ns() // 1_000_000,
-                          character_id=character_id, account_id=account_id)
+                          character_id=character_id, account_id=account_id,skill_toolkit=skill_toolkit)
 
 
 def save_snapshot(path, snapshot):
@@ -140,7 +191,8 @@ def main(argv=None):
         config = json.loads(args.config.read_text())
         snapshot = collect(mysql_command=config["mysql_command"], database=config["database"],
                            defaults_file=config.get("defaults_file"), character_id=config["character_id"],
-                           account_id=config["account_id"], run_id=args.run_id)
+                           account_id=config["account_id"], run_id=args.run_id,
+                           skill_toolkit=config.get('skill_toolkit'))
         digest = save_snapshot(args.output, snapshot)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         print(json.dumps({"collected": False, "reason": "offline_snapshot_failed"}))

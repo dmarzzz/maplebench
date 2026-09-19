@@ -129,6 +129,35 @@ class ScenarioFreezeTest(unittest.TestCase):
         self.assertNotEqual(freeze.instructions_sha256(hero150)[0],
                             freeze.instructions_sha256(hero180)[0])
 
+    def test_knowledge_equipped_freeze_binds_pack_timeline_and_fixture(self):
+        reference = freeze.knowledge_reference()
+        protocol = freeze.build_protocol(DEFAULT_PROTOCOL['profile'],
+                                         knowledge_pack=reference)
+        self.assertEqual(protocol['knowledge_pack'], reference)
+        self.assertEqual(len(protocol['skill_toolkit']['skills']), 17)
+        self.assertEqual(protocol['profile']['id'], 'hero-180-expanded-v1')
+        self.assertEqual(protocol['profile']['skill_keys']['SKILL_10'], 'Power Guard')
+        self.assertEqual(protocol['input_timeline_policy'],
+                         freeze.INPUT_TIMELINE_POLICY)
+        self.assertEqual(protocol['max_total_tokens'], 500000)
+        scenario = freeze.build_scenario(freeze.KNOWLEDGE_SCENARIO_ID, protocol, 240040511)
+        self.assertIs(freeze.check_scenario(scenario), scenario)
+        with self.assertRaises(freeze.ScenarioError) as caught:
+            freeze.build_scenario('wrong-map', protocol, 240050300)
+        self.assertEqual(str(caught.exception), 'knowledge_pack_fixture_mismatch')
+
+    def test_500k_token_budget_requires_exact_knowledge_toolkit_axis(self):
+        protocol = freeze.build_protocol(DEFAULT_PROTOCOL['profile'])
+        protocol['max_total_tokens'] = 500000
+        with self.assertRaisesRegex(Exception, 'invalid_adaptive_limits'):
+            freeze.validate_protocol(protocol)
+
+    def test_legacy_protocol_and_prompt_remain_knowledge_free(self):
+        protocol = freeze.build_protocol(DEFAULT_PROTOCOL['profile'])
+        self.assertNotIn('knowledge_pack', protocol)
+        self.assertNotIn('input_timeline_policy', protocol)
+        self.assertNotIn('Frozen optional knowledge axis', freeze.prompt(protocol))
+
     def test_invalid_profiles_are_refused(self):
         for bad in ({'profile_id': 'Hero_150'}, {'class_name': ''}, {'level': 0},
                     {'level': 256}, {'skill_keys': {'NOT_A_KEY': 'Brandish'}}):

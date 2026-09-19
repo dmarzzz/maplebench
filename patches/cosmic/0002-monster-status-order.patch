@@ -1,0 +1,36 @@
+--- a/src/main/java/tools/PacketCreator.java
++++ b/src/main/java/tools/PacketCreator.java
+@@ -114,6 +114,7 @@
+ import java.net.InetAddress;
+ import java.sql.SQLException;
+ import java.util.ArrayList;
++import java.util.EnumMap;
+ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.LinkedHashMap;
+@@ -1445,10 +1446,11 @@
+         int pCounter = -1;
+         int mCounter = -1;
+ 
+-        stati = stati.entrySet()  // to patch some status crashing players
+-                .stream()
+-                .filter(e -> !(e.getKey().equals(MonsterStatus.WATK) || e.getKey().equals(MonsterStatus.WDEF)))
+-                .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue()));
++        Map<MonsterStatus, MonsterStatusEffect> ordered = new EnumMap<>(MonsterStatus.class);
++        ordered.putAll(stati);
++        ordered.remove(MonsterStatus.WATK);
++        ordered.remove(MonsterStatus.WDEF);
++        stati = ordered;
+ 
+         writeLongEncodeTemporaryMask(p, stati.keySet());    // packet structure mapped thanks to Eric
+ 
+@@ -3991,7 +3993,8 @@
+     }
+ 
+     public static Packet applyMonsterStatus(final int oid, final MonsterStatusEffect mse, final List<Integer> reflection) {
+-        Map<MonsterStatus, Integer> stati = mse.getStati();
++        Map<MonsterStatus, Integer> stati = new EnumMap<>(MonsterStatus.class);
++        stati.putAll(mse.getStati());
+         final OutPacket p = OutPacket.create(SendOpcode.APPLY_MONSTER_STATUS);
+         p.writeInt(oid);
+         p.writeLong(0);

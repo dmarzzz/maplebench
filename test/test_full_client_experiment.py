@@ -117,7 +117,7 @@ class ExperimentTests(unittest.TestCase):
             wall_time=self.clock, monotonic=self.clock, entry_admission=kwargs.get("entry_admission"))
 
     def test_rotations_are_exact_within_each_fixture_and_input_unchanged(self):
-        config = self.config(models=list(experiment.MODELS), repetitions=4, fixtures=2)
+        config = self.config(models=list(experiment.MODELS[:4]), repetitions=4, fixtures=2)
         original = copy.deepcopy(config)
         plan = experiment.build_plan(config)
         self.assertEqual(config, original)
@@ -156,8 +156,18 @@ class ExperimentTests(unittest.TestCase):
         with self.assertRaises(experiment.ExperimentError):
             experiment.build_plan(config)
 
+    def test_runner_accepts_full_release_source_closure_with_a_finite_bound(self):
+        runner=self.config()['runner']
+        original=len(runner['dependencies'])
+        for index in range(64-original):
+            runner['dependencies'].append({'path':str(self.root/f'closure-{index}.py'),'sha256':'a'*64})
+        experiment.validate_runner(runner)
+        runner['dependencies'].append({'path':str(self.root/'overflow.py'),'sha256':'b'*64})
+        with self.assertRaisesRegex(experiment.ExperimentError,'invalid_runner_dependencies'):
+            experiment.validate_runner(runner)
+
     def test_five_repetitions_do_not_claim_exact_four_model_balance(self):
-        plan = self.plan(models=list(experiment.MODELS), repetitions=5)
+        plan = self.plan(models=list(experiment.MODELS[:4]), repetitions=5)
         self.assertFalse(plan["balance"]["exact_position_balance"])
         for counts in plan["balance"]["position_counts"]["fixture0"].values():
             self.assertEqual(sorted(counts), [1, 1, 1, 2])

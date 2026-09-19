@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare immutable public cohort snapshots; never run models or deploy a site.
 
-The exact private plan selects four attempts. Public data is rebuilt with the
+The exact private plan selects a bounded four-model repeated cohort. Public data is rebuilt with the
 existing receipt projector, never copied from raw journals. A separate explicit
 claim precedes a root-owned deployment; uncertain claims cannot be replayed.
 """
@@ -22,9 +22,12 @@ from full_client_dashboard import (Reader, ProjectionError, RUN, SHA, model,
 from full_client_gallery import copy_recording, directory
 from full_client_score import same_json
 from full_client_trial import publish_attempt, sync_directory, validate_spec
-from full_client_research import summarize, CLASSES, TASKS
+from full_client_research import summarize, operational_reliability, CLASSES, TASKS
 
-ASSETS = ('index.html', 'dashboard.js', 'style.css')
+CORE_ASSETS = ('index.html', 'dashboard.js', 'style.css')
+THEME_ASSETS = ('henesys-world.png', 'maple-leaf.png', 'maple-companions.png',
+                'skill-book.png', 'manrope.ttf', 'OFL-Manrope.txt', 'ARTWORK.md')
+ASSETS = CORE_ASSETS + THEME_ASSETS
 MAX_VIDEO = 32 * 1024**2
 MAX_ADAPTIVE_VIDEO = 96 * 1024**2
 ADAPTIVE_PROTOCOL = 'full-client-adaptive-pilot-v1'
@@ -82,11 +85,12 @@ def write_new(path, raw, mode=0o600):
 def selected_plan(path, expected):
     require(isinstance(expected,str) and SHA.fullmatch(expected),'plan_hash_required')
     plan=Reader().json(directory(path.parent),path.name,expected)
-    require(plan.get('schema_version')==1 and plan.get('repetitions')==1
+    repetitions=plan.get('repetitions')
+    require(plan.get('schema_version')==1 and type(repetitions) is int and 1<=repetitions<=20
             and isinstance(plan.get('models'),list) and len(plan['models'])==4
             and len(set(plan['models']))==4 and all(model(x)==x for x in plan['models'])
             and isinstance(plan.get('fixtures'),list) and len(plan['fixtures'])==1
-            and isinstance(plan.get('entries'),list) and len(plan['entries'])==4,'four_model_plan_required')
+            and isinstance(plan.get('entries'),list) and len(plan['entries'])==4*repetitions,'four_model_plan_required')
     seen=set();fixture=plan['fixtures'][0]
     require(isinstance(fixture,dict) and isinstance(fixture.get('adapter_fingerprint'),str)
             and SHA.fullmatch(fixture['adapter_fingerprint']),'fixture_binding_required')
@@ -95,10 +99,13 @@ def selected_plan(path, expected):
         require(isinstance(value,dict) and isinstance(value.get('sha256'),str)
                 and SHA.fullmatch(value['sha256']),'fixture_binding_required')
     for ordinal,entry in enumerate(plan['entries']):
+        repetition,position=divmod(ordinal,4)
+        expected_model=plan['models'][(position+repetition)%4]
         require(isinstance(entry,dict) and entry.get('ordinal')==ordinal
                 and isinstance(entry.get('attempt_id'),str) and RUN.fullmatch(entry['attempt_id'])
-                and entry['attempt_id'] not in seen and entry.get('model')==plan['models'][ordinal]
-                and entry.get('repetition')==1 and entry.get('fixture_id')==fixture.get('id'), 'cohort_entry_invalid')
+                and entry['attempt_id'] not in seen and entry.get('model')==expected_model
+                and type(entry.get('repetition')) is int and entry['repetition']==repetition+1
+                and entry.get('fixture_id')==fixture.get('id'), 'cohort_entry_invalid')
         validate_spec(entry.get('spec'))
         require(entry['spec']['model']==entry['model'] and digest(encoded(entry['spec']))==entry.get('spec_sha256')
                 and entry['spec']['scenario_fingerprint']==fixture['scenario']['sha256']
@@ -168,16 +175,19 @@ def project_member(entry, fixture, attempt_root, recordings):
 
 def file_inventory(site,*,maximum_video=MAX_VIDEO):
     require(maximum_video in (MAX_VIDEO,MAX_ADAPTIVE_VIDEO),'invalid_public_video_limit')
-    names=set(ASSETS)|{'results.json','recording-manifest.json','vercel.json'}
+    required=set(CORE_ASSETS)|{'results.json','recording-manifest.json','vercel.json','recordings'}
     found=set()
     for count,p in enumerate(site.iterdir(),1):
-        require(count<=7,'unexpected_public_file');found.add(p.name)
-    require(found==names|{'recordings'},'unexpected_public_file')
+        require(count<=len(required)+len(THEME_ASSETS)+1,'unexpected_public_file');found.add(p.name)
+    # Historical packages retain their exact three-file UI. A themed package
+    # must carry the entire fixed artwork/font closure, including provenance.
+    require(found-{'native-qualification.json'} in (required,required|set(THEME_ASSETS)),'unexpected_public_file')
+    names=found-{'recordings'}
     for count,p in enumerate(directory(site/'recordings').iterdir(),1):
-        require(count<=4,'public_recording_count_limit');names.add('recordings/'+p.name)
+        require(count<=(80 if maximum_video==MAX_ADAPTIVE_VIDEO else 4),'public_recording_count_limit');names.add('recordings/'+p.name)
     result={}
     for name in sorted(names):
-        require(name in ASSETS or name in ('results.json','recording-manifest.json','vercel.json')
+        require(name in ASSETS or name in ('results.json','recording-manifest.json','vercel.json','native-qualification.json')
                 or re.fullmatch(r'recordings/[a-f0-9]{32}\.webm',name),'unexpected_public_file')
         result[name]=stable_fingerprint(site/name,maximum_video if name.endswith('.webm') else 4*1024**2)
     return result
@@ -193,7 +203,47 @@ def verify_package(package, expected):
     require(content.get('protocol') in (None,'legacy-full-client-v1',ADAPTIVE_PROTOCOL),'invalid_package_protocol')
     maximum=MAX_ADAPTIVE_VIDEO if content.get('protocol')==ADAPTIVE_PROTOCOL else MAX_VIDEO
     require(content.get('files')==file_inventory(site,maximum_video=maximum),'package_content_changed')
+    verify_qualification_binding(site,content)
     return manifest
+
+
+def verify_qualification_binding(site,content):
+    """Bind a reviewed native projection to the exact scored fixture.
+
+    Receipt re-execution happens during preparation. Catalogs accept only this
+    immutable projection, never raw native ledgers or private host paths.
+    """
+    snapshot=Reader().json(site,'results.json')
+    binding=content.get('native_qualification');value=snapshot.get('native_qualification')
+    require(('native-qualification.json' in content['files'])==(binding is not None)==(value is not None),
+        'native_qualification_binding_missing')
+    if binding is None:return None
+    from full_client_hero_qualification_public import validate_public_qualification
+    from full_client_hero_native_runtime import qualification_scenario
+    from full_client_native import contract, HERO_TOOLKIT_PROTOCOL
+    require(isinstance(binding,dict) and set(binding)=={'path','sha256','baseline_sha256',
+        'runtime_manifest_sha256','scenario_sha256','budgets'}
+        and binding['path']=='native-qualification.json'
+        and all(SHA.fullmatch(str(binding[key])) for key in
+            ('sha256','baseline_sha256','runtime_manifest_sha256','scenario_sha256')),
+        'native_qualification_binding_invalid')
+    require(isinstance(value,dict)
+        and binding['sha256']==content['files']['native-qualification.json']['sha256']
+        and same_json(value,Reader().json(site,'native-qualification.json',binding['sha256'])),
+        'native_qualification_file_mismatch')
+    pins={key:binding[key] for key in ('baseline_sha256','runtime_manifest_sha256')}
+    pins['qualification_scenario_sha256']=digest(encoded(qualification_scenario(pins['baseline_sha256'])))
+    pins.update({key:value.get(key) for key in ('server_jar_sha256','client_js_sha256','client_wasm_sha256')})
+    validate_public_qualification(value,native_contract=contract('hero',pins['baseline_sha256'],
+        protocol=HERO_TOOLKIT_PROTOCOL),expected_pins=pins)
+    fingerprint=digest(encoded({'scenario':binding['scenario_sha256'],
+        'baseline':binding['baseline_sha256'],'runtime_manifest':binding['runtime_manifest_sha256'],
+        'budgets':binding['budgets']}))
+    require(content.get('protocol')==ADAPTIVE_PROTOCOL and snapshot.get('attempts')
+        and all(row.get('research',{}).get('class_id')=='hero'
+            and row['research'].get('fixture_fingerprint')==fingerprint for row in snapshot['attempts']),
+        'native_qualification_fixture_mismatch')
+    return value
 
 
 def publication_state(package, expected):
@@ -215,17 +265,20 @@ def publication_state(package, expected):
 
 
 def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replace_archive=False,
-                    research_profile=None, adaptive_scenario=None):
+                    research_profile=None, adaptive_scenario=None, native_qualification=None):
     plan_path=Path(plan_path);attempt_root=directory(attempt_root);output_root=directory(output_root)
     for private in (attempt_root,directory(plan_path.parent)):
         require(not (output_root==private or output_root.is_relative_to(private) or private.is_relative_to(output_root)),
                 'private_inputs_must_be_outside_publication')
     plan=selected_plan(plan_path,plan_sha256)
+    qualification=None;qualification_binding=None
     if adaptive_scenario is not None:
         from full_client_adaptive_publication import checked_profile, project_member as adaptive_member, VERIFIED as verified
         profile,scenario=checked_profile(plan,adaptive_scenario,research_profile)
         project=lambda entry,fixture,root,videos:adaptive_member(entry,fixture,root,videos,scenario)
         maximum_video=MAX_ADAPTIVE_VIDEO
+        if scenario['adaptive_protocol'].get('skill_toolkit') is not None:
+            require(native_qualification is not None,'native_skill_qualification_required')
     else:
         profile=research_profile or {'protocol_id':'legacy-full-client-v1','class_id':'undeclared','task_id':'undeclared'}
         require(isinstance(profile,dict) and set(profile)=={'protocol_id','class_id','task_id'}
@@ -233,6 +286,31 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
                 and profile['task_id'] in TASKS,'legacy_research_profile_required')
         require(all(entry['spec'].get('schema_version')==1 for entry in plan['entries']),'legacy_specs_required')
         project=project_member;verified=VERIFIED;maximum_video=MAX_VIDEO
+    if native_qualification is not None:
+        from full_client_hero_qualification_public import project_qualification
+        from full_client_hero_native_runtime import qualification_scenario
+        from full_client_native import contract, HERO_TOOLKIT_PROTOCOL
+        from full_client_score import JSON_LIMIT, parse_json
+        require(adaptive_scenario is not None and profile['class_id']=='hero'
+            and isinstance(native_qualification,dict)
+            and set(native_qualification)=={'artifact_root','receipt_ref'},'invalid_native_qualification_input')
+        fixture=plan['fixtures'][0];ref=fixture['runtime_manifest'];path=Path(ref['path'])
+        raw=stable_bytes(path,JSON_LIMIT)
+        require(digest(raw)==ref['sha256'],'runtime_manifest_hash_mismatch')
+        manifest=parse_json(raw)
+        expected_pins={'baseline_sha256':fixture['baseline']['sha256'],
+            'runtime_manifest_sha256':ref['sha256'],
+            **{key+'_sha256':manifest[key]['sha256'] for key in ('server_jar','client_js','client_wasm')}}
+        expected_pins['qualification_scenario_sha256']=digest(encoded(qualification_scenario(expected_pins['baseline_sha256'])))
+        private=directory(Path(native_qualification['artifact_root']))
+        require(not(output_root.is_relative_to(private) or private.is_relative_to(output_root)),
+            'private_inputs_must_be_outside_publication')
+        qualification=project_qualification(private,native_qualification['receipt_ref'],
+            native_contract=contract('hero',expected_pins['baseline_sha256'],protocol=HERO_TOOLKIT_PROTOCOL),
+            expected_pins=expected_pins)
+        qualification_binding={'path':'native-qualification.json','sha256':digest(encoded(qualification)),
+            'baseline_sha256':fixture['baseline']['sha256'],'runtime_manifest_sha256':ref['sha256'],
+            'scenario_sha256':fixture['scenario']['sha256'],'budgets':fixture['budgets']}
     staging=Path(tempfile.mkdtemp(prefix='.cohort-',dir=output_root));site=staging/'site';site.mkdir(mode=0o755)
     recordings=site/'recordings';recordings.mkdir(mode=0o755)
     try:
@@ -248,19 +326,25 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
         complete=(all(row['status']=='completed' and row['score_verification']==verified
                       and row.get('recording_publication')=='verified_bytes' for row in rows) and len(groups)==1)
         require(not replace_archive or complete,'four_verified_recordings_required_for_archive_replacement')
-        comparisons=[{'id':key,'models':[r['requested_model'] for r in members],'ready':len(members)>=2,'ranked':False,
+        comparisons=[{'id':key,'models':list(dict.fromkeys(r['requested_model'] for r in members)),
+                      'ready':len({r['requested_model'] for r in members})>=2,'ranked':False,
                       'attempt_ids':[r['id'] for r in members],'scope':'selected_cohort',
-                      'reason':'same_frozen_inputs' if len(members)>=2 else 'another_model_required'} for key,members in groups.items()]
+                      'reason':'same_frozen_inputs' if len({r['requested_model'] for r in members})>=2 else 'another_model_required'} for key,members in groups.items()]
         completed=[r for r in rows if r['status']=='completed' and r['score_verification']==verified]
         snapshot={'schema_version':1,'generated_at_ms':max([r['updated_at_ms'] or 0 for r in rows]),
             'source':'full_client_private_receipt_projection','verification':verified,'live_status_available':False,
             'ranked':False,'recording_prefix':'./recordings/','truncated':False,'attempts':rows,'comparisons':comparisons,
             'featured_run_id':max(completed,key=lambda r:r['updated_at_ms'] or 0)['id'] if completed else None,
-            'cohort':{'id':plan_sha256,'planned':4,'verified':len(completed),'complete':complete,
+            'cohort':{'id':plan_sha256,'planned':len(rows),'verified':len(completed),'complete':complete,
                       'archive_replacement':replace_archive,'attempt_ids':[r['id'] for r in rows]}}
         snapshot['research_matrix']=summarize(snapshot)
+        if adaptive_scenario is not None and len(rows)>4:
+            snapshot['cohort']['reliability']=operational_reliability(rows)
+        if qualification is not None:
+            snapshot['native_qualification']=qualification
+            write_new(site/'native-qualification.json',encoded(qualification),0o644)
         ui=Path(__file__).resolve().parents[1]/'ui/full-client-dashboard'
-        for name in ASSETS:write_new(site/name,stable_bytes(ui/name,1024**2),0o644)
+        for name in ASSETS:write_new(site/name,stable_bytes(ui/name,4*1024**2),0o644)
         videos=[{'path':p.name,**stable_fingerprint(p,maximum_video)}
                 for p in sorted(recordings.iterdir())]
         write_new(site/'results.json',encoded(snapshot),0o644)
@@ -269,6 +353,7 @@ def prepare_package(plan_path, plan_sha256, attempt_root, output_root, *, replac
         content={'schema_version':1,'plan_sha256':plan_sha256,'archive_replacement':replace_archive,
                  'target_path':'/' if replace_archive else '/cohorts/'+plan_sha256[:16]+'/',
                  'protocol':profile['protocol_id'],'files':file_inventory(site,maximum_video=maximum_video)}
+        if qualification_binding is not None:content['native_qualification']=qualification_binding
         content_sha=digest(encoded(content));package=output_root/content_sha
         write_new(staging/'package-manifest.json',encoded({'schema_version':1,'content_sha256':content_sha,'content':content}))
         sync_directory(recordings);sync_directory(site);sync_directory(staging)
@@ -328,6 +413,8 @@ def main(argv=None):
     prepare.add_argument('--research-profile',type=Path);prepare.add_argument('--research-profile-sha256')
     prepare.add_argument('--adaptive-scenario',type=Path,
                          help='Frozen adaptive scenario; its exact SHA256 must match the pinned plan')
+    prepare.add_argument('--native-qualification-config',type=Path)
+    prepare.add_argument('--native-qualification-config-sha256')
     for name in ('claim','record-deployment'):
         command=commands.add_parser(name);command.add_argument('--package',type=Path,required=True)
         command.add_argument('--content-sha256',required=True)
@@ -339,9 +426,14 @@ def main(argv=None):
             require((args.research_profile is None)==(args.research_profile_sha256 is None),'research_profile_hash_required')
             profile=None if args.research_profile is None else Reader().json(directory(args.research_profile.parent),
                 args.research_profile.name,args.research_profile_sha256)
+            require((args.native_qualification_config is None)==(args.native_qualification_config_sha256 is None),
+                'native_qualification_config_hash_required')
+            qualification=None if args.native_qualification_config is None else Reader().json(
+                directory(args.native_qualification_config.parent),args.native_qualification_config.name,
+                args.native_qualification_config_sha256)
             result=prepare_package(args.plan,args.plan_sha256,args.attempt_root,args.output_root,
                                    replace_archive=args.replace_archive,research_profile=profile,
-                                   adaptive_scenario=args.adaptive_scenario)
+                                   adaptive_scenario=args.adaptive_scenario,native_qualification=qualification)
         elif args.command=='claim':result=claim_publication(args.package,args.content_sha256)
         else:result=record_deployment(args.package,args.content_sha256,args.deployment_id,args.url,args.verified_content_sha256)
         print(json.dumps(result,sort_keys=True));return 0

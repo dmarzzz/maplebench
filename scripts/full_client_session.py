@@ -179,8 +179,11 @@ class SessionCoordinator:
                         or not self.acknowledged or not self._fresh_browser()):
                     raise ControlError('trial_renderer_not_connected')
                 if native:
-                    return self.bridge.start('script',None,30,client=self.owner,run_id=run_id,request_id=request_id,
-                        native_acceptance=request['native_acceptance'],docker_image_id=request['docker_image_id'],
+                    from full_client_native import validate_contract
+                    try:contract=validate_contract(request['native_acceptance'])
+                    except (ValueError,TypeError):raise ControlError('invalid_native_acceptance') from None
+                    return self.bridge.start('script',None,contract['wall_seconds'],client=self.owner,run_id=run_id,request_id=request_id,
+                        native_acceptance=contract,docker_image_id=request['docker_image_id'],
                         docker_binding=request['docker_binding'],lease_fds=descriptors,private=True)
                 return self.bridge.start('api',request.get('model'),request.get('duration_seconds',22),
                     client=self.owner,run_id=run_id,request_id=request_id,

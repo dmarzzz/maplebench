@@ -15,6 +15,10 @@ verify that and does not pretend to.
     python3 scripts/full_client_scenario_freeze.py build \
         --id hero-180-v1-pilot-cohort-v1 --expected-map-id 240040511 \
         --output scenario.json
+    python3 scripts/full_client_scenario_freeze.py build \
+        --id hero-180-v1-cross-provider-knowledge-v1 \
+        --knowledge-pack hero-180-map-240040511-v1 \
+        --expected-map-id 240040511 --output scenario-with-knowledge.json
     python3 scripts/full_client_scenario_freeze.py check scenario.json
 
 The defaults are the accepted Hero-180 profile and the `encoded` cohort recipe.
@@ -33,9 +37,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import full_client_readiness as readiness
+import full_client_hero_toolkit as hero_toolkit
 from full_client_adaptive import (DEFAULT_PROTOCOL, PROTOCOL, AdaptiveError,
                                   capture_cohort_protocol, encoded_capture_cohort_protocol,
-                                  prompt, validate_protocol)
+                                  INPUT_TIMELINE_POLICY, KNOWLEDGE_MAX_TOTAL_TOKENS,
+                                  knowledge_reference, prompt, validate_protocol,
+                                  V1_KNOWLEDGE_PACK)
 
 # Mirrors full_client_runtime.SETTLEMENT_POLICY. Importing the runtime here would
 # drag in its Linux/root host checks, so the value is duplicated and pinned by a
@@ -47,6 +54,7 @@ SETTLEMENT_POLICY = {"capture_tail_ms": 2000, "upload_after_program_ms": 5000,
 # the adaptive path. This is NOT the legacy one-shot rule of program_seconds + 63.
 RUN_RESERVE_S = 35
 SETTLEMENT_RESERVE_S = 25
+KNOWLEDGE_SCENARIO_ID = 'hero-180-v1-cross-provider-knowledge-v1'
 
 
 class ScenarioError(ValueError):
@@ -74,7 +82,7 @@ def build_profile(profile_id, class_name, level, skill_keys):
 RECIPES = ('encoded', 'capture', 'bare')
 
 
-def build_protocol(profile, *, recipe='encoded'):
+def build_protocol(profile, *, recipe='encoded', knowledge_pack=None):
     """A frozen protocol for one cohort, using the repo's own cohort recipes.
 
     `encoded` is what the accepted five-minute cohorts actually ran: full-horizon
@@ -86,12 +94,20 @@ def build_protocol(profile, *, recipe='encoded'):
     require(recipe in RECIPES, 'invalid_cohort_recipe')
     try:
         if recipe == 'encoded':
-            return encoded_capture_cohort_protocol(copy.deepcopy(profile))
-        if recipe == 'capture':
-            return capture_cohort_protocol(copy.deepcopy(profile))
-        protocol = copy.deepcopy(DEFAULT_PROTOCOL)
-        protocol['profile'] = copy.deepcopy(profile)
-        return validate_protocol(protocol)
+            value = encoded_capture_cohort_protocol(copy.deepcopy(profile))
+        elif recipe == 'capture':
+            value = capture_cohort_protocol(copy.deepcopy(profile))
+        else:
+            value = copy.deepcopy(DEFAULT_PROTOCOL)
+            value['profile'] = copy.deepcopy(profile)
+        if knowledge_pack is not None:
+            require(profile == DEFAULT_PROTOCOL['profile'], 'knowledge_pack_profile_mismatch')
+            value['skill_toolkit'] = hero_toolkit.toolkit()
+            value['profile'] = hero_toolkit.profile(value['skill_toolkit'])
+            value['knowledge_pack'] = copy.deepcopy(knowledge_pack)
+            value['input_timeline_policy'] = dict(INPUT_TIMELINE_POLICY)
+            value['max_total_tokens'] = KNOWLEDGE_MAX_TOTAL_TOKENS
+        return validate_protocol(value)
     except AdaptiveError as error:
         raise ScenarioError(str(error)) from None
 
@@ -136,6 +152,8 @@ def build_scenario(scenario_id, protocol, expected_map_id, *, total_seconds=1200
     require(isinstance(scenario_id, str) and 0 < len(scenario_id) <= 128
             and scenario_id.strip() == scenario_id, "invalid_scenario_id")
     protocol = validate_protocol(protocol)
+    require('knowledge_pack' not in protocol or expected_map_id == 240040511,
+            'knowledge_pack_fixture_mismatch')
     policy = {"schema_version": 1, "expected_map_id": expected_map_id, "min_monsters": 1,
               "min_samples": 3, "min_span_ms": 1000, "timeout_ms": 10000}
     try:
@@ -188,9 +206,15 @@ def check_scenario(scenario, *, verify_prompt=True):
     if verify_prompt:
         digest, _ = instructions_sha256(protocol)
         require(scenario["instructions_sha256"] == digest, "frozen_prompt_mismatch")
+    elif 'knowledge_pack' in protocol:
+        # Historical prompt-hash bypass never bypasses a present pack's own
+        # fail-closed content and qualification checks.
+        instructions_sha256(protocol)
     require(scenario["budgets"] == budgets_for(protocol), "frozen_bridge_budgets_mismatch")
     expected_map = scenario["readiness_policy"].get("expected_map_id") \
         if isinstance(scenario["readiness_policy"], dict) else None
+    require('knowledge_pack' not in protocol or expected_map == 240040511,
+            'knowledge_pack_fixture_mismatch')
     try:
         readiness.validate_policy(scenario["readiness_policy"], expected_map_id=expected_map)
     except readiness.ReadinessError as error:
@@ -231,6 +255,8 @@ def main(argv=None):
         target.add_argument('--buff2', default='Maple Warrior')
         target.add_argument('--recipe', choices=RECIPES, default='encoded',
                             help='cohort recipe; encoded matches the accepted runs')
+        target.add_argument('--knowledge-pack', choices=(V1_KNOWLEDGE_PACK,),
+                            help='optional frozen pack; omission preserves legacy prompt bytes')
 
     hash_cmd = sub.add_parser('hash', help='print the prompt and its frozen hash')
     add_profile_args(hash_cmd)
@@ -238,7 +264,9 @@ def main(argv=None):
 
     build_cmd = sub.add_parser('build', help='emit a complete frozen scenario')
     add_profile_args(build_cmd)
-    build_cmd.add_argument('--id', required=True)
+    build_cmd.add_argument('--id', required=True,
+                           help='use %s for the first cross-provider knowledge freeze; '
+                                'later versioned IDs are allowed' % KNOWLEDGE_SCENARIO_ID)
     build_cmd.add_argument('--expected-map-id', type=int, required=True)
     build_cmd.add_argument('--total-seconds', type=int, default=1200)
     build_cmd.add_argument('--output')
@@ -260,7 +288,8 @@ def main(argv=None):
             return 0
 
         profile = build_profile(args.profile_id, args.class_name, args.level, _skill_keys(args))
-        protocol = build_protocol(profile, recipe=args.recipe)
+        reference = knowledge_reference(args.knowledge_pack) if args.knowledge_pack else None
+        protocol = build_protocol(profile, recipe=args.recipe, knowledge_pack=reference)
         if args.command == 'hash':
             digest, text = instructions_sha256(protocol)
             if args.show_prompt:

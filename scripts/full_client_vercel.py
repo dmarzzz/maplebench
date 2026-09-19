@@ -28,14 +28,16 @@ import uuid
 from full_client_dashboard import Reader, ProjectionError, SHA, write_snapshot
 from full_client_gallery import directory, copy_recording
 from full_client_publication import (claim_publication, encoded, digest, publication_state,
-    record_deployment, require, stable_bytes, stable_fingerprint, verify_package, write_new)
+    record_deployment, require, stable_bytes, stable_fingerprint, verify_package, write_new, ASSETS)
 
 META_CONTENT='maplebenchContentSha256'
 META_PAYLOAD='maplebenchPayloadSha256'
 META_NONCE='maplebenchPublicationId'
 MAX_PAYLOAD=512*1024**2
 MAX_OUTPUT=2*1024**2
-PUBLIC_NAME=re.compile(r'(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:index\.html|dashboard\.js|style\.css|results\.json|recording-manifest\.json|vercel\.json|README\.md|recordings/[a-f0-9]{32}\.webm)\Z')
+PUBLIC_NAME=re.compile(r'(?:(?:latest/)|(?:cohorts/[a-f0-9]{16}/))?(?:'
+    +'|'.join(re.escape(name) for name in ASSETS)
+    +r'|results\.json|recording-manifest\.json|native-qualification\.json|vercel\.json|README\.md|recordings/[a-f0-9]{32}\.webm)\Z')
 DEPLOYMENT=re.compile(r'dpl_[A-Za-z0-9]{8,80}\Z')
 
 

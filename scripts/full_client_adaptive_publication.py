@@ -114,6 +114,14 @@ def public_cycles(result,checked):
         public['horizon_wait']=None if wait is None else {
             'reason':wait['reason'],'started_ms':wait['started_ms'],'ended_ms':wait['ended_ms'],
             'observation_count':len(wait['samples'])}
+    pack=trace['limits'].get('knowledge_pack')
+    if pack:
+        public['knowledge_pack']={key:pack[key] for key in ('pack_id','pack_sha256','file_count','total_bytes')}
+    toolkit=trace['limits'].get('skill_toolkit')
+    if toolkit:
+        public['skill_toolkit']={'id':toolkit['id'],'invocable_count':len(toolkit['skills']),
+            'passives':toolkit['passives'],'unsupported':toolkit['unsupported'],
+            'effect_qualification':'not_established_by_scored_run'}
     return public
 
 
@@ -186,6 +194,11 @@ def project_member(entry,fixture,attempt_root,recordings,scenario):
                               'reviewed':recording.get('reviewed') is True}
             cue=playback_cue(result,recording,counters['actions'])
             if cue is not None:row['recording']['playback']=cue
+            from full_client_replay import project_timeline
+            timeline=project_timeline(result,recording,checked)
+            require(timeline is not None or not scenario['adaptive_protocol'].get('input_timeline_policy'),
+                    'adaptive_replay_timeline_unavailable')
+            if timeline is not None:row['recording']['timeline']=timeline
             row['recording_publication']='verified_bytes'
             row['publication_evidence']={'status':'adaptive_checked','reason_code':None}
         except (ValueError,OSError,TypeError,KeyError,RecursionError):
