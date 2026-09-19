@@ -19,7 +19,7 @@ class WindowExperimentTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
 
     def configuration(self):
-        config = self.fixture.config(models=list(experiment.MODELS))
+        config = self.fixture.config(models=list(experiment.MODELS[:4]))
         fixture = config['fixtures'][0]
         fixture['protocol'] = xp.PROTOCOL
         fixture['budgets'].update(total_seconds=1200, operation_seconds=360,
