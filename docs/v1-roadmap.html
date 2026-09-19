@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MapleBench v1 Release Path</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground:#EEF0F3; --surface:#FAFBFC; --ink:#141922; --ink-2:#4A5462; --ink-3:#737F8E;
+    --line:#D6DBE2; --line-soft:#E3E7EC; --accent:#0E6A5C; --accent-soft:#DCEBE7;
+    --warn:#8A5806; --warn-soft:#F3E9D6; --mono-bg:#E8EBEF;
+    --display:"Archivo","Helvetica Neue",Arial,sans-serif;
+    --body:"Source Sans 3",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0E1116; --surface:#161B22; --ink:#E6EAF0; --ink-2:#A3AEBC; --ink-3:#78838F;
+      --line:#262D37; --line-soft:#1E242D; --accent:#4FC2AC; --accent-soft:#14312C;
+      --warn:#D99B2E; --warn-soft:#33270F; --mono-bg:#1D232C; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0E1116; --surface:#161B22; --ink:#E6EAF0; --ink-2:#A3AEBC; --ink-3:#78838F;
+    --line:#262D37; --line-soft:#1E242D; --accent:#4FC2AC; --accent-soft:#14312C;
+    --warn:#D99B2E; --warn-soft:#33270F; --mono-bg:#1D232C; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--body);
+         font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+  img { max-width:100%; }
+  .wrap { max-width:920px; margin:0 auto; padding-inline:20px; padding-block:40px 56px; }
+  .eyebrow { font-family:var(--mono); font-size:11px; font-weight:500; letter-spacing:.1em;
+             text-transform:uppercase; color:var(--accent); margin:0 0 10px; }
+  h1 { font-family:var(--display); font-weight:700; font-size:clamp(28px,5.4vw,40px);
+       line-height:1.08; letter-spacing:-.022em; text-wrap:balance; margin:0 0 14px; }
+  .thesis { font-size:17px; color:var(--ink-2); max-width:62ch; margin:0 0 14px; }
+  .thesis strong { color:var(--ink); font-weight:600; }
+  .revision { border-left:3px solid var(--warn); background:var(--warn-soft); padding:12px 14px;
+              border-radius:0 3px 3px 0; margin:0 0 28px; font-size:14px; color:var(--ink-2); }
+  .revision b { color:var(--ink); font-weight:600; }
+  .strip { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line);
+           border:1px solid var(--line); border-radius:3px; overflow:hidden; margin-bottom:44px; }
+  .stat { background:var(--surface); padding:12px 14px 13px; }
+  .stat dt { font-family:var(--mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+             color:var(--ink-3); margin-bottom:5px; }
+  .stat dd { margin:0; font-family:var(--display); font-weight:600; font-size:19px;
+             letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
+  .stat dd span { font-size:12px; font-weight:400; color:var(--ink-3); font-family:var(--body); }
+  @media (max-width:720px){ .strip{ grid-template-columns:repeat(2,1fr);} }
+  .band { margin-bottom:40px; }
+  .band-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; padding-bottom:9px;
+               border-bottom:2px solid var(--ink); }
+  .band-head h2 { font-family:var(--display); font-weight:700; font-size:15px; letter-spacing:.02em;
+                  text-transform:uppercase; margin:0; }
+  .band-head .note { font-size:13.5px; color:var(--ink-2); }
+  .band.done-band .band-head { border-bottom-color:var(--accent); }
+  .band.defer .band-head { border-bottom-color:var(--ink-3); }
+  .item { display:grid; grid-template-columns:1fr minmax(0,330px); gap:10px 28px;
+          padding:16px 0 17px; border-bottom:1px solid var(--line-soft); }
+  .item:last-child { border-bottom:none; }
+  @media (max-width:720px){ .item{ grid-template-columns:1fr; gap:12px; } }
+  .lead { display:flex; gap:12px; }
+  .idx { font-family:var(--mono); font-size:12px; font-weight:500; color:var(--accent);
+         padding-top:3px; min-width:16px; font-variant-numeric:tabular-nums; }
+  .defer .idx { color:var(--ink-3); }
+  h3 { font-family:var(--display); font-weight:600; font-size:16.5px; letter-spacing:-.008em;
+       margin:0 0 4px; text-wrap:balance; }
+  .do { margin:0; color:var(--ink-2); font-size:14px; }
+  .why { margin:7px 0 0; font-size:13px; color:var(--ink-3); border-left:2px solid var(--line);
+         padding-left:9px; }
+  code { font-family:var(--mono); font-size:.855em; background:var(--mono-bg);
+         padding:.1em .32em; border-radius:2px; }
+  .out { background:var(--surface); border:1px solid var(--line); border-radius:3px;
+         padding:10px 12px 11px; }
+  .out-label { font-family:var(--mono); font-size:9.5px; font-weight:500; letter-spacing:.1em;
+               text-transform:uppercase; color:var(--accent); display:block; margin-bottom:7px; }
+  .defer .out-label { color:var(--ink-3); }
+  .out ul { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:6px; }
+  .out li { font-family:var(--mono); font-size:11.5px; line-height:1.42; color:var(--ink-2);
+            padding-left:11px; position:relative; overflow-wrap:break-word; }
+  .out li::before { content:"→"; position:absolute; left:0; color:var(--ink-3); }
+  .out li b { color:var(--ink); font-weight:500; }
+  .gate { display:inline-block; margin-top:9px; font-family:var(--mono); font-size:10px;
+          letter-spacing:.04em; text-transform:uppercase; color:var(--accent);
+          background:var(--accent-soft); padding:2px 6px; border-radius:2px; }
+  .gate.w { color:var(--warn); background:var(--warn-soft); }
+  .done { margin-top:44px; border:1px solid var(--accent); border-radius:3px;
+          background:var(--surface); padding:20px 22px 22px; }
+  .done h2 { font-family:var(--display); font-weight:700; font-size:14px; letter-spacing:.04em;
+             text-transform:uppercase; color:var(--accent); margin:0 0 12px; }
+  .done ul { margin:0; padding-left:18px; display:flex; flex-direction:column; gap:5px; }
+  .done li { font-size:14.5px; color:var(--ink-2); }
+  .done li b { color:var(--ink); font-weight:600; }
+  .path { font-family:var(--mono); font-size:12px; color:var(--ink-2); background:var(--mono-bg);
+          padding:9px 12px; border-radius:3px; margin:0 0 40px; overflow-x:auto; white-space:nowrap; }
+  .path b { color:var(--ink); font-weight:500; }
+  footer { margin-top:34px; padding-top:14px; border-top:1px solid var(--line);
+           font-family:var(--mono); font-size:10.5px; letter-spacing:.03em; color:var(--ink-3); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Hero-180 · map 240040511 · updated 2026-09-19</p>
+  <h1>MapleBench v1 Release Path</h1>
+  <p class="thesis">One fixture, one class, one objective, one deployed release:
+    <strong>16 attempts</strong> on the five-minute adaptive protocol, on the setup whose
+    baseline, keymap and machinery are already accepted.</p>
+
+  <div class="revision"><b>Revised after auditing the repo.</b> An earlier version of this page
+    claimed 78 branches with nothing merged back and listed four P0 items. Three were already done
+    on the integration line. The integration line records <b>9 of 24 deliverables accepted</b>, not
+    1 — the branch showing 1 is itself behind stale <code>main</code>.
+    <br><br><b>Depth before breadth.</b> The roadmap's earlier priority spent 16 trials as one
+    attempt per model across four classes. This plan spends them as <b>four repetitions on one
+    fixture</b>: same trial count, but breadth adds four qualification gates and yields no variance
+    estimate — and the four-model acceptance already produced +4,500 against 0 inside one cohort.</div>
+
+  <dl class="strip">
+    <div class="stat"><dt>v1 parts already in</dt><dd>4 <span>of 5</span></dd></div>
+    <div class="stat"><dt>Merges needed</dt><dd>0 <span>branches</span></dd></div>
+    <div class="stat"><dt>Shipped</dt><dd>7 <span>commits, 0 new test failures</span></dd></div>
+    <div class="stat"><dt>v1 target</dt><dd>16 <span>attempts, 1 fixture</span></dd></div>
+  </dl>
+
+  <p class="path"><b>bundle → bootstrap → re-pin → freeze → collect 16 → 3 clean groups → publish</b> · hero-cave is v2</p>
+
+  <!-- ALREADY DONE -->
+  <section class="band done-band">
+    <div class="band-head"><h2>Already on the integration line</h2>
+      <span class="note">Verified by audit. <code>codex/native-research-integrated</code> @ ee1c893.</span></div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">✓</span><div>
+        <h3>Stale-navigation session fix</h3>
+        <p class="do">An ancestor commit, not a pending branch.</p>
+        <p class="why">Carried by <code>4b559fe</code> and <code>0e73d9f</code>; <code>codex/showcase-session-fix</code> is 0 commits ahead.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Evidence</span><ul>
+        <li><code>full_client_session.py</code> <b>game_entry_redirect</b> + <b>login_allowed</b></li>
+        <li><code>account_still_online</code> runtime error code</li></ul></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">✓</span><div>
+        <h3>Readiness gate — mandatory, not dormant</h3>
+        <p class="do">Fails closed in planner, runtime and bridge; publication independently recomputes transit and residence.</p>
+        <p class="why">Byte-identical on all 80 refs. Every live run used it.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Evidence</span><ul>
+        <li><b>~25 tests</b> across bridge, runtime, experiment, publish</li>
+        <li><code>readiness_policy_required</code> before any provider request</li></ul></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">✓</span><div>
+        <h3>Five-minute adaptive protocol — has run live</h3>
+        <p class="do">Not code-ready-only. Real 300-second runs with confirmed provider requests.</p>
+        <p class="why">One accepted run: 9 cycles, 9/9 API responses confirmed, <code>controller_ms 300038</code>, persistence schema 2, video + probe + independent decoded counts.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Evidence</span><ul>
+        <li><code>full-client-adaptive-pilot-v1</code>, <b>wall_seconds 300</b> enforced</li>
+        <li>Accepted cohort freeze reproducible byte-for-byte</li></ul></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">✓</span><div>
+        <h3>Body-vs-declaration prompt contract</h3>
+        <p class="do">Committed in <code>2a93db5</code>, with tests.</p>
+        <p class="why">A bare <code>async function run(){}</code> legitimately does nothing and is never repaired — pinned by test.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Evidence</span><ul>
+        <li>Phrase assertions + <b>no-repair</b> byte-identity tests</li></ul></div>
+    </div>
+  </section>
+
+  <!-- SHIPPED -->
+  <section class="band">
+    <div class="band-head"><h2>Shipped</h2>
+      <span class="note">Branch <code>codex/v1-release-integration</code>, 7 commits. 1137 tests, no new failures.</span></div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">01</span><div>
+        <h3>The real prompt defect, fixed</h3>
+        <p class="do">The prompt advertised <em>"PRIMARY_SKILL, SECONDARY_SKILL, BUFF_1 and BUFF_2 press A, S, D and F."</em> The slot names are now the complete accepted set.</p>
+        <p class="why">This — not the declaration bug — is what cost Luna its attempt: it sent a raw <code>D</code> where the SDK requires <code>BUFF_1</code>, and the guard rejected the first RPC before any game action.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li><code>d40ff93</code> · new prompt version; <b>instructions_sha256 changes</b></li>
+        <li>Test pinning that physical keys are never advertised</li></ul>
+        <span class="gate">Done</span></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">02</span><div>
+        <h3>Frozen-scenario builder and checker</h3>
+        <p class="do"><code>scripts/full_client_scenario_freeze.py</code> — build, hash, check, offline.</p>
+        <p class="why">There was no way to compute <code>instructions_sha256</code>, and the only generator lived in an ops script outside the repo.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li><code>827266e</code> · reproduces the accepted cohort's <b>adaptive_protocol and readiness_policy byte for byte</b></li>
+        <li>25 tests, incl. regression against a real accepted freeze</li></ul>
+        <span class="gate">Done</span></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">03</span><div>
+        <h3>Hashed reference pack</h3>
+        <p class="do">Knowledge buried in the fixture <code>description</code> extracted into a searchable pack with per-fact provenance.</p>
+        <p class="why">Surfaced a real bug: the prose names two passives absent from <code>allowed_skills</code>, which adds two attacks the prose never mentions.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li><code>df4f7eb</code> · <code>knowledge/hero-cave/</code> + <code>knowledge_pack.py</code>, 9 tests</li>
+        <li><b>Not wired into any prompt</b> — deferred to v2</li></ul>
+        <span class="gate">Done</span></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">04</span><div>
+        <h3>Decision records</h3>
+        <p class="do">Four documents capturing scope, sequencing and status.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li><code>docs/V1_COHORT.md</code> — scope, 7-step re-pin checklist, non-claims</li>
+        <li><code>docs/V1_STATUS.md</code> — status, corrections, next actions</li>
+        <li><code>docs/M1_WORLD_IMAGE.md</code> — world image as reset primitive</li>
+        <li><code>docs/ROADMAP.md</code> — depth before breadth</li></ul>
+        <span class="gate">Done</span></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">05</span><div>
+        <h3>Infrastructure dry run</h3>
+        <p class="do">A worker was provisioned, verified reachable via Ansible, and destroyed on schedule by its external controller.</p>
+        <p class="why">Three latent failures were found and fixed pre-apply: the plan reused a destroyed lease's SSH key; a stale systemd stamp left the expiry timer with no next elapse; a stale receipt pointed at the previous droplet.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li>agent-devops <code>b20d2cf</code> · lease record + recurring hazards</li>
+        <li>Ansible core 2.21.4 verified: <code>ping → pong</code></li>
+        <li><b>Never bootstrapped</b> — no runtime bundle, so no evidence</li></ul>
+        <span class="gate w">Partial</span></div>
+    </div>
+  </section>
+
+  <!-- REMAINING -->
+  <section class="band">
+    <div class="band-head"><h2>Not done</h2><span class="note">In order. 06 blocks everything after it.</span></div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">06</span><div>
+        <h3>Runtime bundle</h3>
+        <p class="do">Build and pin a bundle from the components on <code>orbital-one</code>, or locate the original 5.4 GB one.</p>
+        <p class="why"><code>maplebench-worker.yml</code> requires <code>maplebench_bundle_path</code> + SHA-256 and a pinned Chrome <code>.deb</code> + SHA-256. Neither exists on the laptop.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li>Hash-pinned bundle + Chrome package</li></ul>
+        <span class="gate w">Blocker</span></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">07</span><div>
+        <h3>Adopt the fresh-runtime toolkit</h3>
+        <p class="do">Use PR #11's <code>scripts/maplebench-fresh-runtime/</code>. Do not write a new one.</p>
+        <p class="why">A unit renderer was written here and reverted: it produced four units against the toolkit's six, omitting the display and browser units entirely. The toolkit already ran on the Sept 12 verification worker.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li><code>prepare.py</code> · <code>install_units.py</code> · <code>import_database.py</code> · <code>enroll.py</code></li></ul>
+        <span class="gate w">Open</span></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">08</span><div>
+        <h3>Re-pin and freeze</h3>
+        <p class="do">Seven steps: runtime manifest, backend scenario ref, plan fixture, runner dependencies, adapter fingerprint, web restart, fresh attempt IDs.</p>
+        <p class="why">The prompt change alters a pinned frozen source. Every step fails closed if skipped — that is the design working.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li>Frozen scenario <code>hero-180-v1-pilot-cohort-v1</code></li>
+        <li>New runtime inventory manifest (refuses overwrite)</li></ul>
+        <span class="gate w">Needs a host</span></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">09</span><div>
+        <h3>Collect 16 attempts</h3>
+        <p class="do">4 models × 4 repetitions, declared order balance, one release.</p>
+        <p class="why">One attempt per model cannot separate model from variance.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li>16 records: signed <code>net_xp</code>, <code>alive_at_logout</code>, cycles, usage</li>
+        <li>16 readiness receipts + 16 hashed recordings</li></ul>
+        <span class="gate w">Needs an OpenAI key</span></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">10</span><div>
+        <h3>Reliability metric, then publish</h3>
+        <p class="do">Attempted / completed / invalid per group by cause; then one link, 16 attempts, per-model spread.</p>
+        <p class="why">No ranking language. Valid zeros count; invalid evidence stays distinct in denominators.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Output</span><ul>
+        <li>Per-cause reliability table; <b>3 consecutive clean groups</b></li>
+        <li>Public page with attempt accounting + linked replays</li></ul>
+        <span class="gate w">Open</span></div>
+    </div>
+  </section>
+
+  <!-- DEFERRED -->
+  <section class="band defer">
+    <div class="band-head"><h2>Deferred</h2><span class="note">Named blockers, not vague "later".</span></div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">—</span><div>
+        <h3>hero-cave → v2</h3>
+        <p class="do">Better-designed fixture, unbuildable today.</p>
+        <p class="why">No level-150 baseline or verified keymap for map <code>240050300</code>. The runtime binds profile level to the baseline character's level and refuses a mismatch with <code>baseline_identity_mismatch</code>. Its nine invocable skills do not map onto four neutral slots.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Why it waits</span><ul>
+        <li>Needs a new baseline + native keymap qualification</li></ul></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">—</span><div>
+        <h3>Knowledge pack in the prompt</h3>
+        <p class="do">Built and hashed, deliberately not wired in.</p>
+        <p class="why">The SDK has no file access, so the only channel is the prompt, re-sent every cycle. Changing the prompt contract and the knowledge axis together would make a shifted result unattributable.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Why it waits</span><ul>
+        <li>Becomes its own versioned axis in v2</li></ul></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">—</span><div>
+        <h3>Skill suite v1</h3>
+        <p class="do">852 planned entries, 6 classes. Parked.</p>
+        <p class="why">Three blockers are native proofs that do not exist: movement path validation, teleport causal link, item ledger.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Why it waits</span><ul>
+        <li>Does not clear the next acceptance gate</li></ul></div>
+    </div>
+
+    <div class="item">
+      <div class="lead"><span class="idx">—</span><div>
+        <h3>World image, Harbor, peak XP/min</h3>
+        <p class="do">M1 content, parallel to v1 — not before it.</p>
+        <p class="why">v1 on the current reset path is the regression oracle. Rate scoring needs the XP-window ledger and a true fixed-width window.</p>
+      </div></div>
+      <div class="out"><span class="out-label">Sequenced as</span><ul>
+        <li>M1.3 / M1.4 per <code>docs/M1_WORLD_IMAGE.md</code></li></ul></div>
+    </div>
+  </section>
+
+  <div class="done">
+    <h2>Definition of done for v1</h2>
+    <ul>
+      <li><b>One link</b> showing 16 attempts on one fixture and one release.</li>
+      <li><b>4 models × 4 reps</b>, every attempt accounted for with a cause.</li>
+      <li><b>Per-model spread</b>, not a winner.</li>
+      <li><b>Readiness receipts</b> proving each model faced a populated scene.</li>
+      <li><b>Replays that agree</b> with their scores.</li>
+      <li><b>3 consecutive groups</b> completing without hand-holding.</li>
+    </ul>
+  </div>
+
+  <footer>Scope: hunting XP, Hero-180, map 240040511 · Protocol: full-client-adaptive-pilot-v1 · Preliminary pilot — establishes no ranking</footer>
+</div>
+</body>
+</html>
