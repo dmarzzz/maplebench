@@ -1,186 +1,248 @@
 (() => {
   'use strict';
-  const $=id=>document.getElementById(id), el=(tag,text)=>{const node=document.createElement(tag);if(text!=null)node.textContent=String(text);return node;};
-  const phases=[['restore_baseline','Restore'],['start_server','Start server'],['login','Login'],['run_controller','Play'],['disconnect','Logout'],['collect_final','Verify XP'],['cleanup','Finish']];
-  const labels={running:'In progress',requesting:'Awaiting API',completed:'Completed',failed:'Failed',interrupted:'Interrupted',recovering:'Recovering',recovered:'Recovered; invalid run',unavailable:'Evidence unavailable',idle:'Idle'};
-  let snapshot=null,closed=false,timer;
-  const format=value=>Number.isFinite(value)?value.toLocaleString('en-US'):'—';
-  const xp=value=>Number.isFinite(value)?`${value>0?'+':''}${format(value)}`:'—';
-  const seconds=value=>Number.isFinite(value)?`${(value/1000).toFixed(1)}s`:'—';
-  const alive=value=>value===true?'Alive':value===false?'Dead':'—';
-  const badge=status=>{const node=el('span',labels[status]||'Unavailable');node.className='pill';if(Object.hasOwn(labels,status))node.classList.add(status);return node;};
-  function publication(row){
-    const evidence=row.publication_evidence;
-    if(evidence?.status==='passed')return {label:'Evidence checked',detail:null,tone:'completed'};
-    if(evidence?.status==='blocked')return {label:'Publication blocked',
-      detail:evidence.reason_code==='receipts_incomplete'?'Receipts incomplete':evidence.reason_code==='evidence_unavailable'?'Evidence unavailable':'Check did not pass',tone:'failed'};
-    if(evidence?.status==='awaiting_review')return {label:'Awaiting review',detail:null,tone:null};
-    return {label:'Not evaluated',detail:null,tone:null};
-  }
-  function publicationCell(tr,row){
-    const status=publication(row),node=cell(tr,null,'publication-status'),pill=el('span',status.label);
-    pill.className='pill';if(status.tone)pill.classList.add(status.tone);node.append(pill);
-    if(status.detail)node.append(el('small',status.detail));
-  }
-  let replayFocus=null,replayRunId=null,replaySection=null,replayCue=null,replayStart=0;
-  const replay=$('replay'),player=$('replay-video');
-  function stopReplay(){player.pause();player.removeAttribute('src');player.load();}
-  function replayVerification(row){
-    $('replay-verification').textContent=row.persisted_xp!=null
-      ?'Persisted XP verified by the runner. Unranked recording.'
-      :row.kind==='integration'?'Unscored integration recording.'
-      :['failed','interrupted','recovered'].includes(row.status)?'No verified persisted score. This attempt is invalid for comparison.'
-      :'No verified persisted score. Unranked recording.';
-    const status=publication(row);
-    $('replay-verification').textContent+=` ${status.label}${status.detail?' ('+status.detail.toLowerCase()+')':''}.`;
-    if(row.attribution==='mismatch')$('replay-verification').textContent+=` Requested model: ${row.requested_model}.`;
-  }
-  function openReplay(url,row,trigger){
-    replayFocus=trigger;replayRunId=row.id;replaySection=trigger.closest('tbody')?.id;
-    $('replay-title').textContent=`${row.returned_model||row.requested_model||'Script / no evaluated model'} · ${row.id.slice(0,12)}`;
-    replayVerification(row);
-    const cue=row.recording?.playback;
-    replayCue=cue&&Number.isFinite(cue.start_ms)&&cue.start_ms>=0&&cue.start_ms<125000
-      &&['first_acknowledged_input','program_start'].includes(cue.basis)?cue:null;
-    replayStart=replayCue?replayCue.start_ms/1000:0;
-    $('replay-agent').hidden=!replayCue;
-    $('replay-agent').textContent=replayCue?.basis==='first_acknowledged_input'?'First input':'Program start';
-    $('replay-timing').textContent=(Number.isFinite(row.timing?.api_ms)?`API wait: ${seconds(row.timing.api_ms)}. `:'')
-      +(row.no_op===true?(row.sdk_calls===0?'The program exited without any SDK calls. ':'No input actions were executed in this run. ')+'Showing the full recording.'
-      :replayCue?`Opens near ${replayCue.basis==='first_acknowledged_input'?'the first confirmed input':'program start; first-input timing was not recorded'}. Full recording includes the opening wait.`
-      :'Showing the full recording; a verified playback cue is unavailable.');
-    $('replay-playback-status').textContent='Loading recording…';
-    stopReplay();player.src=url.href;
-    if(!replay.open)replay.showModal();
-    $('replay-close').focus();
-  }
-  function playFrom(seconds){
-    replayStart=seconds;
-    if(!replay.open||player.readyState<1)return;
-    try{player.currentTime=Number.isFinite(player.duration)&&seconds>=player.duration?0:seconds;}
-    catch{$('replay-playback-status').textContent='Seeking is unavailable. Use the video controls.';return;}
-    player.play().catch(()=>{if(replay.open)$('replay-playback-status').textContent='Use Play to start the recording.';});
-  }
-  player.addEventListener('loadedmetadata',()=>playFrom(replayStart));
-  $('replay-agent').addEventListener('click',()=>{if(replayCue)playFrom(replayCue.start_ms/1000);});
-  $('replay-full').addEventListener('click',()=>playFrom(0));
-  $('replay-close').addEventListener('click',()=>replay.close());
-  replay.addEventListener('close',()=>{
-    stopReplay();
-    if(closed)return;
-    const replacement=[...document.querySelectorAll('button[data-recording-run]')].find(node=>node.dataset.recordingRun===replayRunId&&node.closest('tbody')?.id===replaySection);
-    const target=replayFocus?.isConnected?replayFocus:replacement||$('live-title');
-    if(target===$('live-title'))target.tabIndex=-1;
-    target.focus();replayFocus=null;
-  });
-  player.addEventListener('playing',()=>{if(replay.open)$('replay-playback-status').textContent='Playing saved recording.';});
-  player.addEventListener('ended',()=>{if(replay.open)$('replay-playback-status').textContent='Recording finished.';});
-  player.addEventListener('error',()=>{if(replay.open&&player.getAttribute('src'))$('replay-playback-status').textContent='The recording could not be loaded.';});
-  function recording(cell,row){
-    const value=row.recording;
-    if(!value){cell.textContent='Not linked';return;}
-    try{
-      const url=new URL(value.url,location.href);
-      if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash
-          ||!/^\/(?:[A-Za-z0-9_-]+\/){0,3}recordings\/[A-Za-z0-9_./-]+\.(webm|mp4)$/.test(url.pathname)
-          ||url.origin!==location.origin)throw Error();
-      const button=el('button','Watch recording');button.type='button';button.className='watch-recording';button.dataset.recordingRun=row.id;
-      button.addEventListener('click',()=>openReplay(url,row,button));cell.append(button);
-    }catch{cell.textContent='Not linked';}
-  }
-  function cell(row,value,className){const node=el('td',value);if(className)node.className=className;row.append(node);return node;}
-  function scoreCell(tr,row){const node=cell(tr,xp(row.persisted_xp),'numeric');if(row.persisted_xp<0)node.classList.add('negative');else if(row.persisted_xp>0)node.classList.add('positive');if(row.persisted_xp!=null)node.append(el('small','Runner verified'));else node.append(el('small',row.kind==='integration'?'Unscored integration':['failed','interrupted','recovered'].includes(row.status)?'No verified score':'Awaiting verification'));}
-  function inputDetails(node,row){
-    if(!Number.isFinite(row.acknowledged_actions)&&Number.isFinite(row.reported_actions)){
-      node.replaceChildren(el('span',`${format(row.reported_actions)} reported`),el('small','Action receipts not verified'));return;
-    }
-    node.replaceChildren(el('span',`${format(row.acknowledged_actions)} acknowledged`));
-    if(Number.isFinite(row.action_attempts))node.append(el('small',`${format(row.action_attempts)} attempted`));
-    if(row.no_op===true)node.append(el('small',row.sdk_calls===0?'Exited without SDK calls':'No input actions executed'));
-    else if(row.action_verification==='receipts_incomplete')node.append(el('small','Action evidence incomplete'));
-    else if(row.action_verification!=='receipts_rechecked')node.append(el('small','Action receipts not verified'));
-  }
-  function renderLive(){
-    const rows=snapshot.attempts;
-    const row=rows.find(item=>item.id===snapshot.featured_run_id&&item.status==='completed')||rows.find(item=>['running','recovering','requesting'].includes(item.status))||rows[0];
-    if(!row)return;
-    const liveBadge=badge(row.status);
-    if(row.status==='completed')liveBadge.textContent='Completed · saved result';
-    $('live-badge').replaceWith(Object.assign(liveBadge,{id:'live-badge'}));
-    $('live-id').textContent=row.id;
-    $('live-title').textContent=row.requested_model?`${row.status==='completed'?'Latest verified result: ':''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
-    const phase=phases.find(([key])=>key===row.phase)?.[1]||'Preparing';
-    const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
-    const expectsRenderer=['running','requesting'].includes(row.status)&&['login','run_controller'].includes(row.phase);
-    $('live-description').textContent=row.failure_code?`${failedPhase}: ${row.failure_code.replaceAll('_',' ')}.${row.api_response_saved?' The API response was saved; this attempt has no verified persisted score.':''}`
-      :row.status==='completed'?'This verified run is featured for sharing. More recent failed attempts, if any, remain in the history below.'
-      :`${phase}${expectsRenderer&&row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
-    const current=phases.findIndex(([key])=>key===row.phase);$('phases').replaceChildren();
-    for(const [index,[key,label]]of phases.entries()){const node=el('li',label),state=row.phase_states?.[key];if(state==='failed'){node.textContent=`${label}: failed`;node.className='phase-failed';}else if(row.status==='completed'||state==='returned')node.className='done';else if(index===current)node.className='current';$('phases').append(node);}
-    $('live-model').textContent=row.returned_model||'Awaiting exact attribution';
-    inputDetails($('live-actions'),row);
-    const featured=$('featured-recording'); if(featured){featured.replaceChildren();if(row.status==='completed'&&row.recording)recording(featured,row);}
-    const saved=Number.isFinite(row.persisted_xp);
-    $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
-    $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
-  }
-  function renderComparisons(){
-    const groups=snapshot.comparisons.map(group=>({group,rows:snapshot.attempts.filter(item=>group.attempt_ids.includes(item.id))}));
-    const latest=rows=>Math.max(0,...rows.map(row=>row.created_at_ms||0));
-    groups.sort((a,b)=>latest(b.rows)-latest(a.rows));
-    $('comparison-empty').hidden=groups.length>0;$('comparison-groups').replaceChildren();
-    for(const [index,{group,rows}] of groups.entries()){
-      const block=el('article'),heading=el('div'),title=el('h3',`${index===0?'Latest group':'Earlier group'} · ${group.models.length} ${group.models.length===1?'model':'models'}`);
-      block.className='result-group';heading.className='group-heading';heading.append(title,el('span',`${rows.length} ${rows.length===1?'attempt':'attempts'} · ${group.id.slice(0,10)}`));block.append(heading);
-      block.append(el('p',group.ready?'Matching baseline, scenario, budgets and runtime. Live scene equality is unverified; no ranking established.':'Separate frozen inputs. Its result is visible here; another model is needed for a within-group comparison.'));
-      const noOps=rows.filter(row=>row.no_op===true),incomplete=rows.filter(row=>row.action_verification==='receipts_incomplete');
-      if(noOps.length){const note=el('p',`${noOps.map(row=>row.requested_model).join(' and ')} executed no input actions. Their zero XP remains in the results.`);note.className='group-notice';block.append(note);}
-      if(incomplete.length){const note=el('p',`${incomplete.map(row=>row.requested_model).join(' and ')} has incomplete action evidence. Persisted XP and publication status are shown separately.`);note.className='group-notice';block.append(note);}
-      const wrap=el('div'),table=el('table'),caption=el('caption',`${title.textContent}: persisted outcomes`),head=el('thead'),headRow=el('tr'),body=el('tbody');
-      wrap.className='table-wrap';caption.className='visually-hidden';body.id=`comparison-rows-${group.id}`;
-      for(const label of ['Exact model','Persisted XP','Input actions','At logout','API / play time','Publication evidence','Recording'])headRow.append(el('th',label));
-      head.append(headRow);table.append(caption,head,body);wrap.append(table);block.append(wrap);
-      for(const row of rows){
-        const tr=el('tr'),identity=cell(tr,row.requested_model);identity.append(el('small',row.id.slice(0,12)));
-        scoreCell(tr,row);inputDetails(cell(tr,null,'input-summary'),row);cell(tr,alive(row.alive_at_logout));
-        const timing=cell(tr,`${seconds(row.timing.api_ms)} API`);timing.append(el('small',`${seconds(row.timing.controller_ms)} play`));
-        publicationCell(tr,row);recording(cell(tr),row);body.append(tr);
-      }
-      $('comparison-groups').append(block);
+  const $ = id => document.getElementById(id);
+  const sectionLinks = [...document.querySelectorAll('.site-nav a')];
+  function markSection(id) {
+    for (const link of sectionLinks) {
+      if (link.getAttribute('href') === `#${id}`) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
     }
   }
-  function renderHistory(){
-    $('history').replaceChildren();$('history-empty').hidden=snapshot.attempts.length>0;
-    $('count').textContent=`${snapshot.attempts.length} visible attempts${snapshot.truncated?' · recent window':''}`;
-    for(const row of snapshot.attempts){
-      const tr=el('tr'),identity=cell(tr);identity.append(el('strong',row.requested_model||'No evaluated model'),el('small',row.id));
-      if(row.attribution==='mismatch')identity.append(el('small',`Returned ${row.returned_model}; attribution mismatch`));
-      const state=cell(tr);state.append(badge(row.status));if(row.no_op===true)state.append(el('small','No input actions'));if(row.failure_code)state.append(el('small',row.failure_code.replaceAll('_',' ')));
-      if(row.api_outcome==='uncertain')state.append(el('small',row.api_response_saved?'API receipt saved; runner accounting uncertain':'API outcome uncertain'));
-      if(row.kind==='integration')state.append(el('small','Unranked integration'));
-      scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');inputDetails(cell(tr,null,'input-summary'),row);publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
+  const navSections = sectionLinks.map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+  let sectionFramePending = false;
+  function updateCurrentSection() {
+    sectionFramePending = false;
+    const readingLine = Math.max(document.querySelector('.site-header').getBoundingClientRect().bottom + 24, innerHeight / 2);
+    let current = navSections[0];
+    for (const section of navSections) {
+      if (section.getBoundingClientRect().top <= readingLine) current = section;
     }
-    $('scope').textContent='Saved unranked results. No runs are started from this page.';
+    if (scrollY + innerHeight >= document.documentElement.scrollHeight - 4) current = navSections.at(-1);
+    if (current) markSection(current.id);
   }
-  function freshness(){
-    if(!snapshot)return;
-    const age=Date.now()-snapshot.generated_at_ms,active=snapshot.attempts.some(row=>['running','requesting','recovering'].includes(row.status));
-    const stale=age>10000||age< -1000||snapshot.live_status_available===false;
-    $('connection').className=active&&stale?'stale':'';
-    $('connection').textContent=active&&stale?'Live updates stale · showing saved snapshot':stale
-      ?`Saved results · ${new Date(snapshot.generated_at_ms).toLocaleString()}`:`Snapshot updated ${Math.max(0,Math.floor(age/1000))}s ago`;
+  function scheduleSectionUpdate() {
+    if (sectionFramePending) return;
+    sectionFramePending = true;
+    requestAnimationFrame(updateCurrentSection);
   }
-  async function refresh(){
-    if(closed)return;
-    try{
-      const response=await fetch('./results.json',{cache:'no-store',signal:AbortSignal.timeout(3000)});
-      if(!response.ok)throw Error();const next=await response.json();
-      if(next.schema_version!==1||!Array.isArray(next.attempts)||next.attempts.length>100||!Array.isArray(next.comparisons)||!Number.isFinite(next.generated_at_ms))throw Error();
-      snapshot=next;renderLive();renderComparisons();renderHistory();freshness();
-      if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
-    }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
-    finally{ /* Saved sharing page: fetch once; no live-feed polling. */ }
+  addEventListener('scroll', scheduleSectionUpdate, { passive: true });
+  addEventListener('resize', scheduleSectionUpdate, { passive: true });
+  addEventListener('load', scheduleSectionUpdate);
+  document.addEventListener('toggle', scheduleSectionUpdate, true);
+  scheduleSectionUpdate();
+  const node = (tag, text, cls) => { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; };
+  const number = n => Number.isFinite(n) ? n.toLocaleString('en-US') : '—';
+  const xp = n => Number.isFinite(n) ? `${n > 0 ? '+' : ''}${number(n)}` : '—';
+  const duration = n => Number.isFinite(n) ? `${(n / 1000).toFixed(1)}s` : '—';
+  const model = row => row.returned_model || row.requested_model || 'Script';
+  const names = { 'gpt-6-astra':'GPT-6 Astra', 'gpt-5.6-terra':'GPT-5.6 Terra', 'gpt-5.6-sol':'GPT-5.6 Sol', 'gpt-5.6-luna':'GPT-5.6 Luna' };
+  const name = row => names[model(row)] || model(row);
+  const colors = { 'gpt-6-astra':'#609b8b', 'gpt-5.6-terra':'#a580b7', 'gpt-5.6-sol':'#d2a35b', 'gpt-5.6-luna':'#6f9bc6' };
+  const color = row => colors[model(row)] || '#999';
+  const status = row => ({completed:'Completed',recovered:'Recovered · invalid',failed:'Failed',interrupted:'Interrupted',running:'In progress',requesting:'Awaiting API'}[row.status] || 'Incomplete');
+  let data, recordings = [], selected, filterModel, previewsPlaying = false;
+  const player = $('run-video');
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  function safeRecording(row) {
+    try {
+      const u = new URL(row.recording.url, location.href);
+      if (u.origin !== location.origin || !['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash
+        || !/^\/(?:[A-Za-z0-9_-]+\/){0,3}recordings\/[A-Za-z0-9_./-]+\.(webm|mp4)$/.test(u.pathname)) return null;
+      return u.href;
+    } catch { return null; }
   }
-  window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
-  refresh();
+  function cue(row) {
+    const c = row.recording?.playback;
+    return c && Number.isFinite(c.start_ms) && c.start_ms >= 0 && c.start_ms < 125000
+      && ['program_start','first_acknowledged_input'].includes(c.basis) ? c : null;
+  }
+  function publication(row) {
+    const e = row.publication_evidence;
+    if (e?.status === 'passed') return ['Evidence checked','Input checks passed.'];
+    if (e?.status === 'blocked') return ['Publication blocked', e.reason_code === 'receipts_incomplete' ? 'Publication blocked: incomplete input receipts.' : 'Publication checks failed.'];
+    return ['Not evaluated','Publication evidence not evaluated.'];
+  }
+  function dot(row) { const d = node('span',null,'model-dot'); d.style.setProperty('--model-color',color(row)); return d; }
+  function cell(tr, text, cls) { const c = node('td',text,cls); tr.append(c); return c; }
+  /* Copy the column headings onto each cell so the phone stylesheet can stack
+     rows into labelled cards instead of scrolling the table sideways. */
+  function labelCells(tbody) {
+    const heads = [...(tbody.closest('table')?.querySelectorAll('thead th') || [])].map(th => th.textContent.trim());
+    for (const tr of tbody.rows) [...tr.cells].forEach((td,i) => { if (heads[i]) td.dataset.label = heads[i]; });
+  }
+  function watch(row) {
+    if (!safeRecording(row)) return node('span','Not recorded','muted small');
+    const b = node('button','Watch ↗','watch-button'); b.type = 'button'; b.setAttribute('aria-label',`Watch ${name(row)} attempt ${row.id.slice(0,8)}`);
+    b.addEventListener('click', () => openRun(row)); return b;
+  }
+  function setPreviews(play) {
+    previewsPlaying = play;
+    for (const v of document.querySelectorAll('.montage video')) { if (play) v.play().catch(() => {}); else v.pause(); }
+    $('montage-toggle').textContent = play ? 'Pause previews' : 'Play previews';
+    $('montage-toggle').setAttribute('aria-pressed',String(play));
+  }
+  function renderMontage() {
+    const complete = recordings.filter(r => r.status === 'completed');
+    // Showcase recorded progress; captions identify each model and outcome.
+    const featured = complete.find(r => r.id === data.featured_run_id) || complete[0];
+    const picks = featured ? [featured] : [];
+    const terra = complete.find(r => model(r) === 'gpt-5.6-terra');
+    if (terra && !picks.includes(terra)) picks.push(terra);
+    for (const r of complete.filter(r => r.persisted_xp > 0)) if (picks.length < 4 && !picks.includes(r)) picks.push(r);
+    for (const r of complete) if (picks.length < 4 && !picks.includes(r)) picks.push(r);
+    $('montage').replaceChildren();
+    if (!picks.length) { $('montage').append(node('p','No recordings available.','loading')); $('montage-toggle').hidden = true; return; }
+    if (picks.length === 1) $('montage').classList.add('single');
+    for (const r of picks) {
+      const tile = node('button',null,'montage-tile'); tile.type = 'button'; tile.setAttribute('aria-label',`Explore ${name(r)}, ${xp(r.persisted_xp)} saved XP`);
+      tile.classList.add('is-loading');
+      let previewStart = 0;
+      const v = node('video'); v.muted = true; v.playsInline = true; v.preload = 'metadata'; v.tabIndex = -1; v.setAttribute('aria-hidden','true'); v.src = safeRecording(r);
+      // Montage excerpts skip opening waits for an immediate view of gameplay.
+      // The full player uses only verified cues and retains the entire recording.
+      v.addEventListener('loadedmetadata', () => {
+        const start = cue(r)?.start_ms / 1000 || (Number.isFinite(r.timing?.api_ms) ? r.timing.api_ms / 1000 + 2 : 0);
+        if (start > 0 && start < v.duration) { previewStart = start; v.currentTime = start; }
+        else tile.classList.remove('is-loading');
+      });
+      v.addEventListener('seeked', () => tile.classList.remove('is-loading'), {once:true});
+      v.addEventListener('ended', () => { v.currentTime = previewStart; if (previewsPlaying) v.play().catch(() => {}); });
+      v.addEventListener('error', () => { tile.classList.remove('is-loading');tile.classList.add('video-unavailable'); });
+      const caption = node('span',null,'tile-caption'); caption.append(dot(r),node('span',name(r)),node('span',`${xp(r.persisted_xp)} saved XP`,'tile-score'));
+      tile.append(v,caption,node('span','▶','tile-play')); tile.addEventListener('click',() => openRun(r)); $('montage').append(tile);
+    }
+    if (!reducedMotion.matches) setPreviews(true);
+  }
+  function renderComparison() {
+    const group = data.comparisons.find(g => g.id === $('comparison-select').value);
+    const rows = group ? data.attempts.filter(r => group.attempt_ids.includes(r.id)) : [];
+    const max = Math.max(1,...rows.map(r => Number.isFinite(r.persisted_xp) ? Math.abs(r.persisted_xp) : 0));
+    const ceiling = Math.max(1000,Math.ceil(max / 1000) * 1000);
+    $('xp-chart').replaceChildren(); $('comparison-rows').replaceChildren();
+    for (const r of rows) {
+      const chart = node('div',null,`chart-row${r.persisted_xp === 0 ? ' zero' : ''}`); chart.style.setProperty('--model-color',color(r));
+      const label = node('span',null,'chart-model'); label.append(dot(r),node('span',name(r)));
+      const track = node('div',null,'chart-track'), bar = node('div',null,'chart-bar');
+      bar.style.width = `${Number.isFinite(r.persisted_xp) ? Math.abs(r.persisted_xp) / ceiling * 100 : 0}%`;
+      if (!Number.isFinite(r.persisted_xp)) bar.hidden = true;
+      track.append(bar); chart.append(label,track,node('span',xp(r.persisted_xp),'chart-value')); $('xp-chart').append(chart);
+      const tr = node('tr'), identity = cell(tr); identity.append(dot(r),node('strong',name(r)),node('small',r.id.slice(0,12)));
+      cell(tr,xp(r.persisted_xp),'score');
+      const inputs = cell(tr,number(r.acknowledged_actions));
+      if (r.no_op) inputs.append(node('small','No input actions'));
+      else if (r.action_verification !== 'receipts_rechecked') inputs.append(node('small','Incomplete receipts'));
+      cell(tr,duration(r.timing?.controller_ms)); cell(tr,r.alive_at_logout === true ? 'Alive' : r.alive_at_logout === false ? 'Dead' : '—');
+      const p = publication(r); cell(tr,p[0],`evidence${r.publication_evidence?.status === 'blocked' ? ' blocked' : ''}`);
+      cell(tr).append(watch(r)); $('comparison-rows').append(tr);
+    }
+    labelCells($('comparison-rows'));
+    const axis = node('div',null,'chart-axis'); for (let i=0;i<5;i++) axis.append(node('span',number(ceiling*i/4))); $('xp-chart').append(axis);
+    $('group-context').textContent = rows.length > 1 ? `${rows.length} attempts · shared frozen inputs; live scenes may differ.` : 'One attempt; no model comparison.';
+  }
+  function renderModels() {
+    $('model-tabs').replaceChildren();
+    for (const m of [...new Set(recordings.map(model))]) {
+      const row = recordings.find(r => model(r) === m), b = node('button',null,'model-tab'); b.type = 'button';
+      b.append(dot(row),node('span',names[m] || m)); b.setAttribute('aria-pressed',String(m === filterModel));
+      b.addEventListener('click', () => { filterModel = m; renderModels(); renderRunOptions(); selectRun(recordings.find(r => model(r) === m)); }); $('model-tabs').append(b);
+    }
+  }
+  function renderRunOptions() {
+    $('run-select').replaceChildren();
+    for (const r of recordings.filter(r => model(r) === filterModel)) {
+      const option = node('option',`${r.id.slice(0,8)} · ${xp(r.persisted_xp)} XP · ${status(r)}`); option.value = r.id; $('run-select').append(option);
+    }
+  }
+  function selectRun(row) {
+    if (!row) return;
+    selected = row; $('run-select').value = row.id; player.pause();
+    $('cue-button').disabled = true; $('full-button').disabled = true; player.src = safeRecording(row);
+    $('player-status').textContent = 'Loading recording…';
+    $('run-model').textContent = name(row); $('run-dot').style.setProperty('--model-color',color(row)); $('run-state').textContent = status(row);
+    $('run-outcome').textContent = row.status !== 'completed' ? 'No verified score.' : row.no_op ? 'No inputs or XP gained.' : row.persisted_xp > 0 ? 'XP gain saved after logout.' : 'Inputs executed; no net XP gain.';
+    const metrics = [['Saved XP',xp(row.persisted_xp)],['Inputs',number(row.acknowledged_actions)],['API wait',duration(row.timing?.api_ms)],['Play time',duration(row.timing?.controller_ms)]];
+    $('run-metrics').replaceChildren(); for (const [label,value] of metrics) { const d=node('div');d.append(node('dt',label),node('dd',value));$('run-metrics').append(d); }
+    const p=publication(row); $('run-evidence').textContent = `${p[1]} ${Number.isFinite(row.persisted_xp) ? 'Score verified separately.' : 'Score unverified.'}`;
+    $('run-id').textContent = row.id;
+    $('run-attribution').textContent = `Requested: ${row.requested_model || 'none'}. Returned: ${row.returned_model || 'not recorded'}. ${row.action_attempts != null ? `${row.action_attempts} attempted inputs; ${number(row.acknowledged_actions)} acknowledged.` : 'Input receipts unavailable.'}`;
+    const c=cue(row); $('cue-button').hidden = !c; $('cue-button').textContent = c?.basis === 'first_acknowledged_input' ? 'First input' : 'Program start';
+    $('cue-note').textContent = c ? c.basis === 'program_start' ? 'Starts near program start; first-input timing unknown. Full recording includes the model wait.' : 'Starts near first acknowledged input. Full recording includes the model wait.' : 'Full recording; no verified start cue.';
+  }
+  function openRun(row) {
+    filterModel = model(row); renderModels(); renderRunOptions(); selectRun(row); setPreviews(false);
+    $('trajectories').scrollIntoView({behavior:reducedMotion.matches ? 'instant' : 'smooth'});
+    player.focus({preventScroll:true});
+  }
+  function renderHistory() {
+    $('history-rows').replaceChildren();
+    const filter=$('history-filter').value;
+    for (const r of data.attempts.filter(r => filter==='all' || (filter==='completed' ? r.status==='completed' : r.status!=='completed'))) {
+      const tr=node('tr'), identity=cell(tr); identity.append(node('strong',name(r)),node('small',r.id));
+      const state=cell(tr,status(r));if(r.failure_code)state.append(node('small',r.failure_code.replaceAll('_',' ')));
+      cell(tr,xp(r.persisted_xp));cell(tr,xp(r.diagnostic_xp));
+      const inputs=cell(tr,`${number(r.acknowledged_actions)} acknowledged`); if(r.reported_actions!=null&&r.acknowledged_actions==null)inputs.append(node('small',`${r.reported_actions} reported; unverified`));
+      cell(tr,publication(r)[0]);cell(tr).append(watch(r));$('history-rows').append(tr);
+    }
+    labelCells($('history-rows'));
+  }
+  player.addEventListener('loadedmetadata', () => { const start=cue(selected)?.start_ms/1000||0;if(start<player.duration)player.currentTime=start;$('player-status').textContent='Ready';$('cue-button').disabled=false;$('full-button').disabled=false; });
+  player.addEventListener('playing',()=>{$('player-status').textContent='Playing';setPreviews(false);});
+  player.addEventListener('pause',()=>{$('player-status').textContent=player.ended?'Recording finished':'Paused';});
+  player.addEventListener('error',()=>{$('player-status').textContent='Recording unavailable. Choose another attempt.';$('cue-button').disabled=true;$('full-button').disabled=true;});
+  function playAt(time) { if(player.readyState<1)return;try{player.currentTime=time;player.play().catch(()=>{$('player-status').textContent='Use the video controls to play.';});}catch{$('player-status').textContent='Use the video controls to seek.';} }
+  $('cue-button').addEventListener('click',()=>playAt((cue(selected)?.start_ms||0)/1000));
+  $('full-button').addEventListener('click',()=>playAt(0));
+  $('montage-toggle').addEventListener('click',()=>setPreviews(!previewsPlaying));
+  reducedMotion.addEventListener('change',e=>{if(e.matches)setPreviews(false);});
+  $('comparison-select').addEventListener('change',renderComparison);
+  $('run-select').addEventListener('change',()=>selectRun(recordings.find(r=>r.id===$('run-select').value)));
+  $('history-filter').addEventListener('change',renderHistory);
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){setPreviews(false);player.pause();}});
+  window.addEventListener('pagehide',()=>{setPreviews(false);player.pause();});
+  const labDetails = $('lab-details');
+  function revealLab() {
+    if (location.hash === '#approach') labDetails.open = true;
+  }
+  document.querySelector('.site-nav a[href="#approach"]').addEventListener('click', () => { labDetails.open = true; });
+  addEventListener('hashchange', revealLab);
+  revealLab();
+  async function init() {
+    try {
+      const response=await fetch('./results.json',{signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error('unavailable');
+      data=await response.json();if(data.schema_version!==1||!Array.isArray(data.attempts)||!Array.isArray(data.comparisons))throw Error('invalid');
+      recordings=data.attempts.filter(safeRecording);
+      const modelCount = new Set(data.attempts.map(model)).size;
+      $('hero-models').textContent = `${modelCount} ${modelCount === 1 ? 'model' : 'models'}`;
+      $('hero-recordings').textContent = `${recordings.length} ${recordings.length === 1 ? 'recording' : 'recordings'}`;
+      $('hero-attempts').textContent = `${data.attempts.length} ${data.attempts.length === 1 ? 'attempt' : 'attempts'}`;
+      $('recording-count').textContent=$('hero-recordings').textContent;$('attempt-count').textContent=`(${data.attempts.length})`;
+      const selectedOnly=location.pathname.includes('/latest/');
+      if(selectedOnly){$('hero-attempts').textContent='1 selected attempt';$('snapshot-scope').textContent='Selected run · full history under All results';}
+      renderMontage();
+      data.comparisons.forEach((g,i)=>{const option=node('option',`${g.models.length>1?`${g.models.length} models`:`${i===0?'Latest':'Earlier'} run`} · ${g.id.slice(0,8)}`);option.value=g.id;$('comparison-select').append(option);});
+      const comparison=data.comparisons.find(g=>g.models.length>1)||data.comparisons[0];if(comparison)$('comparison-select').value=comparison.id;
+      renderComparison();
+      const featured=recordings.find(r=>r.id===data.featured_run_id)||recordings.find(r=>r.status==='completed')||recordings[0];
+      if(featured){filterModel=model(featured);renderModels();renderRunOptions();selectRun(featured);}else{$('player-status').textContent='No recordings available.';}
+      renderHistory();
+      $('snapshot-date').textContent=`Updated ${new Date(data.generated_at_ms).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`;
+    } catch {
+      $('load-status').textContent='The result data could not be loaded. Reload this page to try again.';
+      $('montage').replaceChildren(node('p','Recordings unavailable','loading'));
+      $('montage-toggle').disabled=true;
+    }
+  }
+  /* On a phone every section after the hero starts collapsed, so the headings
+     act as the table of contents that the removed nav bar used to provide.
+     Wider screens keep everything open; the markup ships open so the page is
+     still complete without JavaScript. Only re-apply when the breakpoint is
+     actually crossed, otherwise a resize would undo what someone just opened. */
+  const phone = matchMedia('(max-width: 560px)');
+  function syncCollapsedSections() {
+    for (const d of document.querySelectorAll('details.section-collapse')) d.open = !phone.matches;
+  }
+  phone.addEventListener('change', syncCollapsedSections);
+  syncCollapsedSections();
+
+  init();
 })();
