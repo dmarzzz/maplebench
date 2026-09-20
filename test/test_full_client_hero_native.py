@@ -163,12 +163,8 @@ class HeroNativeTests(unittest.TestCase):
             self.assertTrue("'"+skill['slot']+"'" in code
                             or '"'+skill['slot']+'"' in code)
         self.assertEqual(len(selected), 10)
-        self.assertLess(code.index('const combatFloorReady=await settleOnCombatFloor()'),
-                        code.index("await cast('PRIMARY_SKILL')"))
         self.assertLess(code.index('"SECONDARY_SKILL"'),
                         code.index("'PRIMARY_SKILL'"))
-        self.assertLess(code.index("['SKILL_6','SKILL_7']"),
-                        code.rindex("await cast(finisher)"))
         with self.assertRaises(ValueError):
             contract('bowmaster','a'*64,protocol=HERO_TOOLKIT_PROTOCOL)
         changed = copy.deepcopy(value)
@@ -183,34 +179,53 @@ class HeroNativeTests(unittest.TestCase):
         code = program(native)
         fixture = r"""
 const body=BODY;
-async function exercise(stale){
-  let now=0,requests=0,descent=0;
+async function exercise(mode){
+  const stale=mode==='stale',scarce=mode==='scarce';
+  let now=0,requests=0,descent=0,landed=false;
+  let monsterX=1120,monsterDirection=-1,landedObserves=0;
   const actions=[];
   const character={x:669,y:1129,hp:12000,maxHp:12000,mp:6000,maxMp:6000,
     exp:0,mapId:240040511,level:180,alive:true};
   Date.now=()=>now;
+  const moveMonster=ms=>{
+    if(stale||!landed)return;
+    monsterX+=monsterDirection*ms*.08;
+    while(monsterX<950||monsterX>1150){
+      if(monsterX<950){monsterX=1900-monsterX;monsterDirection=1;}
+      if(monsterX>1150){monsterX=2300-monsterX;monsterDirection=-1;}
+    }
+  };
   const observe=()=>{
     const staticAirborne=stale&&descent===2;
+    const visible=!scarce||!landed||landedObserves<=1;
     return {ready:true,ageMs:staticAirborne?400:10,
       renderAgeMs:staticAirborne?400:10,character:{...character},
-      monsters:[{objectId:1,x:character.x+58,y:character.y}]};
+      monsters:visible?[{objectId:1,x:stale?character.x+58:monsterX,
+        y:character.y}]:[]};
   };
   const sdk={
-    async observe(){requests++;return observe();},
-    async wait(ms){requests++;now+=ms;
-      if(!stale&&descent===2&&ms>=350){character.x=842;character.y=1454;}
+    async observe(){requests++;if(landed)landedObserves++;return observe();},
+    async wait(ms){requests++;now+=ms;moveMonster(ms);
+      if(!stale&&descent===2&&!landed&&ms>=350){
+        landed=true;character.x=842;character.y=1454;
+      }
       return {waitedMs:ms};},
-    async pressKeys(keys,ms){requests++;actions.push({key:keys[0],ms,at:now});now+=ms;
+    async pressKeys(keys,ms){requests++;actions.push({keys:[...keys],ms,at:now});now+=ms;
+      moveMonster(ms);
       if(keys[0]==='RIGHT'&&ms===250&&descent<2){
         descent++;Object.assign(character,descent===1?{x:731,y:1131}:{x:814,y:1310});
       }
+      if(landed&&keys.length===1&&ms===250&&keys[0]==='RIGHT')character.x+=55;
+      if(landed&&keys.length===1&&ms===250&&keys[0]==='LEFT')character.x-=55;
+      if(landed&&keys.length===1&&ms===250)character.y=character.x>900?1468:1454;
       return {accepted:true,observation:observe()};}
   };
   await (new Function('sdk','return (async()=>{'+body+'})()'))(sdk);
   return {actions,requests,elapsed:now};
 }
-(async()=>process.stdout.write(JSON.stringify({fresh:await exercise(false),
-  stale:await exercise(true)})))().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>process.stdout.write(JSON.stringify({fresh:await exercise('fresh'),
+  stale:await exercise('stale'),scarce:await exercise('scarce')})))()
+  .catch(error=>{console.error(error);process.exitCode=1;});
 """.replace('BODY', json.dumps(code))
         result = subprocess.run([shutil.which('node'), '--max-old-space-size=64',
             '-e', fixture], capture_output=True, text=True, timeout=5)
@@ -222,24 +237,36 @@ async function exercise(stale){
                    for skill in native['skill_toolkit']['skills']}
         buffs = [skill['slot'] for skill in native['skill_toolkit']['skills']
                  if skill['skill_id'] in selected and skill['route'] == 'buff']
-        expected = buffs + ['PRIMARY_SKILL'] * 3 + ['SKILL_5'] \
-            + ['PRIMARY_SKILL'] * 4 + ['SKILL_6'] \
-            + ['PRIMARY_SKILL'] * 4 + ['SKILL_7']
-        core = [row['key'] for row in fresh['actions']
-                if by_slot.get(row['key']) in selected]
+        sequence = ['PRIMARY_SKILL'] * 2 + ['SKILL_6'] \
+            + ['PRIMARY_SKILL'] * 2 + ['SKILL_7']
+        expected = buffs + sequence * 2 + ['SKILL_5'] * 2
+        core = [key for row in fresh['actions'] for key in row['keys']
+                if by_slot.get(key) in selected]
         self.assertEqual(core, expected)
         self.assertEqual({by_slot[key] for key in core}, selected)
-        self.assertNotIn('JUMP', [row['key'] for row in fresh['actions']])
-        self.assertEqual([row['ms'] for row in fresh['actions']
-                          if row['key'] == 'RIGHT' and row['ms'] == 250], [250, 250])
-        self.assertTrue(all(row['ms'] == 30 for row in fresh['actions']
-                            if row['key'] in ('LEFT', 'RIGHT') and row['ms'] != 250))
+        self.assertNotIn('JUMP', [key for row in fresh['actions']
+                                  for key in row['keys']])
+        lower_floor_moves = [row for row in fresh['actions']
+            if row['keys'] in (['LEFT'], ['RIGHT']) and row['ms'] == 250]
+        self.assertEqual([row['keys'] for row in lower_floor_moves[:2]],
+                         [['RIGHT'], ['RIGHT']])
+        reposition = lower_floor_moves[2:]
+        self.assertGreaterEqual(len(reposition), 1)
+        self.assertLessEqual(len(reposition), 8)
+        stale_attacks = {'ATTACK', 'PRIMARY_SKILL', 'SKILL_5', 'SKILL_6', 'SKILL_7'}
+        self.assertTrue(all(len(row['keys']) == 2 for row in fresh['actions']
+                            if stale_attacks.intersection(row['keys'])))
         self.assertLessEqual(len(fresh['actions']), native['max_actions'])
         self.assertLessEqual(fresh['requests'], native['max_sdk_requests'])
         self.assertLess(fresh['elapsed'], native['wall_seconds'] * 1000)
-        stale_attacks = {'ATTACK', 'PRIMARY_SKILL', 'SKILL_5', 'SKILL_6', 'SKILL_7'}
         self.assertFalse(stale_attacks.intersection(
-            row['key'] for row in evidence['stale']['actions']))
+            key for row in evidence['stale']['actions'] for key in row['keys']))
+        self.assertLessEqual(evidence['scarce']['requests'],
+                             native['max_sdk_requests'])
+        self.assertLessEqual(len(evidence['scarce']['actions']),
+                             native['max_actions'])
+        self.assertLess(evidence['scarce']['elapsed'],
+                        native['wall_seconds'] * 1000)
 
     def test_effect_level_ledger_qualifies_all_ten_without_using_acks(self):
         native, raw, expected = native_ledger()
