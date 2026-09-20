@@ -224,7 +224,8 @@ async function exercise(mode){
         knockbackUntil=null;character.y=1454;
       }
       return {waitedMs:ms};},
-    async pressKeys(keys,ms){requests++;actions.push({keys:[...keys],ms,at:now});now+=ms;
+    async pressKeys(keys,ms){requests++;actions.push({keys:[...keys],ms,at:now,
+      distance:Math.abs(monsterX-character.x)});now+=ms;
       if(knockbackUntil!==null)airborneInput=true;
       if(falling&&!landed)fallingInput=true;
       moveMonster(ms);
@@ -273,7 +274,7 @@ async function exercise(mode){
                  if skill['skill_id'] in selected and skill['route'] == 'buff']
         sequence = ['PRIMARY_SKILL'] * 2 + ['SKILL_6'] \
             + ['PRIMARY_SKILL'] * 2 + ['SKILL_7']
-        expected = buffs + sequence * 2 + ['SKILL_5'] * 2
+        expected = buffs + ['SKILL_5'] + sequence * 2 + ['SKILL_5']
         core = [key for row in fresh['actions'] for key in row['keys']
                 if by_slot.get(key) in selected]
         self.assertEqual(core, expected)
@@ -292,6 +293,13 @@ async function exercise(mode){
             self.assertLess(len(moving['actions']), 120)
             self.assertLessEqual(moving['requests'], native['max_sdk_requests'])
             self.assertLess(moving['elapsed'], 112000)
+            bands = {'PRIMARY_SKILL': (30, 130), 'SKILL_5': (30, 220),
+                     'SKILL_6': (58, 82), 'SKILL_7': (58, 82)}
+            for row in moving['actions']:
+                for key, (minimum, maximum) in bands.items():
+                    if key in row['keys']:
+                        self.assertGreaterEqual(row['distance'], minimum, label)
+                        self.assertLessEqual(row['distance'], maximum, label)
         self.assertTrue(evidence['knockback']['knockbackTriggered'])
         self.assertFalse(evidence['knockback']['airborneInput'])
         self.assertGreaterEqual(evidence['knockback']['airborneWaits'], 2)

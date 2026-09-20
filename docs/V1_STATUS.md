@@ -14,7 +14,7 @@ No scored attempt has yet run for this expanded candidate.
   available. Credentials are private runtime files.
 - A fresh, bounded worker uses the six-unit runtime toolkit, an enrolled operation
   gate, the expanded baseline and separately pinned client/server binaries.
-- The candidate at `181a61e` passed Linux CI, including the native runner's real
+- The candidate at `a85b529` passed Linux CI, including the native runner's real
   process-ownership test and the full-history secret scan. Later changes require
   their own focused checks.
 
@@ -32,9 +32,9 @@ No scored attempt has yet run for this expanded candidate.
 
 ## Native qualification findings
 
-Six unsuccessful qualification attempts are retained privately. The first stopped
+Seven unsuccessful qualification attempts are retained privately. The first stopped
 before gameplay because the launcher supplied the wrong process ancestry; the
-corrected launcher passed a real Linux ownership check. The next five reached the
+corrected launcher passed a real Linux ownership check. The next six reached the
 game, recorded the client, logged out and restored the baseline:
 
 - The second attempt walked off the spawn platform before testing attacks.
@@ -50,9 +50,13 @@ game, recorded the client, logged out and restored the baseline:
 - The sixth never left the starting ledge: two fixed-duration movement inputs
   produced less displacement than the recipe assumed. It demonstrated six buffs
   but no attacks. Descent must be confirmed through fresh observations.
+- The seventh reached combat and demonstrated linked Coma and Panic damage,
+  MP use and combo consumption, with Brandish rebuilding combo between them.
+  Its movement allowance ran out before Rush was pressed, so the complete
+  core-ten gate still failed.
 
-Six buff effects and Brandish damage have been observed. Core-ten qualification
-has not passed. Investigation found that the equipped sword's level-120
+Six buff effects and Brandish, Coma and Panic damage have been observed. Core-ten
+qualification has not passed. Investigation found that the equipped sword's level-120
 afterimage bucket is absent from the pinned client data. The ordinary-attack
 fallback used by both finishers replaces their range with an empty rectangle.
 The client lookup now falls back to a valid authored range for the same weapon
@@ -63,6 +67,8 @@ do not replace live effect evidence. The qualification recipe now adds bounded
 recovery from transient knockback and requires stable landing observations before
 resuming input. Initial descent now uses fresh position feedback with a bounded
 number of movement steps. Its live effect requirements remain unchanged.
+The next recipe also uses the wider authored reach of Brandish and Rush and
+places Rush before repeated finisher sequences, preserving the movement cap.
 No qualification
 attempt made a model API call or produced a model score. Original recordings,
 failure receipts and restoration evidence remain separate from scored results.

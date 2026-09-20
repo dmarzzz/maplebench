@@ -189,7 +189,17 @@ async function settleOnCombatFloor(){
   return null;
 }
 let repositionActions=0;
-async function targetDirection(combatFloorY){
+const attackBands={
+  // Brandish and Rush use explicit level-30 rectangles. The finishers retain
+  // the common 47..92 px intersection from the authored sword afterimages.
+  // These narrower bands stay inside that geometry; native linked damage
+  // remains the qualification gate.
+  PRIMARY_SKILL:{minimum:30,maximum:130,goal:80},
+  SKILL_5:{minimum:30,maximum:220,goal:125},
+  SKILL_6:{minimum:58,maximum:82,goal:70},
+  SKILL_7:{minimum:58,maximum:82,goal:70}
+};
+async function targetDirection(combatFloorY,band){
   // Only reposition on the confirmed broad lower platform. The global cap
   // prevents an observed moving target from turning this into an open chase.
   let unavailablePolls=0;
@@ -235,24 +245,22 @@ async function targetDirection(combatFloorY){
     const target=near[0];
     const dx=target.x-scene.character.x;
     const distance=Math.abs(dx);
-    // Every authored two-handed-sword bucket-10 stance covers target centers
-    // from 47 through 92 px on the facing side. Approach or back off into a
-    // narrower band, allowing for an observed target moving 80 px/s against
-    // the Hero's roughly 350 px/s ground speed. Then combine direction and
-    // skill in one physical input.
-    if(distance>82){
+    // Approach or back off toward the middle of the selected authored band.
+    // The duration is only a bounded movement hint; every step returns to
+    // fresh observed geometry before the combined direction-and-skill input.
+    if(distance>band.maximum){
       if(repositionActions>=48)return null;
       const duration=Math.max(30,Math.min(250,
-        Math.round((distance-70)/.27)));
+        Math.round((distance-band.goal)/.27)));
       if(!await input([dx<0?'LEFT':'RIGHT'],duration))return null;
       repositionActions++;
       await sdk.wait(80);
       continue;
     }
-    if(distance<58){
+    if(distance<band.minimum){
       if(repositionActions>=48)return null;
       const duration=Math.max(30,Math.min(250,
-        Math.round((70-distance)/.27)));
+        Math.round((band.goal-distance)/.27)));
       if(!await input([dx<0?'RIGHT':'LEFT'],duration))return null;
       repositionActions++;
       await sdk.wait(80);
@@ -267,7 +275,7 @@ async function targetDirection(combatFloorY){
 // rather than this wait, still decide whether an effect occurred.
 async function cast(key,combatFloorY,hold=100,settle=1200){
   if(!room())return false;
-  const direction=await targetDirection(combatFloorY);
+  const direction=await targetDirection(combatFloorY,attackBands[key]);
   if(direction===null||!await input([direction,key],hold))return false;
   await sdk.observe();
   await sdk.wait(settle);
@@ -279,6 +287,9 @@ for(const key of __BUFFS__)await probe([key]);
 const combatFloorY=await settleOnCombatFloor();
 // Combo is active before damage opportunities. Actual server hits must build orbs.
 if(combatFloorY!==null){
+  // Give every core attack route one native opportunity before optional
+  // repeats can consume the shared reposition budget.
+  await cast('SKILL_5',combatFloorY);
   for(let sequence=0;sequence<2;sequence++){
     for(let hit=0;hit<2;hit++)await cast('PRIMARY_SKILL',combatFloorY);
     await cast('SKILL_6',combatFloorY);
@@ -286,8 +297,8 @@ if(combatFloorY!==null){
     for(let hit=0;hit<2;hit++)await cast('PRIMARY_SKILL',combatFloorY);
     await cast('SKILL_7',combatFloorY);
   }
-  // Rush does not consume Combo, and running it last preserves finisher setup.
-  for(let attempt=0;attempt<2;attempt++)await cast('SKILL_5',combatFloorY);
+  // One later Rush opportunity remains after the initial core sequence.
+  await cast('SKILL_5',combatFloorY);
 }
 await sdk.wait(2000);
 await sdk.observe();
