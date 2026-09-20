@@ -14,7 +14,7 @@ No scored attempt has yet run for this expanded candidate.
   available. Credentials are private runtime files.
 - A fresh, bounded worker uses the six-unit runtime toolkit, an enrolled operation
   gate, the expanded baseline and separately pinned client/server binaries.
-- The candidate at `0defaf9` passed Linux CI, including the native runner's real
+- The candidate at `181a61e` passed Linux CI, including the native runner's real
   process-ownership test and the full-history secret scan. Later changes require
   their own focused checks.
 
@@ -32,9 +32,9 @@ No scored attempt has yet run for this expanded candidate.
 
 ## Native qualification findings
 
-Five unsuccessful qualification attempts are retained privately. The first stopped
+Six unsuccessful qualification attempts are retained privately. The first stopped
 before gameplay because the launcher supplied the wrong process ancestry; the
-corrected launcher passed a real Linux ownership check. The next four reached the
+corrected launcher passed a real Linux ownership check. The next five reached the
 game, recorded the client, logged out and restored the baseline:
 
 - The second attempt walked off the spawn platform before testing attacks.
@@ -47,6 +47,9 @@ game, recorded the client, logged out and restored the baseline:
   growth. A transient vertical displacement exceeded the recipe's floor guard;
   it immediately skipped all remaining casts before the character landed again.
   It did not exercise the corrected finishers or Rush.
+- The sixth never left the starting ledge: two fixed-duration movement inputs
+  produced less displacement than the recipe assumed. It demonstrated six buffs
+  but no attacks. Descent must be confirmed through fresh observations.
 
 Six buff effects and Brandish damage have been observed. Core-ten qualification
 has not passed. Investigation found that the equipped sword's level-120
@@ -58,7 +61,8 @@ check also found and corrected Shout's missing attack classification. All 17
 declared routes passed against the selected client source. These source checks
 do not replace live effect evidence. The qualification recipe now adds bounded
 recovery from transient knockback and requires stable landing observations before
-resuming input. Its live effect requirements remain unchanged.
+resuming input. Initial descent now uses fresh position feedback with a bounded
+number of movement steps. Its live effect requirements remain unchanged.
 No qualification
 attempt made a model API call or produced a model score. Original recordings,
 failure receipts and restoration evidence remain separate from scored results.

@@ -140,28 +140,51 @@ async function probe(keys,ms=100,settle=1600){
   return true;
 }
 async function settleOnCombatFloor(){
-  const origin=await sdk.observe();
-  if(origin.character.alive===false)return null;
-  // The accepted Hero fixture starts on a small ledge. Two bounded ordinary
-  // right inputs descend to the broad lower platform seen in fixture capture.
-  for(let step=0;step<2;step++){
-    if(!await input(['RIGHT'],250))return null;
-    await sdk.wait(200);
-  }
-  for(let sample=0;sample<12&&room();sample++){
-    const first=await sdk.observe();
-    if(first.character.alive===false)return null;
+  let origin=null;
+  for(let sample=0;sample<4&&room();sample++){
+    const scene=await sdk.observe();
+    if(scene.character.alive===false)return null;
+    if(scene.ageMs<350&&scene.renderAgeMs<350){origin=scene;break;}
     await sdk.wait(350);
-    const second=await sdk.observe();
-    if(second.character.alive===false)return null;
-    const refreshed=second.ageMs<350&&second.renderAgeMs<350;
-    const landed=refreshed&&second.character.y>=origin.character.y+180&&
-      Math.abs(second.character.x-first.character.x)<=4&&
-      Math.abs(second.character.y-first.character.y)<=4;
-    const targetAvailable=second.monsters.some(m=>
-      Math.abs(m.y-second.character.y)<=50);
-    if(landed&&targetAvailable)return second.character.y;
-    await sdk.wait(250);
+  }
+  if(origin===null)return null;
+  // The accepted Hero fixture starts on a small ledge. Walk toward its right
+  // edge using fresh feedback rather than assuming a fixed movement distance.
+  // Once vertical movement begins, send no more input while the Hero falls.
+  let descentActions=0;
+  let landedSample=null;
+  let ledgeSample={x:origin.character.x,y:origin.character.y};
+  for(let sample=0;sample<32&&room();sample++){
+    const scene=await sdk.observe();
+    if(scene.character.alive===false)return null;
+    if(scene.ageMs>=350||scene.renderAgeMs>=350){
+      await sdk.wait(350);continue;
+    }
+    const drop=scene.character.y-origin.character.y;
+    if(drop>=180){
+      const stable=landedSample!==null&&
+        Math.abs(scene.character.x-landedSample.x)<=4&&
+        Math.abs(scene.character.y-landedSample.y)<=4;
+      const targetAvailable=scene.monsters.some(m=>
+        Math.abs(m.y-scene.character.y)<=50);
+      if(stable&&targetAvailable)return scene.character.y;
+      landedSample={x:scene.character.x,y:scene.character.y};
+      await sdk.wait(350);continue;
+    }
+    landedSample=null;
+    if(Math.abs(drop)>50){await sdk.wait(350);continue;}
+    const ledgeStable=ledgeSample!==null&&
+      Math.abs(scene.character.x-ledgeSample.x)<=4&&
+      Math.abs(scene.character.y-ledgeSample.y)<=4;
+    if(!ledgeStable){
+      ledgeSample={x:scene.character.x,y:scene.character.y};
+      await sdk.wait(350);continue;
+    }
+    if(descentActions>=8)return null;
+    if(!await input(['RIGHT'],250))return null;
+    descentActions++;
+    ledgeSample=null;
+    await sdk.wait(200);
   }
   return null;
 }

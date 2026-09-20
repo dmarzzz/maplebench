@@ -182,14 +182,15 @@ const body=BODY;
 async function exercise(mode){
   const stale=mode==='stale',scarce=mode==='scarce';
   const knockback=mode==='knockback';
+  const delayedFirst=mode==='delayed-first',noMotion=mode==='no-motion';
   const fast=mode==='fast-away'||mode==='fast-toward'||mode==='near-window'||knockback;
   const nearWindow=mode==='near-window';
-  let now=0,requests=0,descent=0,landed=false;
+  let now=0,requests=0,descent=0,landed=false,falling=false;
   let monsterX=nearWindow?930:100;
   let monsterDirection=mode==='fast-toward'?1:-1,landedObserves=0;
   let initialLandedDistance=null,attackCount=0,knockbackUntil=null;
   let knockbackTriggered=false,airborneInput=false,airborneWaits=0;
-  let knockbackAtAction=null;
+  let knockbackAtAction=null,fallingInput=false;
   const actions=[];
   const character={x:669,y:1129,hp:12000,maxHp:12000,mp:6000,maxMp:6000,
     exp:0,mapId:240040511,level:180,alive:true};
@@ -204,7 +205,7 @@ async function exercise(mode){
     }
   };
   const observe=()=>{
-    const staticAirborne=stale&&descent===2;
+    const staticAirborne=stale&&falling;
     const visible=!scarce||!landed||landedObserves<=1;
     if(landed&&initialLandedDistance===null)
       initialLandedDistance=Math.abs(monsterX-character.x);
@@ -216,7 +217,7 @@ async function exercise(mode){
   const sdk={
     async observe(){requests++;if(landed)landedObserves++;return observe();},
     async wait(ms){requests++;if(knockbackUntil!==null)airborneWaits++;now+=ms;moveMonster(ms);
-      if(!stale&&descent===2&&!landed&&ms>=350){
+      if(!stale&&falling&&!landed&&ms>=350){
         landed=true;character.x=842;character.y=1454;
       }
       if(knockbackUntil!==null&&now>=knockbackUntil){
@@ -225,9 +226,12 @@ async function exercise(mode){
       return {waitedMs:ms};},
     async pressKeys(keys,ms){requests++;actions.push({keys:[...keys],ms,at:now});now+=ms;
       if(knockbackUntil!==null)airborneInput=true;
+      if(falling&&!landed)fallingInput=true;
       moveMonster(ms);
-      if(keys[0]==='RIGHT'&&ms===250&&descent<2){
-        descent++;Object.assign(character,descent===1?{x:731,y:1131}:{x:814,y:1310});
+      if(keys[0]==='RIGHT'&&ms===250&&!landed&&!falling){
+        descent++;
+        if(!noMotion&&!(delayedFirst&&descent===1))character.x+=42.5;
+        if(!noMotion&&character.x>=800){falling=true;character.y=1310;}
       }
       if(landed&&keys.length===1&&keys[0]==='RIGHT')character.x+=ms*.35;
       if(landed&&keys.length===1&&keys[0]==='LEFT')character.x-=ms*.35;
@@ -244,12 +248,15 @@ async function exercise(mode){
   };
   await (new Function('sdk','return (async()=>{'+body+'})()'))(sdk);
   return {actions,requests,elapsed:now,initialLandedDistance,
-    knockbackTriggered,knockbackAtAction,airborneInput,airborneWaits};
+    descentActions:descent,fallingInput,knockbackTriggered,knockbackAtAction,
+    airborneInput,airborneWaits};
 }
 (async()=>process.stdout.write(JSON.stringify({fresh:await exercise('fresh'),
   fastAway:await exercise('fast-away'),
   fastToward:await exercise('fast-toward'),
   nearWindow:await exercise('near-window'),
+  delayedFirst:await exercise('delayed-first'),
+  noMotion:await exercise('no-motion'),
   knockback:await exercise('knockback'),
   stale:await exercise('stale'),scarce:await exercise('scarce')})))()
   .catch(error=>{console.error(error);process.exitCode=1;});
@@ -271,7 +278,8 @@ async function exercise(mode){
                 if by_slot.get(key) in selected]
         self.assertEqual(core, expected)
         self.assertEqual({by_slot[key] for key in core}, selected)
-        for label in ('fastAway', 'fastToward', 'nearWindow', 'knockback'):
+        for label in ('fastAway', 'fastToward', 'nearWindow', 'delayedFirst',
+                      'knockback'):
             moving = evidence[label]
             moving_core = [key for row in moving['actions']
                            for key in row['keys']
@@ -279,7 +287,8 @@ async function exercise(mode){
             self.assertEqual(moving_core, expected, label)
             moving_steps = [row for row in moving['actions']
                             if row['keys'] in (['LEFT'], ['RIGHT'])]
-            self.assertLessEqual(len(moving_steps[2:]), 48, label)
+            self.assertLessEqual(
+                len(moving_steps[moving['descentActions']:]), 48, label)
             self.assertLess(len(moving['actions']), 120)
             self.assertLessEqual(moving['requests'], native['max_sdk_requests'])
             self.assertLess(moving['elapsed'], 112000)
@@ -291,6 +300,11 @@ async function exercise(mode){
         remaining_core = [key for row in after_knockback for key in row['keys']
                           if by_slot.get(key) in selected]
         self.assertTrue({'SKILL_6', 'SKILL_7', 'SKILL_5'} <= set(remaining_core))
+        self.assertGreaterEqual(fresh['descentActions'], 4)
+        self.assertGreater(evidence['delayedFirst']['descentActions'],
+                           fresh['descentActions'])
+        self.assertFalse(fresh['fallingInput'])
+        self.assertFalse(evidence['delayedFirst']['fallingInput'])
         self.assertGreaterEqual(evidence['fastAway']['initialLandedDistance'], 700)
         self.assertGreaterEqual(evidence['fastToward']['initialLandedDistance'], 700)
         self.assertGreater(evidence['nearWindow']['initialLandedDistance'], 82)
@@ -299,9 +313,9 @@ async function exercise(mode){
                                   for key in row['keys']])
         movement = [row for row in fresh['actions']
             if row['keys'] in (['LEFT'], ['RIGHT'])]
-        self.assertEqual([row['keys'] for row in movement[:2]],
-                         [['RIGHT'], ['RIGHT']])
-        reposition = movement[2:]
+        self.assertTrue(all(row['keys'] == ['RIGHT'] and row['ms'] == 250
+                            for row in movement[:fresh['descentActions']]))
+        reposition = movement[fresh['descentActions']:]
         self.assertGreaterEqual(len(reposition), 1)
         self.assertLessEqual(len(reposition), 48)
         self.assertTrue(all(30 <= row['ms'] <= 250 for row in reposition))
@@ -314,6 +328,14 @@ async function exercise(mode){
         self.assertLess(fresh['elapsed'], 112000)
         self.assertFalse(stale_attacks.intersection(
             key for row in evidence['stale']['actions'] for key in row['keys']))
+        self.assertFalse(evidence['stale']['fallingInput'])
+        self.assertFalse(stale_attacks.intersection(
+            key for row in evidence['noMotion']['actions'] for key in row['keys']))
+        self.assertEqual(evidence['noMotion']['descentActions'], 8)
+        self.assertFalse(evidence['noMotion']['fallingInput'])
+        self.assertLessEqual(evidence['noMotion']['requests'],
+                             native['max_sdk_requests'])
+        self.assertLess(evidence['noMotion']['elapsed'], 112000)
         self.assertLessEqual(evidence['scarce']['requests'],
                              native['max_sdk_requests'])
         self.assertLess(len(evidence['scarce']['actions']), 120)
