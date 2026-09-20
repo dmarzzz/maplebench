@@ -18,6 +18,7 @@ SCRIPT = os.path.join(SCRIPTS, 'full_client_scenario_freeze.py')
 sys.path.insert(0, SCRIPTS)
 
 import full_client_scenario_freeze as freeze  # noqa: E402
+import model_providers as providers  # noqa: E402
 from full_client_adaptive import DEFAULT_PROTOCOL, PROTOCOL  # noqa: E402
 
 
@@ -82,7 +83,19 @@ class ScenarioFreezeTest(unittest.TestCase):
         self.assertIs(freeze.check_scenario(scenario), scenario)
         self.assertEqual(scenario['protocol'], PROTOCOL)
         self.assertEqual(scenario['program_seconds'], 300)
-        self.assertEqual(scenario['reasoning'], {'effort': 'low'})
+        self.assertEqual(scenario['reasoning'], {'effort': providers.REASONING_EFFORT})
+        self.assertIn(providers.REASONING_EFFORT, providers.EFFORT_VALUES)
+
+    def test_reasoning_effort_is_symmetric_across_providers(self):
+        """A cohort must not compare a high-effort OpenAI run against a low-effort Claude one."""
+        scenario = self.scenario()
+        declared = scenario['reasoning']['effort']
+        seen = {}
+        for model in ('gpt-6-astra', 'claude-opus-5'):
+            _, body = providers.program_request(model, 'instructions', '{}', 1000)
+            effort = (body.get('reasoning') or {}).get('effort') or body['output_config']['effort']
+            seen[model] = effort
+        self.assertEqual(set(seen.values()), {declared}, seen)
 
     def test_bridge_budgets_use_the_adaptive_run_reserve_not_the_legacy_rule(self):
         budgets = self.scenario()['budgets']

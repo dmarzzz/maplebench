@@ -64,7 +64,7 @@ def request(url, payload=None, key=None, timeout=20):
 
 
 def model_decision(model, observation, recent, key, timeout=35):
-    body = {'model': model, 'store': False, 'reasoning': {'effort': 'low'},
+    body = {'model': model, 'store': False, 'reasoning': {'effort': providers.REASONING_EFFORT},
             'max_output_tokens': 1400,
             'instructions': PROMPT,
             'input': json.dumps({'observation': observation, 'recent_outcomes': recent[-5:]}),

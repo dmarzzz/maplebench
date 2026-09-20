@@ -20,6 +20,11 @@ MODELS = OPENAI_MODELS + ANTHROPIC_MODELS
 ENDPOINTS = {'openai': 'https://api.openai.com/v1/responses',
              'anthropic': 'https://api.anthropic.com/v1/messages'}
 ANTHROPIC_VERSION = '2023-06-01'
+# One knob for both providers so a cohort cannot silently compare a high-effort
+# OpenAI configuration against a low-effort Anthropic one. Raising it is a
+# scenario version change and requires fresh evaluation data, never reuse.
+REASONING_EFFORT = 'medium'
+EFFORT_VALUES = ('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'properties': {'note': {'type': 'string'}, 'code': {'type': 'string'}},
@@ -61,7 +66,7 @@ def program_request(model, instructions, input_value, output_tokens):
     schema = json.loads(json.dumps(SCHEMA))
     if provider == 'openai':
         # Preserve the original Responses API contract byte-for-byte in JSON.
-        body = {'model': model, 'store': False, 'reasoning': {'effort': 'low'},
+        body = {'model': model, 'store': False, 'reasoning': {'effort': REASONING_EFFORT},
                 'instructions': instructions, 'input': value, 'max_output_tokens': output_tokens,
                 'text': {'format': {'type': 'json_schema', 'name': 'maple_program',
                                     'strict': True, 'schema': schema}}}
@@ -70,7 +75,7 @@ def program_request(model, instructions, input_value, output_tokens):
         body = {'model': model, 'system': instructions,
                 'messages': [{'role': 'user', 'content': value}], 'max_tokens': output_tokens,
                 'thinking': {'type': 'adaptive'},
-                'output_config': {'effort': 'low', 'format': {'type': 'json_schema', 'schema': schema}}}
+                'output_config': {'effort': REASONING_EFFORT, 'format': {'type': 'json_schema', 'schema': schema}}}
     return ENDPOINTS[provider], body
 
 

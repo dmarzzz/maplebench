@@ -57,7 +57,7 @@ class ProviderContractTests(unittest.TestCase):
         model = providers.OPENAI_MODELS[0]
         url, body = providers.program_request(model, 'Fixture prompt', {'observation': {}}, 1000)
         self.assertEqual(url, 'https://api.openai.com/v1/responses')
-        self.assertEqual(body, {'model': model, 'store': False, 'reasoning': {'effort': 'low'},
+        self.assertEqual(body, {'model': model, 'store': False, 'reasoning': {'effort': providers.REASONING_EFFORT},
             'instructions': 'Fixture prompt', 'input': '{"observation": {}}', 'max_output_tokens': 1000,
             'text': {'format': {'type': 'json_schema', 'name': 'maple_program', 'strict': True, 'schema': providers.SCHEMA}}})
         bound = providers.bind_request_identity(model, body, RUN, 1)
@@ -82,7 +82,7 @@ class ProviderContractTests(unittest.TestCase):
                 self.assertEqual(body, {'model': model, 'system': 'Fixture prompt', 'messages': [
                     {'role': 'user', 'content': '{"observation": {}}'}], 'max_tokens': 3000,
                     'thinking': {'type': 'adaptive'},
-                    'output_config': {'effort': 'low', 'format': {'type': 'json_schema', 'schema': providers.SCHEMA}}})
+                    'output_config': {'effort': providers.REASONING_EFFORT, 'format': {'type': 'json_schema', 'schema': providers.SCHEMA}}})
                 self.assertEqual(providers.request_input(model, body), body['messages'][0]['content'])
                 bound = providers.bind_request_identity(model, body, RUN, 0)
                 self.assertEqual(bound['metadata'], {'user_id': 'maplebench:' + RUN + ':0'})

@@ -37,6 +37,7 @@ from full_client_score import (SOURCE, JSON_LIMIT, EvidenceError, parse_json, re
 from full_client_trial import (RELAY_ERROR_CODES, RUNTIME_ERROR_CODES, atomic_json,
                                private_directory, read_private_json, validate_spec)
 import full_client_xp_windows as xp_windows
+import model_providers as providers
 
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 RUN = re.compile(r"[0-9a-f]{32}\Z")
@@ -324,7 +325,8 @@ class CosmicRuntime:
         require(type(duration) is int and duration in ((300,) if adaptive else (22, 60))
                 and isinstance(self.scenario.get("id"), str) and 0 < len(self.scenario["id"]) <= 128
                 and SHA.fullmatch(self.scenario.get("instructions_sha256", "")) is not None
-                and same_json(self.scenario.get("reasoning"), {"effort": "low"}), "invalid_frozen_scenario")
+                and same_json(self.scenario.get("reasoning"),
+                              {"effort": providers.REASONING_EFFORT}), "invalid_frozen_scenario")
         if adaptive:
             from full_client_adaptive import validate_protocol, prompt
             try:
@@ -921,7 +923,7 @@ class CosmicRuntime:
             prompt = PROMPT.format(program_seconds=duration, action_limit=budgets["max_actions"],
                                   sdk_request_limit=100 if duration == 22 else 600)
         require(self.scenario.get("instructions_sha256") == hashlib.sha256(prompt.encode()).hexdigest()
-                and self.scenario.get("reasoning") == {"effort": "low"}, "frozen_prompt_mismatch")
+                and self.scenario.get("reasoning") == {"effort": providers.REASONING_EFFORT}, "frozen_prompt_mismatch")
         readiness_policy=self.readiness_policy()
         self.intent("run_controller")
         try:

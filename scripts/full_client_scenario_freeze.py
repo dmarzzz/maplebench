@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import full_client_readiness as readiness
 import full_client_hero_toolkit as hero_toolkit
+import model_providers as providers
 from full_client_adaptive import (DEFAULT_PROTOCOL, PROTOCOL, AdaptiveError,
                                   capture_cohort_protocol, encoded_capture_cohort_protocol,
                                   INPUT_TIMELINE_POLICY, KNOWLEDGE_MAX_TOTAL_TOKENS,
@@ -167,7 +168,7 @@ def build_scenario(scenario_id, protocol, expected_map_id, *, total_seconds=1200
             "program_seconds": protocol["wall_seconds"],
             "adaptive_protocol": protocol,
             "instructions_sha256": digest,
-            "reasoning": {"effort": "low"},
+            "reasoning": {"effort": providers.REASONING_EFFORT},
             "trial_budgets": trial_budgets_for(protocol, total_seconds=total_seconds),
             "budgets": budgets_for(protocol),
             "readiness_policy": policy,
@@ -197,7 +198,8 @@ def check_scenario(scenario, *, verify_prompt=True):
             and scenario["protocol"] == PROTOCOL, "invalid_frozen_scenario")
     protocol = validate_protocol(scenario["adaptive_protocol"])
     require(scenario["program_seconds"] == protocol["wall_seconds"], "invalid_program_seconds")
-    require(scenario["reasoning"] == {"effort": "low"}, "invalid_reasoning")
+    require(scenario["reasoning"] == {"effort": providers.REASONING_EFFORT}
+            and providers.REASONING_EFFORT in providers.EFFORT_VALUES, "invalid_reasoning")
     require(scenario["settlement_policy"] == SETTLEMENT_POLICY, "invalid_settlement_policy")
     require(isinstance(scenario["instructions_sha256"], str)
             and len(scenario["instructions_sha256"]) == 64

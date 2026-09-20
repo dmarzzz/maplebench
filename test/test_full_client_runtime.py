@@ -17,6 +17,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import full_client_runtime as runtime
+import model_providers as providers  # noqa: E402
 
 
 class CachedSystemd:
@@ -460,7 +461,7 @@ class RuntimeTests(unittest.TestCase):
         from full_client_bridge import PROMPT
         prompt = PROMPT.format(program_seconds=22, action_limit=80, sdk_request_limit=100)
         self.backend.scenario = {"program_seconds": 22, "instructions_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-                                 "reasoning": {"effort": "low"}, "readiness_policy":self.policy()}
+                                 "reasoning": {"effort": providers.REASONING_EFFORT}, "readiness_policy":self.policy()}
         self.backend.admin = MagicMock(side_effect=runtime.RuntimeErrorCode("uncertain_transport"))
         with self.assertRaisesRegex(runtime.RuntimeErrorCode, "uncertain_transport"):
             self.backend.run_controller()
@@ -473,7 +474,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_new_runtime_requires_frozen_readiness_policy_and_baseline_map(self):
         from full_client_bridge import PROMPT
-        scenario={"id":"future-fixture","program_seconds":22,"reasoning":{"effort":"low"},
+        scenario={"id":"future-fixture","program_seconds":22,"reasoning":{"effort": providers.REASONING_EFFORT},
             "instructions_sha256":hashlib.sha256(PROMPT.format(program_seconds=22,action_limit=80,sdk_request_limit=100).encode()).hexdigest(),
             "trial_budgets":{"max_total_tokens":30000},"settlement_policy":dict(runtime.SETTLEMENT_POLICY),
             "budgets":{"api_requests":1,"output_tokens":3000,"total_tokens":30000,"program_ms":22000,
@@ -537,7 +538,7 @@ class RuntimeTests(unittest.TestCase):
         self.backend.manifest = {"schema_version": 2, "docker_binding": self.binding, "docker_image_id": "sha256:" + "1" * 64}
         self.backend.context["request"].update(scenario_fingerprint="2" * 64, baseline_sha256="3" * 64,
             budgets={"controller_seconds": 24, "max_actions": 80, "max_output_tokens": 3000, "max_total_tokens": 9000})
-        self.backend.scenario = {"program_seconds": 22, "reasoning": {"effort": "low"},
+        self.backend.scenario = {"program_seconds": 22, "reasoning": {"effort": providers.REASONING_EFFORT},
             "instructions_sha256": hashlib.sha256(PROMPT.format(program_seconds=22, action_limit=80,
                                                                   sdk_request_limit=100).encode()).hexdigest(),
             "settlement_policy": dict(runtime.SETTLEMENT_POLICY), "readiness_policy":self.policy()}
