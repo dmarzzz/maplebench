@@ -170,13 +170,37 @@ async function targetDirection(combatFloorY){
   // Only reposition on the confirmed broad lower platform. The global cap
   // prevents an observed moving target from turning this into an open chase.
   let unavailablePolls=0;
+  let recoveryPolls=0;
+  let recoverySample=null;
+  let recovering=false;
   for(let step=0;step<36&&room();step++){
     const scene=await sdk.observe();
-    if(scene.character.alive===false||
-      Math.abs(scene.character.y-combatFloorY)>50)return null;
+    if(scene.character.alive===false)return null;
     if(scene.ageMs>=350||scene.renderAgeMs>=350){
-      if(++unavailablePolls>=4)return null;
+      if(recovering){
+        if(++recoveryPolls>=12)return null;
+      }else if(++unavailablePolls>=4)return null;
       await sdk.wait(150);continue;
+    }
+    if(Math.abs(scene.character.y-combatFloorY)>50){
+      // Contact can briefly lift the Hero from the sloped lower platform.
+      // Do not send another input until fresh observations prove a landing.
+      recovering=true;recoverySample=null;unavailablePolls=0;
+      if(++recoveryPolls>=12)return null;
+      await sdk.wait(350);continue;
+    }
+    if(recovering){
+      // A second fresh sample after a full 350 ms refresh interval keeps one
+      // cached grounded frame from being treated as a stable landing.
+      const stable=recoverySample!==null&&
+        Math.abs(scene.character.x-recoverySample.x)<=4&&
+        Math.abs(scene.character.y-recoverySample.y)<=4;
+      if(!stable){
+        recoverySample={x:scene.character.x,y:scene.character.y};
+        if(++recoveryPolls>=12)return null;
+        await sdk.wait(350);continue;
+      }
+      recovering=false;recoverySample=null;recoveryPolls=0;
     }
     const near=scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=50)
       .sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x));

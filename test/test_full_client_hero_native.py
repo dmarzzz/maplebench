@@ -181,12 +181,15 @@ class HeroNativeTests(unittest.TestCase):
 const body=BODY;
 async function exercise(mode){
   const stale=mode==='stale',scarce=mode==='scarce';
-  const fast=mode==='fast-away'||mode==='fast-toward'||mode==='near-window';
+  const knockback=mode==='knockback';
+  const fast=mode==='fast-away'||mode==='fast-toward'||mode==='near-window'||knockback;
   const nearWindow=mode==='near-window';
   let now=0,requests=0,descent=0,landed=false;
   let monsterX=nearWindow?930:100;
   let monsterDirection=mode==='fast-toward'?1:-1,landedObserves=0;
-  let initialLandedDistance=null;
+  let initialLandedDistance=null,attackCount=0,knockbackUntil=null;
+  let knockbackTriggered=false,airborneInput=false,airborneWaits=0;
+  let knockbackAtAction=null;
   const actions=[];
   const character={x:669,y:1129,hp:12000,maxHp:12000,mp:6000,maxMp:6000,
     exp:0,mapId:240040511,level:180,alive:true};
@@ -212,12 +215,16 @@ async function exercise(mode){
   };
   const sdk={
     async observe(){requests++;if(landed)landedObserves++;return observe();},
-    async wait(ms){requests++;now+=ms;moveMonster(ms);
+    async wait(ms){requests++;if(knockbackUntil!==null)airborneWaits++;now+=ms;moveMonster(ms);
       if(!stale&&descent===2&&!landed&&ms>=350){
         landed=true;character.x=842;character.y=1454;
       }
+      if(knockbackUntil!==null&&now>=knockbackUntil){
+        knockbackUntil=null;character.y=1454;
+      }
       return {waitedMs:ms};},
     async pressKeys(keys,ms){requests++;actions.push({keys:[...keys],ms,at:now});now+=ms;
+      if(knockbackUntil!==null)airborneInput=true;
       moveMonster(ms);
       if(keys[0]==='RIGHT'&&ms===250&&descent<2){
         descent++;Object.assign(character,descent===1?{x:731,y:1131}:{x:814,y:1310});
@@ -226,15 +233,24 @@ async function exercise(mode){
       if(landed&&keys.length===1&&keys[0]==='LEFT')character.x-=ms*.35;
       if(landed&&keys.length===1)
         character.y=character.x>900?1468:(character.x<500?1444:1454);
+      const attacks=keys.some(key=>
+        ['PRIMARY_SKILL','SKILL_5','SKILL_6','SKILL_7'].includes(key));
+      if(attacks)attackCount++;
+      if(knockback&&attackCount>=2&&!knockbackTriggered&&keys.length===1){
+        knockbackTriggered=true;knockbackAtAction=actions.length-1;
+        knockbackUntil=now+750;character.y=1399;
+      }
       return {accepted:true,observation:observe()};}
   };
   await (new Function('sdk','return (async()=>{'+body+'})()'))(sdk);
-  return {actions,requests,elapsed:now,initialLandedDistance};
+  return {actions,requests,elapsed:now,initialLandedDistance,
+    knockbackTriggered,knockbackAtAction,airborneInput,airborneWaits};
 }
 (async()=>process.stdout.write(JSON.stringify({fresh:await exercise('fresh'),
   fastAway:await exercise('fast-away'),
   fastToward:await exercise('fast-toward'),
   nearWindow:await exercise('near-window'),
+  knockback:await exercise('knockback'),
   stale:await exercise('stale'),scarce:await exercise('scarce')})))()
   .catch(error=>{console.error(error);process.exitCode=1;});
 """.replace('BODY', json.dumps(code))
@@ -255,7 +271,7 @@ async function exercise(mode){
                 if by_slot.get(key) in selected]
         self.assertEqual(core, expected)
         self.assertEqual({by_slot[key] for key in core}, selected)
-        for label in ('fastAway', 'fastToward', 'nearWindow'):
+        for label in ('fastAway', 'fastToward', 'nearWindow', 'knockback'):
             moving = evidence[label]
             moving_core = [key for row in moving['actions']
                            for key in row['keys']
@@ -267,6 +283,14 @@ async function exercise(mode){
             self.assertLess(len(moving['actions']), 120)
             self.assertLessEqual(moving['requests'], native['max_sdk_requests'])
             self.assertLess(moving['elapsed'], 112000)
+        self.assertTrue(evidence['knockback']['knockbackTriggered'])
+        self.assertFalse(evidence['knockback']['airborneInput'])
+        self.assertGreaterEqual(evidence['knockback']['airborneWaits'], 2)
+        after_knockback = evidence['knockback']['actions'][
+            evidence['knockback']['knockbackAtAction'] + 1:]
+        remaining_core = [key for row in after_knockback for key in row['keys']
+                          if by_slot.get(key) in selected]
+        self.assertTrue({'SKILL_6', 'SKILL_7', 'SKILL_5'} <= set(remaining_core))
         self.assertGreaterEqual(evidence['fastAway']['initialLandedDistance'], 700)
         self.assertGreaterEqual(evidence['fastToward']['initialLandedDistance'], 700)
         self.assertGreater(evidence['nearWindow']['initialLandedDistance'], 82)
