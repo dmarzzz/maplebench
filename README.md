@@ -1,22 +1,23 @@
 # MapleBench
 
-**Status: live full-client trials verified; model ranking remains preliminary.**
-The durable adapter restores a frozen offline baseline, runs one real browser
-through ordinary login and bounded API control, then verifies persisted net XP
-after normal logout. The results dashboard shows exact model attribution,
-actions, survival and saved gameplay. Matching frozen inputs did not produce
-equivalent live starting scenes in the first four trials; those attempts do not
-establish a ranking. See the
-[acceptance evidence](docs/FULL_CLIENT_ACCEPTANCE.md),
-[results dashboard](docs/FULL_CLIENT_DASHBOARD.md) and
-[full-client control](docs/FULL_CLIENT.md).
+**Status: preparing the first repeated cross-provider release; no model ranking established.**
+MapleBench runs a real game client through ordinary login, bounded model-generated
+keyboard programs, logout and verified persisted XP. The next release evaluates
+two OpenAI and two Claude models on the same Hero fixture, four attempts each,
+with frozen gameplay knowledge and a declared 17-skill Hero toolkit.
 
-The latest separate release acceptance completed with 25 acknowledged Astra
-actions and +9,000 persisted net XP. Fresh populated render frames were verified
-before the API request; its saved recording and publication evidence passed.
-It remains separate from the earlier +9,500 Astra acceptance and original
-four-model trials. Class/task coverage is described in the
-[benchmark design](docs/CLASS_BENCHMARK_DESIGN.md).
+The release will include original gameplay recordings, held-key visualization,
+and a timeline of model calls and input delivery. Results are a descriptive pilot:
+signed session net XP, all planned attempts, spread and evidence-completion counts.
+The expanded native ten-skill qualification has passed; the 16 scored attempts
+have not started. See the [release requirements](docs/V1_COHORT.md),
+[current status](docs/V1_STATUS.md) and [continuation handoff](docs/HANDOFF_2026-09-20.md).
+The [public site](https://maplebench.vercel.app/) currently contains earlier pilot
+evidence, which is separate from this candidate.
+
+MapleBench provides structured observations; this is not a vision-only benchmark.
+The [roadmap](docs/ROADMAP.md) and [benchmark design](docs/CLASS_BENCHMARK_DESIGN.md)
+cover longer horizons, class breadth and future authoritative XP-window scoring.
 
 Moving to another computer? See [the laptop handoff](docs/LAPTOP_HANDOFF.md) to
 reuse the existing runner without transferring its assets or credentials.
@@ -38,7 +39,11 @@ MapleBench is an experimental benchmark for evaluating coding agents in a persis
 
 The intended world implementation is a MapleStory v83-compatible open-source server such as Cosmic. The benchmark framework itself contains **no Nexon game assets or WZ data**.
 
-## Research progression
+## Longer-term research directions
+
+These are proposed directions, not completed full-client protocols. The
+[current roadmap](docs/ROADMAP.md) gates longer tasks on repeatable operation and
+the native scoring evidence each metric requires.
 
 1. **Maximize XP** — give an agent a standardized character and 10 minutes; score total server-authoritative XP gained.
 2. **Maximize XP rate** — score peak sustained XP/min over a rolling 60-second window.
@@ -84,7 +89,10 @@ npm run score:demo
 
 The demo command scores a tiny example server event stream. It is deliberately independent of Cosmic so we can lock the benchmark contract before wiring the game server.
 
-## Near-term milestones
+## Original server-bot milestones
+
+This historical scaffold checklist describes the earlier adapter. Use the
+[full-client roadmap](docs/ROADMAP.md#burn-down) for current release priorities.
 
 - [x] Define server-authoritative episode/event schema.
 - [x] Implement total XP and rolling XP-rate scorers.

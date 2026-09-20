@@ -226,13 +226,54 @@ and the prior run's small evidence artifacts and request inventory were unchange
 This verifies the repaired login path, not a new scored trial or a positive
 trial-specific native save receipt.
 
-Private procedures for a new single-entry Astra acceptance and fresh normal-service
-restoration were prepared separately. The controlled pause was refused by shared-host memory
-admission before creating a pause intent, acquiring world locks or changing a
-service. A subsequent 20-second observation remained below the configured
-threshold. No new plan was submitted and no API request began. The live runtime
-continues in its normal service mode; the completed repair does not remove this
-capacity requirement.
+Initial preparation of the next acceptance was refused by shared-host memory
+admission before a pause intent or service change. Later fresh capacity and
+ownership checks allowed the bounded acceptance below. The earlier refusals
+remain recorded; a single passing admission does not reserve future capacity.
+
+## Completed trial and normal-service restoration
+
+On September 7, 2026, protected release `9a610af` completed the separately declared
+attempt `4149dc7596194dc49067a9ed3af9e3d7`. The finite coordinator submitted it once,
+with exactly one API request and no retry. Requested, returned and recorded model
+labels were `gpt-6-astra`. The request used 1,543 tokens: 951 input and 592 output.
+API time was 12.320 seconds; the unchanged returned program completed in 20.838
+seconds with **34 attempted and 34 acknowledged inputs**.
+
+Baseline restoration, populated post-render readiness, ordinary login, live
+gameplay, recording upload, ordinary logout and cleanup completed. Persisted EXP
+increased from 73,250 to 82,500: **+9,250 net XP**, matching diagnostic client XP.
+The character remained level 180 and was alive at logout with HP 10,774. The
+complete-plan report independently verified persistence and action receipts for
+the entire one-entry plan. Its sample size is one; it claims no confidence
+interval or model ranking.
+
+The 17,409,221-byte recording was copied by exact hash to the local gallery.
+Browser review sampled the opening, active gameplay and terminal state; it
+showed native HUD/monsters, movement, XP gain and the completed-controller label.
+The full evidence validator passed with no refusal reasons. Visual sampling does
+not establish a specific monster's death or inspect every encoded frame.
+Video SHA-256:
+`fff149824a688cb67733f2d53bc6d60ca91c9cd1264f1bf5721a4f79084e38c7`.
+
+The original candidate and collected artifacts remain unchanged. Separate review
+and validation records were added. The dashboard retains all ten attempts and
+places this acceptance in its own frozen-input group. It retains scenario
+`cec445d1fb261cc438c232df399cd9adf3e7618881acc6d6d741ae02656e47e0`
+and uses runtime inventory
+`9a81976adade1f312f430addc9ba758067bc4ede3ebe9c8e7f4610b2707daad5`.
+
+A new invocation of the existing normal-service lifecycle then started the
+normal game server once, verified native readiness, and started the worker once.
+The worker reached first idle with the same server instance. Normal-worker health
+passed; the existing web process remained unchanged. Chrome correctly waited
+after logout with no active model. This proves one complete operated cycle;
+automatic group-to-restoration composition and unattended acceptance remain
+outstanding. No subsequent API batch was queued.
+
+The public GitHub sample previously approved by the user contains seven earlier
+clips and nine summaries. This new recording is linked locally and is not part
+of that committed snapshot. Storing the sample in GitHub did not deploy a site.
 
 ## Limits before a public ranking
 
@@ -245,7 +286,9 @@ capacity requirement.
   browser and the dashboard export has an explicit bounded lifetime.
 - Review the intended public evidence, licensing and repository contents before
   external publication. Raw assets, database backups, credentials, logs, model
-  outputs and recordings remain outside Git; the control plane stays private.
+  outputs remain outside Git; recordings are excluded except for the explicitly
+  approved, hash-checked sample in `examples/full-client-benchmark/`. The control
+  plane stays private.
 
 The current scorer rejects level transitions rather than miscounting rollover.
 Survival means alive at logout, not proof that no earlier death occurred. Positive

@@ -1,0 +1,159 @@
+--- a/src/client/Character/CharStats.cpp
++++ b/src/client/Character/CharStats.cpp
+@@ -54,7 +54,7 @@
+         projectilerange = 400;
+         // Unmastered attacks still retain a small lower bound instead of dropping to the secondary stat alone.
+         mastery = 0.1f;
+-        critical = 0.05f;
++        critical = 0.0f;
+         mincrit = 0.5f;
+         maxcrit = 0.75f;
+         damagepercent = 0.0f;
+--- a/src/client/Gameplay/Combat/Attack.h
++++ b/src/client/Gameplay/Combat/Attack.h
+@@ -47,6 +47,8 @@
+         double mindamage    = 1.0;
+         double maxdamage    = 1.0;
+         float critical      = 0.0f;
++        int32_t critical_bonus_percent = 0;
++        int32_t weapon_damage_percent = 100;
+         float ignoredef     = 0.0f;
+         int32_t matk        = 0;
+         int32_t totalmagic  = 0;
+--- a/src/client/Character/Player.cpp
++++ b/src/client/Character/Player.cpp
+@@ -21,6 +21,9 @@
+ 
+ #include "../Constants.h"
+ #include "../Data/WeaponData.h"
++#include "../Data/SkillData.h"
++#include <algorithm>
++#include <cmath>
+ #include "../IO/UI.h"
+ #include "../IO/UITypes/UIStatsInfo.h"
+ #include "../Net/Packets/GameplayPackets.h"
+@@ -355,7 +358,28 @@
+         attack.intelligence = stats.get_total(Equipstat::INT);
+         attack.luck         = stats.get_total(Equipstat::LUK);
+         attack.totalmagic   = attack.intelligence + stats.get_total(Equipstat::MAGIC);
+-        attack.critical    = stats.get_critical();
++        // Critical Shot/Throw apply to projectile attacks, including ordinary
++        // shots. Resolve from current learned skills on every attack: removing
++        // a skill or changing weapons cannot leave a cached critical profile.
++        // Sharp Eyes is deliberately excluded until its stacking is verified.
++        attack.critical = 0.0f;
++        attack.critical_bonus_percent = 0;
++        if (attacktype == Attack::RANGED)
++        {
++            const Weapon::Type weapon = get_weapontype();
++            const int32_t passive = (weapon == Weapon::BOW || weapon == Weapon::CROSSBOW)
++                ? 3000001 : (weapon == Weapon::CLAW ? 4100001 : 0);
++            const int32_t learned = passive ? get_skilllevel(passive) : 0;
++            if (learned > 0)
++            {
++                const SkillData::Stats& critical = SkillData::get(passive).get_stats(learned);
++                attack.critical = std::clamp(critical.chance, 0.0f, 1.0f);
++                // WZ damage is an integer percent. Recover it after SkillData's
++                // float conversion so e.g. 113% does not truncate to 112%.
++                attack.critical_bonus_percent = std::max(0,
++                    static_cast<int32_t>(std::lround(critical.damage * 100.0f)) - 100);
++            }
++        }
+         attack.ignoredef   = stats.get_ignoredef();
+         attack.accuracy    = stats.get_total(Equipstat::ACC);
+         attack.playerlevel = stats.get_stat(Maplestat::LEVEL);
+--- a/src/client/Gameplay/Combat/Skill.cpp
++++ b/src/client/Gameplay/Combat/Skill.cpp
+@@ -17,6 +17,7 @@
+ //////////////////////////////////////////////////////////////////////////////
+ #include "Skill.h"
+ #include "SpellDamagePolicy.h"
++#include <cmath>
+ 
+ #include "../../Character/SkillId.h"
+ #include "../../Data/SkillData.h"
+@@ -211,8 +212,20 @@
+         }
+         else
+         {
+-            attack.mindamage *= stats.damage;
+-            attack.maxdamage *= stats.damage;
++            // Ordinary physical skill damage and critical bonus are additive
++            // after defense. Arrow Bomb's splash coefficient is the exception:
++            // it modifies the base range, so critical is multiplicative there.
++            // Its separate impact/splash targeting is not implemented here.
++            const int32_t percent = static_cast<int32_t>(std::lround(stats.damage * 100.0f));
++            if (skillid == 3101005)
++            {
++                attack.mindamage = attack.mindamage * percent / 100.0;
++                attack.maxdamage = attack.maxdamage * percent / 100.0;
++            }
++            else
++            {
++                attack.weapon_damage_percent = percent;
++            }
+             attack.damagetype = Attack::DMG_WEAPON;
+         }
+         attack.critical  += stats.critical;
+--- a/src/client/Gameplay/MapleMap/Mob.cpp
++++ b/src/client/Gameplay/MapleMap/Mob.cpp
+@@ -706,7 +706,7 @@
+             hitchance = damagetype == Attack::DMG_MAGIC
+                 ? spell_hit_chance(attack.intelligence, attack.luck, leveldelta, avoid)
+                 : calculate_hitchance(leveldelta, attack.accuracy);
+-            critical  = attack.critical;
++            critical  = damagetype == Attack::DMG_MAGIC ? 0.0f : attack.critical;
+             break;
+         case Attack::DMG_FIXED:
+             mindamage = attack.fixdamage;
+@@ -718,7 +718,9 @@
+ 
+         std::vector<std::pair<int32_t, bool>> result(attack.hitcount);
+         std::generate(result.begin(), result.end(), [&](){
+-            return next_damage(mindamage, maxdamage, hitchance, critical);
++            return next_damage(mindamage, maxdamage, hitchance, critical,
++                damagetype == Attack::DMG_WEAPON ? attack.weapon_damage_percent : 100,
++                attack.critical_bonus_percent);
+         });
+ 
+         update_movement();
+@@ -727,7 +729,7 @@
+         return result;
+     }
+ 
+-    std::pair<int32_t, bool> Mob::next_damage(double mindamage, double maxdamage, float hitchance, float critical) const
++    std::pair<int32_t, bool> Mob::next_damage(double mindamage, double maxdamage, float hitchance, float critical, int32_t weapon_damage_percent, int32_t critical_bonus_percent) const
+     {
+         bool hit = randomizer.below(hitchance);
+         if (!hit)
+@@ -738,11 +740,12 @@
+         constexpr double DAMAGECAP = 999999.0;
+ 
+         double damage = randomizer.next_real(mindamage, maxdamage);
+-        bool iscritical = randomizer.below(critical);
+-        if (iscritical)
+-        {
+-            damage *= 1.5;
+-        }
++        bool iscritical = critical > 0.0f && randomizer.below(critical);
++        // A 150% attack with +100% critical deals 250% of the defended base,
++        // not 300%. Default attacks use weapon_damage_percent=100.
++        const int32_t percent = weapon_damage_percent
++            + (iscritical ? critical_bonus_percent : 0);
++        damage = damage * percent / 100.0;
+ 
+         if (damage < 1)
+         {
+--- a/src/client/Gameplay/MapleMap/Mob.h
++++ b/src/client/Gameplay/MapleMap/Mob.h
+@@ -124,7 +124,9 @@
+         std::pair<int32_t, bool> next_damage(double mindamage,
+                                              double maxdamage,
+                                              float  hitchance,
+-                                             float  critical) const;
++                                             float  critical,
++                                             int32_t weapon_damage_percent,
++                                             int32_t critical_bonus_percent) const;
+ 
+         /// Return the current 'head' position.
+         Point<int16_t> get_head_position(Point<int16_t> position) const;

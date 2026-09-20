@@ -1,26 +1,27 @@
+import { createPostRenderRecorder } from './webcodecs-recorder.js';
 // Live controls and honest canvas capture for the unscored full-client adapter.
 (() => {
   fetch('/demo-session').then(r => { if (!r.ok) throw Error(); return r.json(); })
     .then(session => { Module.MapleBenchSession = session; }).catch(() => {});
   const game = document.getElementById('canvas');
   if (!game) return;
-  const ink = {base:'#10120f',panel:'#191d17',line:'#38432e',text:'#eef3dc',muted:'#a8b29b',
-    green:'#c3f45b',violet:'#b59af4',orange:'#ff9956',danger:'#ff776b'};
+  const ink = {base:'#fffefa',panel:'#f1f5e9',line:'#cad5bd',text:'#303631',muted:'#626d64',
+    green:'#376c51',violet:'#806299',orange:'#a96d24',danger:'#a53d38'};
   const leafPath = 'M12 1 15 7 20 5 18 11 23 13 15 18 13 17 13 23 11 23 11 17 9 18 1 13 6 11 4 5 9 7Z';
   const style = document.createElement('style');
   style.textContent = `
-    #maplebench-shell{--mb-signal:${ink.green};position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;background:${ink.base};color:${ink.text};font:12px system-ui,sans-serif;text-align:left;color-scheme:dark}
+    #maplebench-shell{--mb-signal:${ink.green};position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;background:${ink.base};color:${ink.text};font:12px system-ui,sans-serif;text-align:left;color-scheme:light}
     #maplebench-shell *{box-sizing:border-box}
-    #maplebench-shell header{flex:none;position:relative;padding:8px 12px 7px;border-top:3px solid #66528b;border-bottom:1px solid ${ink.line};display:grid;gap:4px;background:linear-gradient(105deg,#22202c 0%,${ink.base} 65%)}
+    #maplebench-shell header{flex:none;position:relative;padding:8px 12px 7px;border-top:3px solid #8fa96d;border-bottom:1px solid ${ink.line};display:grid;gap:4px;background:linear-gradient(105deg,#edf2e4 0%,${ink.base} 65%)}
     #maplebench-shell header::after{content:'';position:absolute;bottom:-1px;left:0;width:72px;height:2px;background:var(--mb-signal)}
     #maplebench-shell .mb-title{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
     #maplebench-shell .mb-brand{display:flex;align-items:center;gap:7px;min-width:0}
     #maplebench-shell .mb-leaf{width:20px;height:22px;flex:none;fill:${ink.orange}}
-    #maplebench-shell .mb-wordmark{font:900 20px/1 'Arial Narrow',Impact,sans-serif;letter-spacing:-.04em}
+    #maplebench-shell .mb-wordmark{font:900 20px/1 'Segoe UI',sans-serif;letter-spacing:-.04em}
     #maplebench-shell .mb-wordmark b{color:${ink.green};font-weight:inherit}
-    #maplebench-shell .mb-engine{font:9px/1.2 ui-monospace,monospace;letter-spacing:.06em;color:${ink.muted};border-left:1px solid #5e5074;padding-left:9px;margin-left:3px}
+    #maplebench-shell .mb-engine{font:9px/1.2 ui-monospace,monospace;letter-spacing:.06em;color:${ink.muted};border-left:1px solid #cad5bd;padding-left:9px;margin-left:3px}
     #maplebench-shell .mb-capture{flex:none;min-width:55px;text-align:center;font:700 10px/1.2 ui-monospace,monospace;letter-spacing:.06em;color:${ink.green};border:1px solid ${ink.line};padding:4px 7px;clip-path:polygon(0 0,calc(100% - 5px) 0,100% 5px,100% 100%,0 100%)}
-    #maplebench-shell .mb-capture[data-recording=true]{color:${ink.orange};border-color:#965830;background:#2e2118}
+    #maplebench-shell .mb-capture[data-recording=true]{color:${ink.orange};border-color:#c9a878;background:#fff1d8}
     #maplebench-shell .mb-controller{border-left:3px solid var(--mb-signal);padding-left:7px;font-weight:750;font-size:15px;line-height:1.2;overflow-wrap:anywhere}
     #maplebench-shell .mb-status{color:${ink.muted};font-size:10px;line-height:1.3;overflow-wrap:anywhere}
     #maplebench-shell[data-alert=true]{--mb-signal:${ink.orange}}
@@ -28,14 +29,14 @@
     #maplebench-shell .mb-telemetry{display:grid;grid-template-columns:1fr 1fr;gap:12px;font:11px/1.3 ui-monospace,monospace;font-variant-numeric:tabular-nums}
     #maplebench-shell .mb-vital{min-width:0;color:${ink.green}}
     #maplebench-shell .mb-vital-mp{color:${ink.violet}}
-    #maplebench-shell .mb-meter{height:4px;margin-top:3px;background:#30372a;overflow:hidden}
+    #maplebench-shell .mb-meter{height:4px;margin-top:3px;background:#dfe6d6;overflow:hidden}
     #maplebench-shell .mb-meter-fill{width:0;height:100%;background:repeating-linear-gradient(90deg,currentColor 0 8px,transparent 8px 10px)}
-    #maplebench-shell .mb-readout{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px;font:10px/1.3 ui-monospace,monospace;color:#d2dbc3}
+    #maplebench-shell .mb-readout{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px;font:10px/1.3 ui-monospace,monospace;color:#4b514d}
     #maplebench-shell .mb-note{color:${ink.muted};font-size:9px;line-height:1.2;letter-spacing:.04em}
     #maplebench-shell .mb-note strong{font-weight:700;color:${ink.orange}}
-    #maplebench-shell .mb-stage{flex:1;min-height:0;min-width:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#070906;border-inline:1px solid #262d21}
+    #maplebench-shell .mb-stage{flex:1;min-height:0;min-width:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#273b2e;border-inline:1px solid #b8c7a3}
     #maplebench-shell canvas{display:block!important;position:static!important;margin:0!important;border:0!important;flex:none;max-width:none!important;max-height:none!important;width:var(--mb-canvas-width)!important;height:var(--mb-canvas-height)!important}
-    #maplebench-shell footer{flex:none;background:${ink.panel};border-top:1px solid ${ink.line};border-left:3px solid #66528b;padding:6px 10px;max-height:45%;overflow:auto}
+    #maplebench-shell footer{flex:none;background:${ink.panel};border-top:1px solid ${ink.line};border-left:3px solid #8fa96d;padding:6px 10px;max-height:45%;overflow:auto}
     #maplebench-shell .mb-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
     #maplebench-shell details{flex:1;min-width:150px}
     #maplebench-shell details[open]{flex-basis:100%}
@@ -44,10 +45,10 @@
     #maplebench-shell summary::marker{color:${ink.orange}}
     #maplebench-shell .mb-controls{display:flex;flex-wrap:wrap;gap:5px;padding:5px 0}
     #maplebench-shell .mb-models{border-top:1px solid ${ink.line};margin-top:4px;padding-top:8px}
-    #maplebench-shell button{border:1px solid #515c44;border-radius:0;background:#252c20;color:${ink.text};padding:6px 8px;font:600 11px/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap}
-    #maplebench-shell .mb-models button{border-color:#6f5c94;background:#292333;color:#e0d4ff}
-    #maplebench-shell button.mb-record{border-color:#946037;color:${ink.orange};background:#30251c}
-    #maplebench-shell button:hover:not(:disabled){border-color:${ink.green};background:#354129;color:${ink.text}}
+    #maplebench-shell button{border:1px solid #c9d4bf;border-radius:4px;background:#f1f5e9;color:${ink.text};padding:6px 8px;font:600 11px/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+    #maplebench-shell .mb-models button{border-color:#c4b2d0;background:#f2ecf6;color:#78538b}
+    #maplebench-shell button.mb-record{border-color:#c9a878;color:${ink.orange};background:#fff1d8}
+    #maplebench-shell button:hover:not(:disabled){border-color:${ink.green};background:#e4edd9;color:${ink.text}}
     #maplebench-shell button:disabled{opacity:.4;cursor:default}
     #maplebench-shell button:focus-visible,#maplebench-shell summary:focus-visible{outline:2px solid ${ink.green};outline-offset:2px}
     #maplebench-shell .mb-notice{color:${ink.muted};font-size:10px;margin-top:4px;overflow-wrap:anywhere}
@@ -108,13 +109,21 @@
 
   const keyNames = {LEFT:'ArrowLeft',RIGHT:'ArrowRight',UP:'ArrowUp',DOWN:'ArrowDown',JUMP:'Space',
     ATTACK:'ControlLeft',BRANDISH:'KeyA',COMBO:'KeyS',BOOSTER:'KeyD',MAPLE_WARRIOR:'KeyF',HP_POTION:'KeyQ',MP_POTION:'KeyW'};
+  const skillKeyNames={PRIMARY_SKILL:'KeyA',SECONDARY_SKILL:'KeyS',BUFF_1:'KeyD',BUFF_2:'KeyF',
+    SKILL_5:'KeyG',SKILL_6:'KeyH',SKILL_7:'KeyZ',SKILL_8:'KeyX',SKILL_9:'KeyC',SKILL_10:'KeyV',
+    SKILL_11:'KeyB',SKILL_12:'KeyN',SKILL_13:'KeyM',SKILL_14:'Comma',SKILL_15:'Period',SKILL_16:'Slash',SKILL_17:'Semicolon'};
+  const skillNamesByCode=Object.fromEntries(Object.entries(skillKeyNames).map(([name,code])=>[code,name]));
   const namesByCode = Object.fromEntries(Object.entries(keyNames).map(([name, code]) => [code, name]));
-  const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87};
+  const codes = {ArrowLeft:37,ArrowRight:39,ArrowUp:38,ArrowDown:40,ControlLeft:17,Space:32,
+    KeyA:65,KeyS:83,KeyD:68,KeyF:70,KeyQ:81,KeyW:87,KeyG:71,KeyH:72,KeyZ:90,KeyX:88,KeyC:67,KeyV:86,
+    KeyB:66,KeyN:78,KeyM:77,Comma:188,Period:190,Slash:191,Semicolon:186};
+  const punctuationKeys={Comma:',',Period:'.',Slash:'/',Semicolon:';'};
   const held = new Map(), physical = new Set(), manualButtons = [], runButtons = [];
   const cancelledRuns = new Set();
   let run = {status:'idle',mode:'manual',model:null}, baseline = null, baselineScope = 'session';
   let starting = false, relayConnected = false, disconnectedAt = null, closed = false;
   let acknowledgement = null, activeCommand = null, lastRunId = null, recordedRunId = null, releaseAck = null;
+  let captureFailure = null;
   let capture = null, saving = false, pendingUpload = null, pollTimer, pollAbort;
   const activeRun = () => ['requesting','running'].includes(run.status) || run.workerActive === true || run.leaseReleasePending === true;
   const busy = () => starting || activeRun() || Boolean(activeCommand);
@@ -127,12 +136,12 @@
     baseline = fresh(observation) ? {exp:observation.character.exp,level:observation.character.level} : null;
   };
   const key = (code, type) => window.dispatchEvent(new KeyboardEvent(type, {
-    key:code.startsWith('Key') ? code.slice(3).toLowerCase() : code === 'Space' ? ' ' : code === 'ControlLeft' ? 'Control' : code,
+    key:code.startsWith('Key') ? code.slice(3).toLowerCase() : code === 'Space' ? ' ' : code === 'ControlLeft' ? 'Control' : punctuationKeys[code]||code,
     code,keyCode:codes[code],which:codes[code],bubbles:true,cancelable:true
   }));
   const release = code => { clearTimeout(held.get(code)); held.delete(code); key(code,'keyup'); };
-  const releaseAll = interrupted => {
-    if (interrupted && activeCommand) activeCommand.interrupted = true;
+  const releaseAll = (interrupted,reason='interrupted_unknown') => {
+    if (interrupted && activeCommand) { activeCommand.interrupted = true; activeCommand.failure ??= reason; }
     [...new Set([...held.keys(), ...physical])].forEach(release); physical.clear();
   };
   const manualMode = () => { if (baselineScope !== 'session') setBaseline('session'); };
@@ -148,7 +157,7 @@
   for (const [text, code, ms] of [['← 1s','ArrowLeft',1000],['→ 1s','ArrowRight',1000],['Jump','Space',180],
     ['Brandish','KeyA',500],['Combo','KeyS',180],['Booster','KeyD',180],['Maple Warrior','KeyF',180],
     ['HP potion','KeyQ',180],['MP potion','KeyW',180]]) button(text, () => hold(code,ms), manualGroup,manualButtons);
-  button('Release keys', () => releaseAll(true), manualGroup);
+  button('Release keys', () => releaseAll(true,'interrupted_operator'), manualGroup);
   for (const type of ['keydown','keyup']) window.addEventListener(type, event => {
     if (!event.isTrusted || !namesByCode[event.code]) return;
     // Preserve keyboard activation of toolbar controls without forwarding their
@@ -161,9 +170,9 @@
     if (type === 'keydown') physical.add(event.code); else physical.delete(event.code);
     renderHeader();
   }, true);
-  window.addEventListener('blur', () => { releaseAll(true); renderHeader(); });
+  window.addEventListener('blur', () => { releaseAll(true,'interrupted_window_blur'); renderHeader(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { releaseAll(true); if(capture) capture.hidden=true; if (capture?.autoRunId) stopRecording(); }
+    if (document.hidden) { releaseAll(true,'interrupted_hidden'); if(capture) capture.hidden=true; if (capture?.autoRunId) stopRecording(); }
   });
 
   const format = value => Number.isFinite(value) ? value.toLocaleString('en-US') : '—';
@@ -173,11 +182,12 @@
     const observation = observe(), available = fresh(observation), character = observation.character || {};
     if (!baseline && available) setBaseline(activeRun() ? 'run' : 'session');
     const model = run.mode === 'api' ? (run.model || 'model unavailable') : null;
-    const mode = activeRun() ? (run.mode === 'api' ? `OpenAI API · ${model}` : 'Scripted SDK · no evaluated model')
+    const mode = activeRun() ? (run.mode === 'api' ? `${model?.startsWith('claude-') ? 'Anthropic' : 'OpenAI'} API · ${model}` : run.nativeAcceptance ? `Native acceptance · ${run.nativeAcceptance.profile.class_name} · no model` : 'Scripted SDK · no evaluated model')
       : held.size || physical.size ? 'Manual controls · no active model' : 'Idle · no active model';
     let state = !relayConnected ? 'Relay disconnected · inputs released'
       : !available ? 'Waiting for fresh client state'
-      : run.status === 'requesting' ? (run.mode === 'api' ? 'Awaiting API program · game remains live' : 'Preparing SDK program')
+      : run.status === 'running' && run.adaptivePhase === 'waiting_for_deadline' ? `Waiting for deadline · game remains live · ${run.actions || 0} actions${run.adaptiveStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.adaptiveStartedAtMs)/1000))} / 300s` : ''}`
+      : run.status === 'requesting' ? (run.adaptiveProtocol ? `Planning cycle ${(run.cycleNumber || 0)+1} · game remains live` : run.mode === 'api' ? 'Awaiting API program · game remains live' : 'Preparing SDK program')
       : run.status === 'running' ? `Program running · ${run.actions || 0} actions${run.programStartedAtMs ? ` · ${Math.max(0, Math.floor((Date.now()-run.programStartedAtMs)/1000))} / ${run.programSeconds || 22}s` : ''}`
       : run.id ? `Last ${model || 'scripted SDK'} run: ${run.status}${run.actions != null ? ` · ${run.actions} actions` : ''}${run.reason ? ` · ${run.reason}` : ''}`
       : 'Ready · open Controls & models to start one short run';
@@ -186,7 +196,8 @@
       && Number.isFinite(character.exp) && Number.isFinite(baseline.exp) ? character.exp - baseline.exp : null;
     const xp = delta === null ? (available && baseline && character.level !== baseline.level ? 'XP Δ unavailable (level changed)' : 'XP Δ —')
       : `XP Δ ${delta >= 0 ? '+' : ''}${format(delta)} (${baselineScope})`;
-    const keys = [...new Set([...held.keys(),...physical])].map(code => namesByCode[code] || code).join(' + ') || 'none';
+    const skillProfile = run.adaptiveProtocol?.profile || run.nativeAcceptance?.profile;
+    const keys = [...new Set([...held.keys(),...physical])].map(code => {const key=(skillProfile?skillNamesByCode[code]:null)||namesByCode[code]||code; return skillProfile?.skill_keys?.[key]||key;}).join(' + ') || 'none';
     return {mode,state,hp:`HP ${available ? format(character.hp)+' / '+format(character.maxHp) : '—'}`,
       mp:`MP ${available ? format(character.mp)+' / '+format(character.maxMp) : '—'}`,xp,keys:`Keys: ${keys}`,
       hpFraction:available ? fraction(character.hp,character.maxHp) : 0,
@@ -230,14 +241,29 @@
     while (value.length && ctx.measureText(value).width > width) value = value.slice(0,-1);
     ctx.fillText(value === text ? value : value.slice(0,-1)+'…', x,y);
   };
-  function startRecording(autoRunId = null) {
+  const captureFailureCodes = new Set(["capture_clock_or_duration","capture_wall_clock_drift","capture_frame_limit","capture_dimensions_changed","capture_snapshot_failed","capture_first_frame_timeout","capture_final_frame_timeout","capture_owner_changed","capture_interrupted","capture_frame_gap","duplicate_quantized_timestamp","invalid_frame_duration","encoder_backpressure","encoder_output_timing_mismatch","encoder_output_type","encoder_missing_requested_keyframe","capture_byte_limit","encoder_hash_backpressure","encoder_configuration_changed","vp8_hidden_or_mistyped_frame","vp8_keyframe_dimensions","encoded_hash_failed","encoder_stop_timeout","capture_already_stopping","incomplete_capture","capture_endpoint_gap","capture_quantized_endpoint_gap","encoder_flush_timeout","encoder_frame_count_mismatch","ledger_too_large","encoder_error","capture_duration_limit","encoder_configuration_timeout","vp8_configuration_unsupported","webcodecs_unavailable","invalid_canvas","invalid_capture_limit","capture_not_active","capture_already_initialized","render_hook_failed","encoder_initialization_failed","encoder_stop_failed","encoder_failure_unknown"]);
+  const retainCaptureFailure = (item, code) => {
+    if(!item?.encodedMode || item.autoRunId!==run.id || !/^[a-f0-9]{32}$/.test(item.autoRunId) || captureFailure?.run_id===item.autoRunId) return;
+    const recorder=item.encodedRecorder, start=recorder?.startedAt ?? item.startedAt;
+    const offset=at=>Number.isFinite(at)&&Number.isFinite(start)?Math.max(0,Math.min(350000,Math.round(at-start))):null;
+    const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=20000?value:0;
+    captureFailure={schema_version:1,run_id:item.autoRunId,policy_id:'post-render-encoded-frame-v1',
+      code:captureFailureCodes.has(code)?code:'encoder_failure_unknown',
+      clock_origin:Number.isFinite(recorder?.startedAt)?'encoder_start':'capture_request',elapsed_ms:offset(performance.now()) ?? 0,
+      first_frame_offset_ms:offset(recorder?.firstFrameAt),last_frame_offset_ms:offset(recorder?.lastFrameAt),
+      rendered_frames:count(recorder?.frames),submitted_frames:count(recorder?.submittedFrames),encoded_frames:count(recorder?.outputFrames)};
+  };
+  async function startRecording(autoRunId = null) {
     if (capture) return;
     if (saving || pendingUpload || closed) return;
-    const output = document.createElement('canvas'), headerHeight = 120;
+    const expandedToolkit=run.adaptiveProtocol?.skill_toolkit||run.nativeAcceptance?.skill_toolkit;
+    const fullToolkit=expandedToolkit?.skills?.length>10;
+    const output = document.createElement('canvas'), headerHeight = fullToolkit?206:expandedToolkit?180:154;
     output.width = game.width; output.height = game.height + headerHeight;
     const ctx = output.getContext('2d');
+    const durationPolicy=run.nativeAcceptance?.capture_duration_policy || run.adaptiveProtocol?.capture_duration_policy;
     const item = {autoRunId,startedAt:performance.now(),startedWall:Date.now(),recorderStarted:false,
-      frames:0,firstFrameWall:null,lastFrameWall:null,lastFrameAt:null,maxGap:0,hidden:document.hidden,
+      frames:0,firstFrameWall:null,lastFrameWall:null,firstFrameAt:null,lastFrameAt:null,maxGap:0,hidden:document.hidden,
       errors:0,relayLost:false,clock:null,clockVerified:false,terminalToken:null,
       chunks:[],bytes:0,stopping:false,animation:null,stream:null,recorder:null,finishTimer:null,maxTimer:null};
     const draw = () => {
@@ -245,23 +271,23 @@
       const width=output.width, alert=data.stale || !relayConnected || data.alive===false;
       const signal=alert ? ink.orange : ink.green;
       ctx.fillStyle=ink.base;ctx.fillRect(0,0,width,headerHeight);
-      ctx.fillStyle='#24202e';ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(286,0);ctx.lineTo(262,29);ctx.lineTo(0,29);ctx.fill();
-      ctx.fillStyle='#66528b';ctx.fillRect(0,0,width,3);
+      ctx.fillStyle='#edf2e4';ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(286,0);ctx.lineTo(262,29);ctx.lineTo(0,29);ctx.fill();
+      ctx.fillStyle='#8fa96d';ctx.fillRect(0,0,width,3);
       ctx.save();ctx.translate(12,7);ctx.scale(.8,.8);ctx.fillStyle=ink.orange;ctx.fill(new Path2D(leafPath));ctx.restore();
-      ctx.font='900 20px "Arial Narrow",Impact,sans-serif';ctx.fillStyle=ink.text;
+      ctx.font='800 20px sans-serif';ctx.fillStyle=ink.text;
       ctx.fillText('MAPLE',39,24);const brandWidth=ctx.measureText('MAPLE').width;
       ctx.fillStyle=ink.green;ctx.fillText('BENCH',39+brandWidth,24);
       ctx.font='10px monospace';ctx.fillStyle=ink.muted;ctx.fillText('JOURNEY × COSMIC',283,21);
       ctx.fillStyle=ink.orange;ctx.font='bold 10px monospace';ctx.fillText('UNRANKED',width-186,21);
-      ctx.strokeStyle='#946037';ctx.strokeRect(width-116,8,104,19);
-      ctx.fillText(`● REC ${((performance.now()-item.startedAt)/1000).toFixed(1)}s`,width-108,21);
+      ctx.strokeStyle='#c9a878';ctx.strokeRect(width-116,8,104,19);
+      ctx.fillText(item.encodedMode&&!item.frames?'● ARMING':`● REC ${((performance.now()-item.startedAt)/1000).toFixed(1)}s`,width-108,21);
       ctx.fillStyle=signal;ctx.fillRect(0,34,4,17);
       ctx.font='bold 17px sans-serif';ctx.fillStyle=ink.text;fitText(ctx,data.mode,12,47,width-24);
       ctx.font='11px sans-serif';ctx.fillStyle=alert ? ink.orange : ink.muted;fitText(ctx,data.state,12,63,width-24);
       const vitalWidth=Math.floor((width-36)*.3), mpX=24+vitalWidth, readoutX=mpX+vitalWidth+12;
       const meter=(label,value,x,color)=>{
         ctx.fillStyle=color;ctx.font='bold 12px monospace';fitText(ctx,label,x,82,vitalWidth);
-        ctx.fillStyle='#30372a';ctx.fillRect(x,88,vitalWidth,4);
+        ctx.fillStyle='#dfe6d6';ctx.fillRect(x,88,vitalWidth,4);
         ctx.fillStyle=color;
         for(let offset=0;offset<vitalWidth*value;offset+=10) ctx.fillRect(x+offset,88,Math.min(8,vitalWidth*value-offset),4);
       };
@@ -270,7 +296,23 @@
       ctx.fillStyle=ink.text;ctx.font='11px monospace';fitText(ctx,data.xp,readoutX,81,width-readoutX-12);
       ctx.fillStyle=ink.muted;fitText(ctx,data.keys,readoutX,97,width-readoutX-12);
       ctx.font='10px sans-serif';ctx.fillStyle=ink.muted;
-      fitText(ctx,'ACTUAL CLIENT CANVAS / Client telemetry · no server score',12,110,width-24);
+      fitText(ctx,'Actual client canvas · client telemetry, not persisted score',12,110,width-24);
+      // These keycaps reflect the browser's actual held-key state at this rendered
+      // frame. They make no claim that an input caused a cast, hit or XP award.
+      const controls=['LEFT','RIGHT','UP','DOWN','JUMP','ATTACK','PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2','HP_POTION','MP_POTION'];
+      const short=['←','→','↑','↓','Jump','Attack','Skill 1','Skill 2','Buff 1','Buff 2','HP','MP'];
+      if(expandedToolkit)short.splice(6,4,'Brandish','Combo','Booster','Maple');
+      if(expandedToolkit){controls.push('SKILL_5','SKILL_6','SKILL_7','SKILL_8','SKILL_9','SKILL_10');short.push('Rush','Coma','Panic','Stance','Rage','Guard');}
+      if(fullToolkit){controls.push('SKILL_11','SKILL_12','SKILL_13','SKILL_14','SKILL_15','SKILL_16','SKILL_17');short.push('Enrage','Will','Shout','Crash','Iron body','P. strike','S. blast');}
+      const columns=12,gap=3,keyWidth=(width-24-gap*(columns-1))/columns;
+      for(let index=0;index<controls.length;index++){
+        const name=controls[index],code=skillKeyNames[name]||keyNames[name];
+        const down=Boolean(code&&(held.has(code)||physical.has(code))),x=12+(index%columns)*(keyWidth+gap),y=119+Math.floor(index/columns)*26;
+        ctx.fillStyle=down?ink.orange:'#edf0e4';ctx.fillRect(x,y,keyWidth,23);
+        ctx.strokeStyle=down?ink.orange:ink.line;ctx.strokeRect(x+.5,y+.5,keyWidth-1,22);
+        ctx.fillStyle=down?ink.base:ink.muted;ctx.font='bold 10px sans-serif';
+        fitText(ctx,short[index],x+4,y+15,keyWidth-8);
+      }
       ctx.fillStyle=ink.line;ctx.fillRect(0,headerHeight-1,width,1);
       ctx.fillStyle=signal;ctx.fillRect(0,headerHeight-2,72,2);
       ctx.drawImage(game,0,headerHeight,output.width,game.height);
@@ -279,20 +321,56 @@
     // Capture while the client's just-drawn WebGL buffer is valid. A separate
     // browser RAF can read an older/discarded compositor frame.
     const animate = () => {
-      if(item.stopping) return;
+      if(capture!==item||(item.encodedMode&&item.autoRunId!==run.id)) { item.failFinalFrame?.(Error('capture_owner_changed')); return; }
+      if(item.stopping && !item.finalFrameRequested) return;
       draw();
       if(item.recorderStarted) {
+        if(item.encodedRecorder) {
+          item.encodedRecorder.onRendered();
+          item.startedAt=item.encodedRecorder.startedAt;item.startedWall=item.encodedRecorder.startedWall;
+          item.firstFrameAt=item.encodedRecorder.firstFrameAt;item.firstFrameWall=item.encodedRecorder.firstFrameWall;
+          if(!item.frames) notice.textContent='Recording verified post-render frames.';
+        }
         const now=performance.now(),wall=Date.now();
         item.maxGap=Math.max(item.maxGap,now-(item.lastFrameAt ?? item.startedAt));
-        item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.lastFrameAt=now; item.frames++;
+        item.firstFrameWall ??= wall; item.lastFrameWall=wall; item.firstFrameAt ??= now; item.lastFrameAt=now; item.frames=item.encodedRecorder?item.encodedRecorder.frames:item.frames+1;
       }
+      // The final real hook supplies its pixels before the endpoint is sampled.
+      // finishOnFrame calls recorder.stop() synchronously, before this stack yields.
+      if(item.finalFrameRequested) item.finishOnFrame();
     };
     item.onRendered = animate;
+    const encoded = durationPolicy?.id === 'post-render-encoded-frame-v1';
+    if(encoded) {
+      item.encodedMode=true;item.durationPolicy=durationPolicy;capture=item;
+      const encodedLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:335000;
+      item.captureDeadlineAt=item.startedAt+encodedLimit;
+      item.maxTimer=setTimeout(()=>{retainCaptureFailure(item,'capture_duration_limit');item.errors++;stopRecording();},encodedLimit);
+      try {
+        item.encoderPromise=createPostRenderRecorder(output,{maxDurationMs:encodedLimit,onFailure:code=>{
+          retainCaptureFailure(item,code);
+          item.failFinalFrame?.(Error(code));
+          if(capture!==item) return;
+          item.errors++; notice.textContent='Encoded frame capture failed; this recording cannot be accepted.';
+          stopRecording();
+        }});
+        item.encodedRecorder=await item.encoderPromise;
+        if(item.stopping || closed) return;
+        item.recorderStarted=true;
+        notice.textContent='Recorder ready; waiting for the first post-render frame.';renderHeader();
+      } catch (error) {
+        retainCaptureFailure(item,error?.message || 'encoder_initialization_failed');
+        item.errors++;clearTimeout(item.maxTimer);
+        if(capture===item) capture=null;
+        notice.textContent='This browser could not start the required encoded-frame recording.';renderHeader();
+      }
+      return;
+    }
     try {
       const mimeType = ['video/webm;codecs=vp8','video/webm'].find(type => MediaRecorder.isTypeSupported(type));
       if (!mimeType) throw Error('WebM capture is unavailable');
       draw(); item.stream=output.captureStream(30);
-      item.recorder=new MediaRecorder(item.stream,{mimeType,videoBitsPerSecond:5000000});
+      item.recorder=new MediaRecorder(item.stream,{mimeType,videoBitsPerSecond:run.adaptiveProtocol||run.nativeAcceptance?2000000:5000000});
       item.recorder.onstart=()=>{item.recorderStarted=true;item.startedAt=performance.now();item.startedWall=Date.now();};
       item.recorder.ondataavailable=event=>{
         if(event.data.size) { item.chunks.push(event.data); item.bytes+=event.data.size; }
@@ -310,12 +388,17 @@
           rendered_frames:item.frames,max_frame_gap_ms:item.maxGap,hidden:item.hidden,errors:item.errors,relay_lost:item.relayLost,
           interrupted:item.hidden||item.errors>0||item.relayLost||item.frames===0||item.maxGap>1000,
           clock:item.clockVerified?item.clock:null,terminal_token:item.terminalToken}};
+        if(durationPolicy)Object.assign(pendingUpload.metadata,{schema_version:2,capture_duration_policy:durationPolicy,
+          first_frame_offset_ms:item.firstFrameAt===null?null:item.firstFrameAt-item.startedAt,
+          last_frame_offset_ms:item.lastFrameAt===null?null:item.lastFrameAt-item.startedAt});
         item.chunks=[];
         await uploadRecording();
       };
       item.recorder.onerror=()=>{ item.errors++; notice.textContent='Recording failed; capture stopped.'; stopRecording(); };
       capture=item; item.recorder.start(1000);
-      item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},item.autoRunId&&run.readinessPolicy?125000:120000);
+      const captureLimit=run.nativeAcceptance?run.nativeAcceptance.capture_max_ms:run.adaptiveProtocol?.id==='full-client-adaptive-pilot-v1'&&run.adaptiveProtocol.wall_seconds===300
+        ?335000:item.autoRunId&&run.readinessPolicy?125000:120000;
+      item.maxTimer=setTimeout(()=>{item.errors++;stopRecording();},captureLimit);
       notice.textContent='Recording the actual canvas and controller/telemetry header.'; renderHeader();
     } catch {
       cancelAnimationFrame(item.animation); item.stream?.getTracks().forEach(track=>track.stop());
@@ -324,14 +407,78 @@
     }
   }
   Module.MapleBenchOnRendered = () => {
-    if (!capture || capture.stopping) return;
-    try { capture.onRendered(); } catch { capture.errors++; notice.textContent='Frame capture failed'; stopRecording(); }
-  };
-  function stopRecording() {
+    if (!capture || (capture.stopping && !capture.finalFrameRequested)) return;
     const item=capture;
-    if(!item||item.stopping) return;
+    try { item.onRendered(); } catch (error) { retainCaptureFailure(item,error?.message || 'render_hook_failed'); item.failFinalFrame?.(Error('render_hook_failed')); item.errors++; notice.textContent='Frame capture failed'; stopRecording(); }
+  };
+  async function stopRecording() {
+    const item=capture;
+    if(!item) return;
+    if(item.stopping) {
+      if(item.encodedMode&&(closed||item.hidden||item.errors>0||item.relayLost)) {
+        item.failFinalFrame?.(Error('capture_interrupted'));
+        item.encodedRecorder?.abort('capture_interrupted');
+      }
+      return;
+    }
     item.stoppedAt=performance.now();item.stoppedWall=Date.now();
-    item.stopping=true; clearTimeout(item.finishTimer); clearTimeout(item.maxTimer); cancelAnimationFrame(item.animation);
+    item.stopping=true; clearTimeout(item.finishTimer); cancelAnimationFrame(item.animation);
+    if(item.encodedMode) {
+      let stopTimer;
+      try {
+        // The 15s bound includes configuration settlement, the final-hook wait,
+        // encoder flush and hashing. A late factory cannot leak its encoder.
+        const timeout=new Promise((_,reject)=>{stopTimer=setTimeout(()=>{
+          item.stopExpired=true;
+          item.failFinalFrame?.(Error('encoder_stop_timeout'));
+          item.encodedRecorder?.abort('encoder_stop_timeout');
+          reject(Error('encoder_stop_timeout'));
+        },15000);});
+        const finish=(async()=>{
+          const recorder=item.encodedRecorder || await item.encoderPromise;
+          if(item.stopExpired){recorder.abort('encoder_stop_timeout');throw Error('encoder_stop_timeout');}
+          if(capture!==item||item.autoRunId!==run.id){recorder.abort('capture_owner_changed');throw Error('capture_owner_changed');}
+          if(closed||item.hidden||item.errors>0||item.relayLost)recorder.abort('capture_interrupted');
+          if(recorder.failed || !recorder.frames) return recorder.stop();
+          return new Promise((resolve,reject)=>{
+            const clear=()=>{
+              clearTimeout(item.finalFrameTimer);item.finalFrameRequested=false;
+              item.finishOnFrame=null;item.failFinalFrame=null;
+            };
+            item.failFinalFrame=error=>{clear();recorder.abort(error.message);reject(error);};
+            item.finishOnFrame=()=>{
+              if(capture!==item||item.autoRunId!==run.id){item.failFinalFrame(Error('capture_owner_changed'));return;}
+              if(performance.now()>item.captureDeadlineAt){item.failFinalFrame(Error('capture_duration_limit'));return;}
+              clear();
+              try{const ending=recorder.stop();clearTimeout(item.maxTimer);resolve(ending);}
+              catch(error){recorder.abort('encoder_stop_failed');reject(error);}
+            };
+            item.finalFrameRequested=true;
+            item.finalFrameTimer=setTimeout(()=>item.failFinalFrame?.(Error('capture_final_frame_timeout')),1000);
+          });
+        })();
+        const finished=await Promise.race([finish,timeout]);
+        clearTimeout(stopTimer);stopTimer=null;
+        if(capture!==item||item.autoRunId!==run.id)throw Error('capture_owner_changed');
+        if(item.encodedRecorder.startedAt+finished.measurements.duration_ms>item.captureDeadlineAt)throw Error('capture_duration_limit');
+        pendingUpload={runId:item.autoRunId,blob:finished.blob,metadata:{
+          schema_version:3,run_id:item.autoRunId,client_id:clientId,...finished.measurements,
+          capture_duration_policy:item.durationPolicy,
+          encoder_receipt:finished.encoder_receipt,
+          hidden:item.hidden,errors:item.errors,relay_lost:item.relayLost,
+          interrupted:item.hidden||item.errors>0||item.relayLost||finished.measurements.rendered_frames===0||finished.measurements.max_frame_gap_ms>1000,
+          clock:item.clockVerified?item.clock:null,terminal_token:item.terminalToken}};
+        if(capture===item) capture=null;
+        await uploadRecording();
+      } catch (error) {
+        retainCaptureFailure(item,error?.message || 'encoder_stop_failed');
+        if(capture===item) {
+          capture=null;notice.textContent='Encoded recording did not finish verification; the run has no accepted recording.';
+        }
+      } finally { clearTimeout(stopTimer);clearTimeout(item.maxTimer);clearTimeout(item.finalFrameTimer);item.finalFrameRequested=false;item.finishOnFrame=null;item.failFinalFrame=null; }
+      renderHeader();return;
+    }
+    clearTimeout(item.maxTimer);
     if(item.recorder.state!=='inactive') item.recorder.stop();
     else { item.stream.getTracks().forEach(track=>track.stop()); capture=null; }
     renderHeader();
@@ -348,6 +495,7 @@
   }
   const sessionAck=new URLSearchParams(location.search).get('transition');
   const updateRun = next => {
+    if(captureFailure && captureFailure.run_id!==next.id) captureFailure=null;
     run=next;
     if(run.id && lastRunId!==run.id && activeRun()) { lastRunId=run.id; setBaseline('run'); details.open=false; }
     if(activeRun() && run.id && recordedRunId!==run.id && !saving) {
@@ -371,26 +519,40 @@
   };
   const executeInput = async (command, deadline) => {
     if(activeCommand) return;
-    const item={interrupted:false}; activeCommand=item;
-    const keys=Array.isArray(command.keys)?command.keys.map(name=>keyNames[name]):[];
+    const item={interrupted:false,failure:null,keydown:false,startedAt:performance.now()}; activeCommand=item;
+    const keys=Array.isArray(command.keys)?command.keys.map(name=>(run.adaptiveProtocol||run.nativeAcceptance)?(skillKeyNames[name]||keyNames[name]):keyNames[name]):[];
     let ok=false;
+    const reject=code=>{item.failure ??= code;throw Error(code);};
     try {
-      if(document.hidden || !fresh(observe()) || !relayConnected
-        || cancelledRuns.has(command.runId)
-        || !capture?.recorderStarted || !capture.frames || capture.autoRunId!==command.runId || capture.stopping
-        || (command.runId && command.runId!==run.id)
-        || !keys.length||keys.length>3||new Set(keys).size!==keys.length||keys.some(code=>!code)
-        ||!Number.isInteger(command.durationMs)||command.durationMs<30||command.durationMs>1500
-        || !Number.isFinite(deadline) || performance.now()+command.durationMs>deadline) throw Error('Invalid input');
+      if(document.hidden) reject('hidden_before_input');
+      if(!fresh(observe())) reject('stale_before_input');
+      if(!relayConnected) reject('relay_before_input');
+      if(cancelledRuns.has(command.runId)) reject('cancelled_before_input');
+      if(!capture?.recorderStarted || !capture.frames || capture.autoRunId!==command.runId) reject('capture_unavailable');
+      if(capture.stopping) reject('capture_stopping');
+      if(command.runId && command.runId!==run.id) reject('run_mismatch');
+      if(!keys.length||keys.length>3||new Set(keys).size!==keys.length||keys.some(code=>!code)) reject('invalid_input_keys');
+      if(!Number.isInteger(command.durationMs)||command.durationMs<30||command.durationMs>1500) reject('invalid_input_duration');
+      if(!Number.isFinite(deadline)) reject('invalid_input_deadline');
+      if(performance.now()+command.durationMs>deadline) reject('deadline_before_input');
       releaseAll(false); game.focus();
-      if(performance.now()+command.durationMs>deadline) throw Error('Input deadline reached');
+      if(performance.now()+command.durationMs>deadline) reject('deadline_before_keydown');
+      item.keydown=true;
       for(const code of keys) { key(code,'keydown'); held.set(code,setTimeout(()=>release(code),command.durationMs)); }
       renderHeader();
       await new Promise(resolve=>setTimeout(resolve,command.durationMs));
       ok=!item.interrupted && performance.now()<=deadline;
+      if(!ok) item.failure ??= item.interrupted?'interrupted_unknown':'deadline_after_input';
     } finally {
       keys.filter(Boolean).forEach(release);
-      acknowledgement={id:command.id,ok}; activeCommand=null; renderHeader();
+      acknowledgement={id:command.id,ok};
+      if(!ok) {
+        const elapsed=Math.round(performance.now()-item.startedAt),remaining=Math.round(deadline-performance.now());
+        acknowledgement.failure={code:item.failure||'input_failure_unknown',keydown_issued:item.keydown,
+          elapsed_ms:Number.isSafeInteger(elapsed)&&elapsed>=0&&elapsed<=350000?elapsed:null,
+          remaining_ms:Number.isSafeInteger(remaining)&&remaining>=-350000&&remaining<=3000?remaining:null};
+      }
+      activeCommand=null; renderHeader();
     }
   };
   const poll=async()=>{
@@ -404,7 +566,7 @@
           captureClockReceivedAtMs:capture?.clock?.client_received_ms,
           capture:capture?{runId:capture.autoRunId,started:capture.recorderStarted,renderedFrames:capture.frames,
             interrupted:capture.hidden||capture.errors>0||capture.relayLost||capture.stopping}:null,
-          captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle'})});
+          captureState:saving?'saving':pendingUpload?'failed':capture?'recording':'idle',captureFailure})});
       if(!response.ok) throw Error('Relay unavailable');
       const state=await response.json(),clientReceivedAtMs=Date.now(),clientReceivedAt=performance.now();
       if(acknowledgement===ack) acknowledgement=null;
@@ -413,8 +575,8 @@
         capture.clock={...state.clock,client_received_ms:clientReceivedAtMs};
       }
       if(capture?.clock && run.captureClockAccepted===capture.clock.id) capture.clockVerified=true;
-      if(state.releaseKeys?.runId) { cancelledRuns.add(state.releaseKeys.runId); releaseAll(true); releaseAck=state.releaseKeys.runId; }
-      if(document.hidden || !fresh(observe())) releaseAll(true);
+      if(state.releaseKeys?.runId) { cancelledRuns.add(state.releaseKeys.runId); releaseAll(true,'interrupted_cancelled'); releaseAck=state.releaseKeys.runId; }
+      if(document.hidden || !fresh(observe())) releaseAll(true,document.hidden?'interrupted_hidden':'interrupted_stale_observation');
       if(state.command && !state.releaseKeys) executeInput(state.command,
         commandDeadline(state.command,clientSentAt,clientSentAtMs,clientReceivedAt,clientReceivedAtMs)).catch(()=>{});
       if(state.session?.desiredPage==='waiting' && !busy() && capture) stopRecording();
@@ -422,10 +584,10 @@
       if(navigation && navigation.page==='waiting' && /^[a-f0-9]{32}$/.test(navigation.id)
           && navigation.url==='/control/wait?transition='+navigation.id
           && !busy() && !capture && !saving && !pendingUpload) {
-        closed=true; releaseAll(true); location.assign(navigation.url);
+        closed=true; releaseAll(true,'interrupted_navigation'); location.assign(navigation.url);
       }
     } catch {
-      relayConnected=false; disconnectedAt ??= Date.now(); releaseAll(true);
+      relayConnected=false; disconnectedAt ??= Date.now(); releaseAll(true,'interrupted_relay');
       if(capture) capture.relayLost=true;
       if(capture?.autoRunId && Date.now()-disconnectedAt>3000) stopRecording();
       renderHeader();
@@ -448,6 +610,6 @@
   for(const [name,model] of [['Astra','gpt-6-astra'],['Sol','gpt-5.6-sol'],['Terra','gpt-5.6-terra'],['Luna','gpt-5.6-luna']])
     button(name+' API',()=>startRun('api',model),modelGroup,runButtons);
   button('Astra · 60s demo',()=>startRun('api','gpt-6-astra',60),modelGroup,runButtons);
-  window.addEventListener('pagehide',()=>{ closed=true;clearTimeout(pollTimer);pollAbort?.abort();releaseAll(true);stopRecording(); });
+  window.addEventListener('pagehide',()=>{ closed=true;clearTimeout(pollTimer);pollAbort?.abort();releaseAll(true,'interrupted_page_hide');stopRecording(); });
   resize(); renderHeader(); poll();
 })();

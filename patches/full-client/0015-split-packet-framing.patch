@@ -1,0 +1,169 @@
+--- a/src/client/Net/Session.cpp
++++ b/src/client/Net/Session.cpp
+@@ -17,6 +17,9 @@
+ //////////////////////////////////////////////////////////////////////////////
+ #include "Session.h"
+ 
++#include <algorithm>
++#include <cstring>
++
+ #include "../Configuration.h"
+ #include "../Console.h"
+ #ifdef MS_PLATFORM_WASM
+@@ -59,6 +62,8 @@
+         connected = false;
+         length    = 0;
+         pos       = 0;
++        header_pos = 0;
++        connection_generation = 0;
+     }
+ 
+     Session::~Session()
+@@ -71,6 +76,11 @@
+ 
+     bool Session::init(const char* host, const char* port)
+     {
++        // A new socket and handshake cannot inherit partial frames.
++        header_pos = 0;
++        length = 0;
++        pos = 0;
++        ++connection_generation;
+ #ifdef MS_PLATFORM_WASM
+         std::string final_host = host;
+         if (final_host == "0.0.0.0")
+@@ -132,52 +142,61 @@
+ 
+     void Session::process(const int8_t* bytes, size_t available)
+     {
+-        if (pos == 0)
+-        {
+-            // Pos is 0, meaning this is the start of a new packet.
+-            // Start by determining length.
+-            length = cryptography.check_length(bytes);
+-            // Reading the length means we processed the header.
+-            // Move forward by the header length.
+-            bytes = bytes + HEADER_LENGTH;
+-            available -= HEADER_LENGTH;
+-        }
+-
+-        // Determine how much we can write. Write data into the buffer.
+-        size_t towrite = length - pos;
+-
+-        if (towrite > available)
+-        {
+-            towrite = available;
+-        }
+-
+-        memcpy(buffer + pos, bytes, towrite);
+-        pos += towrite;
+-
+-        // Check if the current packet has been fully processed.
+-        if (pos >= length)
+-        {
++        // Socket reads are stream fragments, not packet boundaries. Keep a
++        // partial header separately, including a full header with no body yet.
++        while (connected && available > 0)
++        {
++            if (header_pos < HEADER_LENGTH)
++            {
++                size_t count = std::min(HEADER_LENGTH - header_pos, available);
++                std::memcpy(receive_header + header_pos, bytes, count);
++                header_pos += count;
++                bytes += count;
++                available -= count;
++                if (header_pos < HEADER_LENGTH)
++                {
++                    return;
++                }
++
++                length = cryptography.check_length(receive_header);
++                if (length < OPCODE_LENGTH || length > sizeof(buffer))
++                {
++                    Console::get().print("Invalid packet payload length");
++                    header_pos = length = pos = 0;
++                    connected = false;
++                    socket.close();
++                    return;
++                }
++            }
++
++            size_t count = std::min(length - pos, available);
++            std::memcpy(buffer + pos, bytes, count);
++            pos += count;
++            bytes += count;
++            available -= count;
++            if (pos < length)
++            {
++                return;
++            }
++
+             cryptography.decrypt(buffer, length);
+-
++            size_t packet_length = length;
++            header_pos = length = pos = 0;
++            uint64_t generation = connection_generation;
+             try
+             {
+-                packetswitch.forward(buffer, length);
++                packetswitch.forward(buffer, packet_length);
+             }
+             catch (const PacketError& err)
+             {
+                 Console::get().print(err.what());
+             }
+ 
+-            pos    = 0;
+-            length = 0;
+-
+-            // Check if there is more available.
+-            size_t remaining = available - towrite;
+-
+-            if (remaining >= MIN_PACKET_LENGTH)
+-            {
+-                // More packets are available, so we start over.
+-                process(bytes + towrite, remaining);
++            // A handler can reconnect and replace the socket's receive buffer.
++            // Remaining bytes belong to the old connection, never the new IV.
++            if (generation != connection_generation)
++            {
++                return;
+             }
+         }
+     }
+@@ -199,11 +218,10 @@
+ 
+     void Session::read()
+     {
+-        // Check if a packet has arrived. Handle if data is sufficient:
+-        //     4 bytes(header) + 2 bytes(opcode) = 6.
++        // Preserve every nonempty stream fragment, even a single header byte.
+         size_t result = socket.receive(&connected);
+ 
+-        if (result >= MIN_PACKET_LENGTH || length > 0)
++        if (connected && result > 0)
+         {
+             // Retrieve buffer from the socket and process it.
+             const int8_t* bytes = socket.get_buffer();
+--- a/src/client/Net/Session.h
++++ b/src/client/Net/Session.h
+@@ -56,6 +56,9 @@
+         Cryptography cryptography;
+         PacketSwitch packetswitch;
+ 
++        int8_t receive_header[HEADER_LENGTH];
++        size_t header_pos;
++        uint64_t connection_generation;
+         int8_t buffer[MAX_PACKET_LENGTH];
+         size_t length;
+         size_t pos;
+--- a/src/client/Net/Cryptography.cpp
++++ b/src/client/Net/Cryptography.cpp
+@@ -87,7 +87,7 @@
+             headermask |= static_cast<uint8_t>(bytes[i]) << (8 * i);
+         }
+ 
+-        return static_cast<int16_t>(
++        return static_cast<uint16_t>(
+             (headermask >> 16) ^ (headermask & 0xFFFF)
+         );
+ #else

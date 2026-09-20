@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from full_client_docker_fixture import local_binding
+from docker_binding_fixture import local_binding
 from full_client_bridge import FullClientBridge, ControlError, PROMPT, write_json
 from maple_agent import validate_rpc, model_decision
 
@@ -284,13 +284,66 @@ class FullClientTests(unittest.TestCase):
             controller=json.loads((path/'controller.json').read_text())
             controller.update(status='failed',evidenceStatus='failed',failureAcknowledged=True)
             write_json(path/'controller.json',controller)
-            write_json(path/'release.json',{'runId':path.name,'reason':'operator_acknowledged_failure'})
+            write_json(path/'release.json',{'runId':path.name,'reason':'operator_acknowledged_failure','releasedAtMs':1})
             original={p.name:p.read_bytes() for p in path.iterdir()}
             bridge=FullClientBridge(root)
             with mock.patch('full_client_bridge.time.monotonic',return_value=100):
                 bridge.frame(self.frame(clientSentAtMs=2000,captureState='idle'))
                 self.assertTrue(bridge.fresh())
             self.assertEqual({p.name:p.read_bytes() for p in path.iterdir()},original)
+
+    def test_cancel_release_reply_loss_restart_allows_fresh_login_without_overwrite(self):
+        for recording in ('saved','pending'):
+            with self.subTest(recording=recording), tempfile.TemporaryDirectory() as folder:
+                root,path=self.saved_readiness_run(folder)
+                bridge=FullClientBridge(root);ident=bridge.run['id']
+                bridge.run.update(status='failed',evidenceStatus='failed',recordingStatus=recording)
+                write_json(path/'controller.json',bridge.run)
+                bridge.cancel(ident)
+                self.assertTrue(bridge.run['failureAcknowledged'])
+                self.assertFalse((path/'release.json').exists())
+                bridge.release_failed_run(ident)
+                original=(path/'release.json').read_bytes()
+                bridge.release_failed_run(ident)
+                self.assertEqual((path/'release.json').read_bytes(),original)
+                restarted=FullClientBridge(root)
+                # Existing cancellation still requires the browser's key-release ack.
+                restarted.release_acks.add(ident)
+                with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                    restarted.frame(self.frame(clientSentAtMs=2000,captureState='idle'))
+                    self.assertTrue(restarted.fresh())
+                self.assertEqual((path/'release.json').read_bytes(),original)
+
+    def test_verified_quarantine_release_allows_restart_frames_and_idempotent_ack(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root,path=self.saved_readiness_run(folder);bridge=FullClientBridge(root);ident=bridge.run['id']
+            bridge.run.update(status='failed',evidenceStatus='failed',quarantined=True)
+            write_json(path/'controller.json',bridge.run)
+            write_json(path/'quarantine.json',{'runId':ident,'id':'f'*32,'reason':'invalid_quarantine_evidence'})
+            bridge.quarantines[ident]='f'*32
+            bridge.release_failed_run(ident);release=(path/'release.json').read_bytes()
+            bridge.release_failed_run(ident)
+            self.assertEqual((path/'release.json').read_bytes(),release)
+            restarted=FullClientBridge(root)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                restarted.frame(self.frame(clientSentAtMs=2000,captureState='idle'))
+                self.assertTrue(restarted.fresh())
+
+    def test_release_refuses_busy_unowned_and_corrupt_receipts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root,path=self.saved_readiness_run(folder);bridge=FullClientBridge(root);ident=bridge.run['id']
+            bridge.run.update(status='failed',failureAcknowledged=True)
+            with self.assertRaisesRegex(ControlError,'run_cannot_be_released'):bridge.release_failed_run('f'*32)
+            bridge.pending={'runId':ident}
+            with self.assertRaisesRegex(ControlError,'run_cannot_be_released'):bridge.release_failed_run(ident)
+            bridge.pending=None
+            (path/'release.json').write_text('{"runId":"wrong"}')
+            raw=(path/'release.json').read_bytes()
+            with self.assertRaisesRegex(ControlError,'invalid_failure_release'):bridge.release_failed_run(ident)
+            self.assertEqual((path/'release.json').read_bytes(),raw)
+            with mock.patch('full_client_bridge.time.monotonic',return_value=100):
+                bridge.frame(self.frame(clientSentAtMs=2000,captureState='idle'))
+                self.assertFalse(bridge.fresh())
 
     def test_dispatch_does_not_count_initial_server_residence_twice(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -378,6 +431,7 @@ class FullClientTests(unittest.TestCase):
                         self.assertEqual(receipt['initial_observation_sha256'],observation_sha256(json.loads(payload['input'])['observation']))
                         self.assertEqual(intent['readinessSha256'],hashlib.sha256((bridge.output/run['id']/'readiness.json').read_bytes()).hexdigest())
                         return {'id':'response','model':'gpt-6-astra','status':'completed','metadata':payload['metadata'],
+                            'usage':{'input_tokens':1,'output_tokens':1,'total_tokens':2},
                             'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps({'note':'test','code':'return;'})}]}]}
                     with mock.patch.object(bridge.lock,'wait',side_effect=wake),mock.patch.object(bridge,'_wait_for_capture'), \
                          mock.patch('full_client_bridge.write_json',side_effect=save), \
@@ -404,6 +458,38 @@ class FullClientTests(unittest.TestCase):
         self.assertIn('top-level await',prompt)
         self.assertIn('const state = await sdk.observe();',prompt)
         self.assertIn('explicitly await its call',prompt)
+
+    def test_first_input_timing_requires_acceptance_and_preserves_original_input(self):
+        for accepts in ([],[False],[True,True],[False,True]):
+            with self.subTest(accepts=accepts),tempfile.TemporaryDirectory() as folder:
+                bridge=FullClientBridge(folder);bridge.frame(self.frame())
+                with mock.patch('full_client_bridge.threading.Thread'):
+                    run=bridge.start('script')
+                clock=[100.0]; replies=iter(accepts); starts=[]
+                def request(url,payload=None,timeout=3,**kwargs):
+                    if not url.endswith('/v1/action'):return self.observation()
+                    starts.append(round((clock[0]-100)*1000));clock[0]+=.1
+                    return {'accepted':next(replies),'observation':self.observation()}
+                def execute(*args,**kwargs):
+                    steps=[]
+                    for _ in accepts:
+                        clock[0]+=.5
+                        reply=kwargs['request_fn']('/v1/action',{'type':'press_keys','keys':['RIGHT'],'durationMs':100})
+                        step={'kind':'sdk','method':'pressKeys','args':[['RIGHT'],100],'result':reply}
+                        steps.append(step);kwargs['step_callback'](step)
+                    return {'reason':'program_complete','actions':sum(accepts),'steps':steps}
+                with mock.patch('full_client_bridge.time.monotonic',side_effect=lambda:clock[0]), \
+                     mock.patch('full_client_bridge.time.time',side_effect=lambda:run['startedAtMs']/1000+clock[0]-100), \
+                     mock.patch.object(bridge,'request',side_effect=request), \
+                     mock.patch.object(bridge,'_wait_for_capture'), \
+                     mock.patch('full_client_bridge.execute_program',side_effect=execute):
+                    bridge._run(run)
+                timeline=json.loads((bridge.output/run['id']/'result.json').read_text())['timeline']
+                if True in accepts:
+                    first=starts[accepts.index(True)]
+                    self.assertEqual(timeline['first_input_started_ms'],first)
+                    self.assertEqual(timeline['first_input_acked_ms'],first+100)
+                else:self.assertNotIn('first_input_started_ms',timeline)
 
     def test_input_requires_fresh_state_and_ack(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -516,7 +602,8 @@ class FullClientTests(unittest.TestCase):
                      mock.patch('full_client_bridge.time.monotonic',return_value=100), \
                      mock.patch('full_client_bridge.time.time',return_value=1200), \
                      mock.patch.object(bridge,'_wait_for_capture'), \
-                     mock.patch('full_client_bridge.model_decision',return_value=({'note':'test','code':'return;'}, {'model':'gpt-6-astra'})) as decision, \
+                     mock.patch('full_client_bridge.model_decision',return_value=({'note':'test','code':'return;'},
+                        {'model':'gpt-6-astra','usage':{'input_tokens':1,'output_tokens':1,'total_tokens':2}})) as decision, \
                      mock.patch('full_client_bridge.execute_program',side_effect=execute) as executor:
                     bridge._run(run)
                 executor.assert_called_once()
@@ -831,6 +918,7 @@ class FullClientTests(unittest.TestCase):
                     readiness_policy=self.policy(),lease_fds=(world.fileno(),queue.fileno()))
             response={'id':'test-response','model':'gpt-6-astra','status':'completed',
                 'metadata':{'maplebench_run_id':'d'*32},
+                'usage':{'input_tokens':1,'output_tokens':1,'total_tokens':2},
                 'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps({'note':'test','code':'return;'})}]}]}
             with mock.patch.object(bridge,'request',return_value=self.observation()), \
                  mock.patch('full_client_bridge.bounded_request',return_value=response), \
@@ -1160,6 +1248,9 @@ class FullClientTests(unittest.TestCase):
                 self.assertEqual(len(preserved),1)
                 self.assertEqual(preserved[0].read_text(),'{private-corrupt-content')
             bridge.release_failed_run('a'*32)
+            release=(root/('a'*32)/'release.json').read_bytes()
+            bridge.release_failed_run('a'*32)
+            self.assertEqual((root/('a'*32)/'release.json').read_bytes(),release)
             recovered=FullClientBridge(root); recovered.frame(self.frame())
             self.assertEqual(recovered.status()['quarantinedRuns'],['b'*32])
             with self.assertRaisesRegex(ValueError,'corrupt_runs_require_acknowledgment'):
@@ -1177,7 +1268,8 @@ class FullClientTests(unittest.TestCase):
             self.assertEqual(bridge.run['status'],'failed')
             self.assertEqual(bridge.run['reason'],'invalid_controller_evidence')
             self.assertEqual(bridge.status()['quarantinedRuns'],['a'*32])
-            bridge.release_failed_run('a'*32)
+            with self.assertRaisesRegex(ControlError,'invalid_failure_release'):
+                bridge.release_failed_run('a'*32)
             (path/'controller.json').write_text('new corruption')
             recovered=FullClientBridge(root)
             self.assertEqual(recovered.status()['quarantinedRuns'],['a'*32])

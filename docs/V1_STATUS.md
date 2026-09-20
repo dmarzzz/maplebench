@@ -1,0 +1,156 @@
+# v1 release status
+
+Snapshot: **2026-09-20 UTC**, candidate branch `codex/v1-cross-provider-release`.
+The predeclared sixteen-attempt cohort has run to a sealed terminal state.
+[V1_COHORT.md](V1_COHORT.md) is the current release scope.
+
+## Established inputs
+
+- The original private runtime archive was recovered and its historical SHA-256
+  independently verified. Assets remain private.
+- The required amd64 Chrome 152.0.7977.82 package is available from its official
+  distributor; a private receipt records its exact hash and size.
+- Both provider credentials authenticated, and all four selected model IDs are
+  available. Credentials are private runtime files.
+- A fresh, bounded worker uses the six-unit runtime toolkit, an enrolled operation
+  gate, the expanded baseline and separately pinned client/server binaries.
+- The candidate at `f3a71f5` passed Linux CI, including the native runner's real
+  process-ownership test and the full-history secret scan. Later changes require
+  their own focused checks.
+
+## Scored cohort outcome
+
+All sixteen predeclared attempts were submitted and settled; the experiment is
+sealed with scope `entire_declared_attempt_set`. Fourteen completed with verified
+persisted artifacts. Two are retained failures, kept in the denominator.
+
+| Model | Verified | Planned | Mean net XP | Median | Min | Max | Sample SD |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `gpt-6-astra` | 3 | 4 | 32,083 | 32,000 | 27,500 | 36,750 | 4,626 |
+| `gpt-5.6-sol` | 4 | 4 | 25,188 | 27,500 | 18,250 | 27,500 | 4,625 |
+| `claude-opus-5` | 3 | 4 | 22,833 | 18,250 | 18,250 | 32,000 | 7,939 |
+| `claude-sonnet-5` | 4 | 4 | 16,000 | 16,000 | 13,750 | 18,250 | 2,598 |
+
+Rows keep the predeclared model order and are not sorted by score. With one
+fixture, three or four repetitions per model and uncontrolled game randomness,
+these are descriptive results. They establish no ranking and no provider claim.
+
+Both failures were infrastructure outcomes, not model behaviour, and both carry
+`api_outcome: uncertain` with the full request and token envelope charged:
+
+- One `claude-opus-5` attempt reached `settlement_upload_timeout` after the model
+  had already acted, so its recording was discarded while its evidence was saved.
+- One `gpt-6-astra` attempt failed earlier with `adaptive_input_receipt_uncertain`.
+
+Neither was retried. The runner's policy is `failure: stop`, `retries: 0` and
+`resume: explicit_future_unsubmitted_only`, so recovery could only ever advance to
+attempts that had never been submitted. Six clean attempts ran before the first
+failure and eight ran after the second, at a stable ~322.8s per attempt.
+
+## Sampled recording review
+
+Fourteen published recordings each received a sampled visual review; seventy
+frames were actually inspected. Thirteen recordings passed. One is flagged
+`attention_required`: two of its sampled frames render the HUD text doubled by a
+capture-time compositing artifact. Its model header stayed sharp and correct, and
+its score derives from persisted artifacts rather than from the recording. The two
+attempts without published recordings are recorded as `unavailable`.
+
+The prepared sampler targets the request end of each request-to-acknowledgment
+interval, where no key is held yet, so its first input frame showed no held key in
+any run. Additional candidates near the acknowledgment end, permitted by the review
+policy, visually confirmed a held key in eight of the fourteen recordings. Held-key
+text and highlighted controls agreed in every inspected frame. Scope stays sampled
+frames, not continuous playback.
+
+## Implemented
+
+- Native OpenAI and Anthropic generation, exact request/response attribution and
+  conservative error/token accounting.
+- Hash-bound Hero knowledge, 17 invocable controls, exact learned-skill/keymap
+  snapshots and new native toolkit qualification.
+- Sixteen-attempt publication, per-model spread, retained denominators and
+  consecutive operational groups.
+- Recorded held-key HUD and media-clock model/input replay timeline.
+- Light MapleStory-inspired results and replay UI, checked at desktop and narrow
+  widths; development preview data is explicitly unscored.
+
+## Native qualification findings
+
+Seven unsuccessful qualification attempts are retained privately. The first stopped
+before gameplay because the launcher supplied the wrong process ancestry; the
+corrected launcher passed a real Linux ownership check. The next six reached the
+game, recorded the client, logged out and restored the baseline:
+
+- The second attempt walked off the spawn platform before testing attacks.
+- The third demonstrated Brandish damage and combo growth, but its target window
+  skipped Rush, Coma and Panic.
+- The fourth activated Coma and Panic and consumed their resources, but neither
+  produced linked damage. It then stopped approaching distant monsters, leaving
+  Rush untested. Those missing effects are qualification failures.
+- The fifth, using the corrected client, demonstrated two Brandish hits and combo
+  growth. A transient vertical displacement exceeded the recipe's floor guard;
+  it immediately skipped all remaining casts before the character landed again.
+  It did not exercise the corrected finishers or Rush.
+- The sixth never left the starting ledge: two fixed-duration movement inputs
+  produced less displacement than the recipe assumed. It demonstrated six buffs
+  but no attacks. Descent must be confirmed through fresh observations.
+- The seventh reached combat and demonstrated linked Coma and Panic damage,
+  MP use and combo consumption, with Brandish rebuilding combo between them.
+  Its movement allowance ran out before Rush was pressed, so the complete
+  core-ten gate still failed.
+
+Those seven failed attempts preceded the successful qualification described below.
+Investigation found that the equipped sword's level-120
+afterimage bucket is absent from the pinned client data. The ordinary-attack
+fallback used by both finishers replaces their range with an empty rectangle.
+The client lookup now falls back to a valid authored range for the same weapon
+family and stance, with compiled regression coverage. A separate source-route
+check also found and corrected Shout's missing attack classification. All 17
+declared routes passed against the selected client source. These source checks
+do not replace live effect evidence. The qualification recipe now adds bounded
+recovery from transient knockback and requires stable landing observations before
+resuming input. Initial descent now uses fresh position feedback with a bounded
+number of movement steps. Its live effect requirements remain unchanged.
+The next recipe also uses the wider authored reach of Brandish and Rush and
+places Rush before repeated finisher sequences, preserving the movement cap.
+Before dispatching that candidate, source review found Rush reading an unset
+last-target ID when fewer than its 15-target maximum were selected. The candidate
+was retained without execution. A minimal client correction initializes target
+endpoints and updates the last ID for each actual selected target; an exact-source
+regression fails on the prior client and passes with the correction, including
+partial groups, zero targets and disappearing candidates. The fresh Client F
+build passed under bounded offline resources and the eighth native attempt then
+qualified all ten core effects.
+No qualification attempt made a model API call or produced a model score. Original recordings,
+failure receipts and restoration evidence remain separate from scored results.
+
+## Successful native qualification and handoff
+
+The eighth native attempt, `d5a349905f2c481faeada396cee1f481`, passed using
+source `f3a71f5096be4651d9ce95e6436a2018678680d4` and Client F. Its receipt
+reports `native_skill_qualification_verified`, clean ordinary logout and exact
+baseline restoration, with zero model API calls. The independent public
+projector reverified all ten core effects and the 17-control/25-learned-row
+fixture. The root reviewer actually inspected three original-video frames;
+this is sampled review, not continuous playback or every-action verification.
+
+The user requested a stop and handoff to another coding assistant because of
+coding-assistant credit consumption. The model cohort was not created or launched.
+No release tag, release publication, merge or new production deployment occurred.
+See [the continuation handoff](HANDOFF_2026-09-20.md).
+
+## Remaining acceptance
+
+1. Accept the successful native evidence and finish any additional visual checks.
+2. Create and inspect the immutable 16-attempt plan using the prepared V10 helpers.
+3. Run and retain every attempt; require three consecutive clean groups and
+   independently verify scores, recordings and all planned dispositions.
+4. Publish the public projection, methodology and limitations, then verify
+   deployed bytes and actual replay behavior.
+5. Verify private backups and actual worker deletion. The worker remains idle
+   with a time-limited lease; exact private deadlines are in the operator handoff.
+
+Hostnames, account metadata, credentials and operator-specific run paths belong
+in private operational records. Historical deployment receipts in the companion
+repository describe prior candidates, not acceptance of this release.

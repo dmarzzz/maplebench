@@ -11,6 +11,14 @@ unranked pending balanced repetitions and broader operational acceptance.
 
 ## Invocation and private configuration
 
+Current `run/recover` commands additionally require the shared
+[operations authority](FULL_CLIENT_OPERATIONS.md#gate-and-authority), or a
+verified inherited admission from the finite-group coordinator. Supply the
+operation authority flags before the subcommand. `recover` must name the exact
+pending claim; it cannot join an unrelated group's reservation. Preflight remains
+read-only and ungated. Examples below without those flags describe the earlier
+protected release and are insufficient for new mutating commands.
+
 All runtime paths must remain outside public source or inside ignored runtime
 directories. The state root and attempt directories must be owned by the runner
 user with mode 0700; JSON configuration and request files must be mode 0600.
@@ -38,9 +46,10 @@ The read-only deadline defaults to 30 seconds. Use
 `preflight --timeout-seconds 120` for a cold-cache inventory; only whole seconds
 from 1 through 120 are accepted. This does not change any actual trial budget.
 
-For a separately authorized trial, replace `preflight` with
-`run --request /private/runtime/request.json`. A random attempt ID is generated,
-or `--attempt-id` supplies an immutable operator ID. Reusing an attempt ID is
+For a separately authorized trial, supply the operations authority and replace
+`preflight` with `run --request /private/runtime/request.json --attempt-id ID`.
+The current CLI requires a preallocated ID matching its authority; library-only
+callers retain optional random IDs. Reusing an attempt ID is
 rejected even after success or recovery. There is no batch, automatic retry,
 resume, or background-run mode.
 

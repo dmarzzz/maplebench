@@ -1,0 +1,87 @@
+--- a/src/main/java/net/server/Server.java
++++ b/src/main/java/net/server/Server.java
+@@ -1009,8 +1009,10 @@
+         System.setProperty("polyglot.engine.WarnInterpreterOnly", "false"); // Mute GraalVM warning: "The polyglot context is using an implementation that does not support runtime compilation."
+         server.bots.MapleBenchPersistence.initializeFromEnvironment();
+         server.bots.MapleBenchXpLedger.initializeFromEnvironment();
++        server.bots.MapleBenchSkillLedger.initializeFromEnvironment();
+         Server.getInstance().init();
+         server.bots.MapleBenchControlServer.startFromEnvironment();
++        server.bots.MapleBenchSkillControlServer.startFromEnvironment();
+     }
+ 
+     public Properties getSubnetInfo() {
+--- a/src/main/java/net/server/channel/handlers/SpecialMoveHandler.java
++++ b/src/main/java/net/server/channel/handlers/SpecialMoveHandler.java
+@@ -147,7 +147,13 @@
+         if (chr.isAlive()) {
+             if (skill.getId() != Priest.MYSTIC_DOOR) {
+                 if (skill.getId() % 10000000 != 1005) {
+-                    skill.getEffect(skillLevel).applyTo(chr, pos);
++                    var maplebenchSkill = server.bots.MapleBenchSkillHooks.skillBegin(chr, skillid, skillLevel);
++                    boolean maplebenchCommitted = false;
++                    try {
++                        maplebenchCommitted = skill.getEffect(skillLevel).applyTo(chr, pos);
++                    } finally {
++                        server.bots.MapleBenchSkillHooks.skillEnd(chr, maplebenchSkill, skillid, skillLevel, maplebenchCommitted);
++                    }
+                 } else {
+                     skill.getEffect(skillLevel).applyEchoOfHero(chr);
+                 }
+--- a/src/main/java/net/server/channel/handlers/CloseRangeDamageHandler.java
++++ b/src/main/java/net/server/channel/handlers/CloseRangeDamageHandler.java
+@@ -78,7 +78,14 @@
+             c.sendPacket(PacketCreator.getEnergy("energy", chr.getDojoEnergy()));
+         }
+ 
+-        applyCloseRangeEffects(attack, chr, c);
++        var maplebenchSkill = server.bots.MapleBenchSkillHooks.attackBegin(chr, attack.skill, attack.skilllevel);
++        boolean maplebenchReturned = false;
++        try {
++            applyCloseRangeEffects(attack, chr, c);
++            maplebenchReturned = true;
++        } finally {
++            server.bots.MapleBenchSkillHooks.attackEnd(chr, maplebenchSkill, maplebenchReturned);
++        }
+     }
+ 
+     /**
+--- a/src/main/java/net/server/channel/handlers/AbstractDealDamageHandler.java
++++ b/src/main/java/net/server/channel/handlers/AbstractDealDamageHandler.java
+@@ -198,7 +198,8 @@
+                         } else if (attack.skill == NightWalker.POISON_BOMB) {// Poison Bomb
+                             attackEffect.applyTo(player, new Point(attack.position.x, attack.position.y));
+                         } else {
+-                            attackEffect.applyTo(player);
++                            boolean maplebenchCostApplied = attackEffect.applyTo(player);
++                            server.bots.MapleBenchSkillHooks.attackCostApplied(player, attack.skill, maplebenchCostApplied);
+ 
+                             if (attack.skill == Page.FINAL_ATTACK_BW || attack.skill == Page.FINAL_ATTACK_SWORD || attack.skill == Fighter.FINAL_ATTACK_SWORD
+                                     || attack.skill == Fighter.FINAL_ATTACK_AXE || attack.skill == Spearman.FINAL_ATTACK_SPEAR || attack.skill == Spearman.FINAL_ATTACK_POLEARM
+--- a/src/main/java/client/Character.java
++++ b/src/main/java/client/Character.java
+@@ -9181,7 +9181,9 @@
+                 }
+             }
+ 
++            int maplebenchHpBefore = hp, maplebenchMpBefore = mp;
+             updateHpMp(nextHp, nextMp);
++            server.bots.MapleBenchSkillHooks.resource(this, maplebenchHpBefore, maplebenchMpBefore, hp, mp);
+         } finally {
+             statWlock.unlock();
+             effLock.unlock();
+--- a/src/main/java/server/life/Monster.java
++++ b/src/main/java/server/life/Monster.java
+@@ -436,10 +436,12 @@
+             */
+ 
+             if (damage > 0) {
++                int maplebenchHpBefore = getHp();
+                 this.applyDamage(attacker, damage, stayAlive, false);
+                 if (!this.isAlive()) {  // monster just died
+                     lastHit = true;
+                 }
++                server.bots.MapleBenchSkillHooks.monsterDamage(attacker, getObjectId(), maplebenchHpBefore, getHp(), lastHit);
+             }
+         } finally {
+             this.unlockMonster();

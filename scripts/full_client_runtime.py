@@ -29,18 +29,20 @@ import uuid
 import zipfile
 
 from full_client_collect import collect, DATABASE
-from full_client_freeze import FreezeError, FREEZE_ERROR_CODES, verify_manifest
+from full_client_freeze import FreezeError, FREEZE_ERROR_CODES, HARD_LIMITS as FREEZE_HARD_LIMITS, verify_manifest
 from full_client_docker import DockerBindingError, configured_command, validate_binding
 from full_client_readiness import ReadinessError, observation_sha256, validate_policy
 from full_client_score import (SOURCE, JSON_LIMIT, EvidenceError, parse_json, read_artifact_bytes,
                                open_verified_artifact, same_json, verify_trial_bundle)
 from full_client_trial import (RELAY_ERROR_CODES, RUNTIME_ERROR_CODES, atomic_json,
                                private_directory, read_private_json, validate_spec)
+import full_client_xp_windows as xp_windows
 
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 RUN = re.compile(r"[0-9a-f]{32}\Z")
 UNIT = re.compile(r"[A-Za-z0-9_.@-]+\.service\Z")
 NATIVE_CLASS = "server/bots/MapleBenchPersistence.class"
+XP_NATIVE_CLASS = "server/bots/MapleBenchXpLedger.class"
 MAX_SQL = 64 * 1024 * 1024
 MAX_VIDEO = 512 * 1024 * 1024
 MAX_PROCESS_FDS = 4096
@@ -227,11 +229,16 @@ class Host:
         require(len(rows) == 1 and type(rows[0][0]) is int and rows[0][0] >= 0, "invalid_queue_status")
         return rows[0][0]
 
-    def snapshot(self, config, run_id):
-        return collect(mysql_command=config["command"], database=config["database"],
-                       defaults_file=config.get("defaults_file"), run_id=run_id,
-                       character_id=config["character_id"], account_id=config["account_id"],
-                       timeout=min(10, self.remaining()))
+    def snapshot(self, config, run_id, *, skill_toolkit=None):
+        try:
+            return collect(mysql_command=config["command"], database=config["database"],
+                           defaults_file=config.get("defaults_file"), run_id=run_id,
+                           character_id=config["character_id"], account_id=config["account_id"],
+                           timeout=min(10, self.remaining()), skill_toolkit=skill_toolkit)
+        except ValueError as error:
+            if str(error) == "account_still_online":
+                raise RuntimeErrorCode("account_still_online") from None
+            raise
 
 
 class CosmicRuntime:
@@ -313,18 +320,49 @@ class CosmicRuntime:
         """Read only small immutable configuration; never inventory live assets."""
         self.scenario = parse_json(ref_bytes(self.config["scenario"]))
         duration = self.scenario.get("program_seconds")
-        require(type(duration) is int and duration in (22, 60)
+        adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
+        require(type(duration) is int and duration in ((300,) if adaptive else (22, 60))
                 and isinstance(self.scenario.get("id"), str) and 0 < len(self.scenario["id"]) <= 128
                 and SHA.fullmatch(self.scenario.get("instructions_sha256", "")) is not None
                 and same_json(self.scenario.get("reasoning"), {"effort": "low"}), "invalid_frozen_scenario")
-        expected_budgets = {"api_requests": 1, "output_tokens": 3000,
-                            "total_tokens": self.scenario["trial_budgets"]["max_total_tokens"],
-                            "program_ms": duration * 1000, "run_ms": (duration + 63) * 1000,
-                            "actions": 80 if duration == 22 else 240, "sdk_requests": 100 if duration == 22 else 600}
+        if adaptive:
+            from full_client_adaptive import validate_protocol, prompt
+            try:
+                protocol = validate_protocol(self.scenario.get("adaptive_protocol"))
+            except ValueError:
+                raise RuntimeErrorCode("invalid_frozen_scenario") from None
+            require(self.scenario["instructions_sha256"] == hashlib.sha256(prompt(protocol).encode()).hexdigest(),
+                    "frozen_prompt_mismatch")
+            trial = self.scenario["trial_budgets"]
+            require(trial["max_api_requests"] == protocol["max_api_requests"]
+                    and trial["max_actions"] == protocol["max_actions"]
+                    and trial["max_output_tokens"] == protocol["max_api_requests"] * protocol["max_output_tokens"]
+                    and trial["max_total_tokens"] == protocol["max_total_tokens"]
+                    and trial["controller_seconds"] == 300 and trial["operation_seconds"] >= 335,
+                    "bridge_budget_mismatch")
+            expected_budgets = {"api_requests": protocol["max_api_requests"], "output_tokens": trial["max_output_tokens"],
+                "total_tokens": protocol["max_total_tokens"], "program_ms": 300000, "run_ms": 335000,
+                "actions": protocol["max_actions"], "sdk_requests": protocol["max_sdk_requests"]}
+        else:
+            require(self.scenario.get("protocol") is None and self.scenario.get("adaptive_protocol") is None,
+                    "invalid_frozen_scenario")
+            expected_budgets = {"api_requests": 1, "output_tokens": 3000,
+                                "total_tokens": self.scenario["trial_budgets"]["max_total_tokens"],
+                                "program_ms": duration * 1000, "run_ms": (duration + 63) * 1000,
+                                "actions": 80 if duration == 22 else 240, "sdk_requests": 100 if duration == 22 else 600}
         require(same_json(self.scenario.get("budgets"), expected_budgets), "frozen_bridge_budgets_mismatch")
         require(same_json(self.scenario.get("settlement_policy"), SETTLEMENT_POLICY),
                 "invalid_settlement_policy")
         self.baseline = parse_json(ref_bytes(self.config["baseline_snapshot"]))
+        if adaptive:
+            require(protocol["profile"]["level"] == self.baseline.get("character", {}).get("level"),
+                    "baseline_identity_mismatch")
+            if protocol.get('skill_toolkit') is not None:
+                from full_client_collect import validate_toolkit_snapshot
+                try:
+                    validate_toolkit_snapshot(self.baseline,protocol['skill_toolkit'])
+                except (ValueError,TypeError,KeyError):
+                    raise RuntimeErrorCode('baseline_skill_toolkit_mismatch') from None
         self.readiness_policy()
         self.manifest = parse_json(ref_bytes(self.config["runtime_manifest"]))
         self.docker_binding()
@@ -334,6 +372,39 @@ class CosmicRuntime:
         require(self.baseline.get("account_logged_in") == 0 and all(
             self.baseline["character"].get(k) == db[k] for k in ("character_id", "account_id")),
             "baseline_identity_mismatch")
+        self.xp_window_contract()
+
+    def xp_window_contract(self):
+        """Both private runtime and frozen scenario must explicitly opt in."""
+        configured = self.config.get("xp_window_protocol")
+        contract = getattr(self, "scenario", {}).get("xp_window_protocol")
+        adaptive = getattr(self, "scenario", {}).get("adaptive_protocol")
+        progression = adaptive.get("progression_policy") if isinstance(adaptive, dict) else None
+        if configured is None:
+            require(contract is None and progression is None, "xp_window_opt_in_required")
+            return None
+        require(configured == xp_windows.PROTOCOL
+                and self.scenario.get("protocol") == "full-client-adaptive-pilot-v1",
+                "unsupported_xp_window_protocol")
+        try:
+            return xp_windows.validate_contract(contract)
+        except (EvidenceError, TypeError, KeyError):
+            raise RuntimeErrorCode("invalid_xp_window_contract") from None
+
+    def trial_protocol(self):
+        return xp_windows.PROTOCOL if self.xp_window_contract() else self.scenario.get("protocol")
+
+    def native_xp_environment(self, native):
+        contract = self.xp_window_contract()
+        if contract is None:
+            return {}
+        initial = self.state["initial"]["character"]
+        require(same_json(initial, self.baseline["character"]), "restored_baseline_mismatch")
+        norm = contract["normalization"]
+        values = (str(native / "xp.jsonl"), str(initial["level"]), str(initial["exp"]),
+                  *(str(norm[k][part]) for k in ("server_xp_multiplier", "simulation_speed_multiplier")
+                    for part in ("numerator", "denominator")))
+        return dict(zip(xp_windows.XP_ENV_NAMES, values))
 
     def frozen(self):
         """Full byte inventory; callers must keep this outside the online session."""
@@ -344,13 +415,17 @@ class CosmicRuntime:
         absolute(manifest["wz_path"])
         verify_manifest(manifest, docker_command=configured_command(self.docker_binding()),
                         docker_socket=self.config.get("docker_socket", "/var/run/docker.sock"),
-                        limits={"timeout_seconds": max(1, int(self.host.remaining()))})
+                        limits={"timeout_seconds": min(FREEZE_HARD_LIMITS["timeout_seconds"],
+                                                       max(1, int(self.host.remaining())))})
         jar = manifest["server_jar"]
         path = absolute(jar["path"])
         with open_verified_artifact(path.parent, {"path": path.name, "sha256": jar["sha256"]},
                                     "server_jar", maximum=512 * 1024 * 1024) as stream:
             with zipfile.ZipFile(stream) as archive:
-                require(NATIVE_CLASS in archive.namelist(), "native_persistence_class_missing")
+                native_classes = {name for name in (NATIVE_CLASS, XP_NATIVE_CLASS) if name in archive.namelist()}
+        require(NATIVE_CLASS in native_classes, "native_persistence_class_missing")
+        if self.xp_window_contract():
+            require(XP_NATIVE_CLASS in native_classes, "native_xp_ledger_class_missing")
         cosmic, web = self.unit("cosmic"), self.unit("web")
         require(pwd.getpwnam(cosmic.get("User", "")).pw_uid != 0
                 and pwd.getpwnam(web.get("User", "")).pw_uid != 0
@@ -389,6 +464,19 @@ class CosmicRuntime:
         require(web.get("ActiveState") == "active", "unprivileged_services_required")
         self.web_identity(web, verify_bytes=False)
 
+    def snapshot(self):
+        scenario=getattr(self,'scenario',{})
+        toolkit=(scenario.get('adaptive_protocol') or scenario.get('native_contract') or {}).get('skill_toolkit')
+        value=self.host.snapshot(self.config['mysql'],self.run_id,
+            **({'skill_toolkit':toolkit} if toolkit is not None else {}))
+        if toolkit is not None:
+            from full_client_collect import validate_toolkit_snapshot
+            try:
+                validate_toolkit_snapshot(value,toolkit)
+            except (ValueError,TypeError,KeyError):
+                raise RuntimeErrorCode('native_skill_toolkit_mismatch') from None
+        return value
+
     def web_identity(self, unit, *, verify_bytes=True):
         """Bind frozen files to the actual serving process and its import roots."""
         manifest = self.manifest
@@ -400,10 +488,27 @@ class CosmicRuntime:
         controls = script.parent.parent / "ui/full-client"
         # The executor reads the JavaScript dispatcher at each container launch;
         # pin it alongside imported modules, not just the Docker image.
-        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "agent-sandbox.mjs")),
-                    controls / "controller.js", controls / "waiting.html",
+        required = {script, *(script.parent / name for name in ("full_client_bridge.py", "full_client_native.py", "full_client_adaptive.py", "full_client_session.py", "full_client_capture.py", "full_client_docker.py", "full_client_readiness.py", "maple_agent.py", "model_providers.py", "knowledge_pack.py", "full_client_skill_qualification.py", "full_client_hero_toolkit.py", "agent-sandbox.mjs")),
+                    controls / "controller.js", controls / "webcodecs-recorder.js", controls / "waiting.html",
                     *(root / "web" / name for name in ("index.html", "assets_server.py", "ws_proxy.py"))}
         extras = {ref["path"]: ref for ref in manifest.get("extra_files", [])}
+        native_contract=getattr(self,'scenario',{}).get('native_contract') or {}
+        if native_contract.get('id')=='scripted-native-hero-toolkit-v1':
+            required.add(script.parent/'full_client_hero_native_evidence.py')
+        adaptive_protocol = getattr(self, 'scenario', {}).get('adaptive_protocol') or {}
+        knowledge = adaptive_protocol.get('knowledge_pack')
+        if knowledge is not None:
+            from knowledge_pack import validate_manifest
+            try:
+                knowledge = validate_manifest(knowledge)
+            except (ValueError, TypeError):
+                raise RuntimeErrorCode('invalid_frozen_knowledge_pack') from None
+            pack_root = script.parent.parent / 'knowledge' / knowledge['pack_id']
+            for entry in knowledge['files']:
+                path = pack_root / entry['path']
+                required.add(path)
+                require(extras.get(str(path), {}).get('sha256') == entry['sha256'],
+                        'knowledge_files_not_frozen')
         require(all(str(path) in extras for path in required), "serving_sources_not_frozen")
         asset_root = root / "assets"
         require(asset_root.is_dir() and not asset_root.is_symlink(), "client_asset_directory_required")
@@ -480,7 +585,13 @@ class CosmicRuntime:
         require(self.host.queue_count(self.config["queue_database"]) == 0, "queued_or_active_trials_exist")
 
     def persist(self):
-        atomic_json(self.directory / "backend-state.json", self.state)
+        state = self.state
+        if state.get("result", {}).get("protocol") == "full-client-adaptive-pilot-v1":
+            # Keep the bounded control journal small; the immutable, separately
+            # hashed aggregate file is loaded only when this attempt resumes.
+            state = {k: v for k, v in state.items() if k != "result"}
+            state["adaptive_result_ref"] = self.state["artifacts"]["result"]
+        atomic_json(self.directory / "backend-state.json", state)
 
     def intent(self, operation):
         require(operation not in self.state["intents"], "operation_already_attempted")
@@ -529,7 +640,7 @@ class CosmicRuntime:
         except ValueError:
             return False
         return (not any(Path(path).name == "zz-maplebench-trial.conf" for path in paths)
-                and not any(item.split("=", 1)[0] in ENV_NAMES for item in environment))
+                and not any(item.split("=", 1)[0] in (*ENV_NAMES, *xp_windows.XP_ENV_NAMES) for item in environment))
 
     def validate_process(self, unit):
         user = pwd.getpwnam(unit.get("User", ""))
@@ -620,7 +731,7 @@ class CosmicRuntime:
                 "transactional_score_tables_required")
         self.sql(read_artifact_bytes(self.directory, self.state["artifacts"]["baseline"], "baseline", maximum=MAX_SQL))
         at = self.host.now()
-        snapshot = self.host.snapshot(self.config["mysql"], self.run_id)
+        snapshot = self.snapshot()
         require(same_json(snapshot["character"], self.baseline["character"])
                 and same_json(snapshot["keymap"], self.baseline["keymap"]), "restored_baseline_mismatch")
         reset = {"run_id": self.run_id, "baseline_sha256": self.config["baseline"]["sha256"],
@@ -632,13 +743,16 @@ class CosmicRuntime:
         self.state["artifacts"]["reset"] = self.artifact("reset.json", reset)
         return {"reset_verified": True}
 
+    def service_runtime_seconds(self):
+        return self.context["request"]["budgets"]["total_seconds"] + 120
+
     def start_server(self):
         require(self.state.get("reset") and self.stopped(self.unit("cosmic")) and self.account_state() == 0,
                 "fresh_reset_required")
         before = self.unit("cosmic")
         user = pwd.getpwnam(before.get("User", ""))
         require(user.pw_uid != 0, "nonroot_service_user_required")
-        require(not any(name in before.get("Environment", "") for name in ENV_NAMES),
+        require(not any(name in before.get("Environment", "") for name in (*ENV_NAMES, *xp_windows.XP_ENV_NAMES)),
                 "existing_trial_environment")
         native_root = absolute(self.config["native_output_root"])
         native_info = native_root.lstat()
@@ -657,9 +771,10 @@ class CosmicRuntime:
         # The normal worker's service enables the legacy bot/SDK adapter. An
         # ordinary full-client trial must explicitly override that inherited mode.
         env["MAPLEBENCH_ENABLED"] = "false"
+        env.update(self.native_xp_environment(native))
         text = "[Service]\n" + "".join('Environment="' + key + '=' + value.replace('\\', '\\\\').replace('"', '\\"') + '"\n'
                                        for key, value in env.items())
-        text += "MemoryMax=2300M\nMemorySwapMax=0\nCPUQuota=200%\nRestart=no\nKillMode=control-group\nTimeoutStopSec=30\nRuntimeMaxSec=" + str(self.context["request"]["budgets"]["total_seconds"] + 120) + "\n"
+        text += "MemoryMax=2300M\nMemorySwapMax=0\nCPUQuota=200%\nRestart=no\nKillMode=control-group\nTimeoutStopSec=30\nRuntimeMaxSec=" + str(self.service_runtime_seconds()) + "\n"
         def quote(value):
             return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '$$') + '"'
         launch = [self.config["java"]["path"], "-Xmx1536m", "-XX:ActiveProcessorCount=2",
@@ -696,21 +811,41 @@ class CosmicRuntime:
         unit = self.owned_server()
         logs = self.host.command([self.config["journalctl"], "--no-pager", "--output=cat",
                                   "_SYSTEMD_INVOCATION_ID=" + self.state["invocation_id"]])
-        require(b"MapleBench persistence journal failed" not in logs and b"Error saving chr" not in logs,
+        require(b"MapleBench persistence journal failed" not in logs and b"Error saving chr" not in logs
+                and b"MapleBench XP ledger failed" not in logs,
                 "native_startup_or_save_failed")
         initialized = logs.count(b"MapleBench persistence journal initialized")
+        xp_initialized = logs.count(b"MapleBench XP ledger initialized")
+        xp_contract = self.xp_window_contract()
         online = logs.count(b"Cosmic is now online after ")
-        require(initialized <= 1 and online <= 1, "native_startup_markers_ambiguous")
+        require(initialized <= 1 and online <= 1 and xp_initialized <= (1 if xp_contract else 0),
+                "native_startup_markers_ambiguous")
         ports_ready = set(self.config["game_ports"]) <= self.host.listening_ports(int(unit["MainPID"]))
         diagnostics = {"invocation_id": self.state["invocation_id"], "log_bytes": len(logs),
                        "journal_initializations": initialized, "online_markers": online,
                        "listeners_ready": ports_ready}
+        if xp_contract:
+            diagnostics["xp_journal_initializations"] = xp_initialized
         # Keep only safe counts for the exact owned instance. Persist changes so
         # a timeout remains inspectable without copying native log contents.
         if self.state.get("startup_readiness") != diagnostics:
             self.state["startup_readiness"] = diagnostics
             self.persist()
-        return initialized == 1 and online == 1 and ports_ready
+        ready = initialized == 1 and online == 1 and ports_ready
+        if ready and xp_contract:
+            require(xp_initialized == 1, "native_xp_initialization_missing")
+            try:
+                raw = self.read_stable(Path(self.state["native_directory"]) / "xp.jsonl", 65536)
+                proof = xp_windows.verify_native_header(raw, identity=self.identity(),
+                    initial={k:self.state["initial"]["character"][k] for k in ("level", "exp")}, contract=xp_contract)
+                require(self.state["server_start_requested_at_ms"] <= proof["wall_ms"] <= self.host.now(),
+                        "native_xp_header_invalid")
+                require(self.state.get("xp_header", proof) == proof, "native_xp_header_invalid")
+            except (EvidenceError, OSError, TypeError, KeyError):
+                raise RuntimeErrorCode("native_xp_header_invalid") from None
+            self.state["xp_header"] = proof
+            self.persist()
+        return ready
 
     def wait_for_server_ready(self):
         while True:
@@ -769,13 +904,22 @@ class CosmicRuntime:
         spec = self.context["request"]
         budgets = spec["budgets"]
         duration = self.scenario.get("program_seconds")
-        require(duration in (22, 60) and type(duration) is int, "unsupported_program_duration")
-        require(budgets["controller_seconds"] >= duration + 2
-                and budgets["max_actions"] == (80 if duration == 22 else 240)
-                and budgets["max_output_tokens"] == 3000, "bridge_budget_mismatch")
-        from full_client_bridge import PROMPT
-        prompt = PROMPT.format(program_seconds=duration, action_limit=budgets["max_actions"],
-                              sdk_request_limit=100 if duration == 22 else 600)
+        adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
+        protocol = self.scenario.get("adaptive_protocol") if adaptive else None
+        if adaptive:
+            from full_client_adaptive import prompt as adaptive_prompt
+            prompt = adaptive_prompt(protocol)
+            require(spec.get("schema_version") == (3 if self.xp_window_contract() else 2)
+                    and spec.get("protocol") == self.trial_protocol(),
+                    "bridge_budget_mismatch")
+        else:
+            require(duration in (22, 60) and type(duration) is int, "unsupported_program_duration")
+            require(budgets["controller_seconds"] >= duration + 2
+                    and budgets["max_actions"] == (80 if duration == 22 else 240)
+                    and budgets["max_output_tokens"] == 3000, "bridge_budget_mismatch")
+            from full_client_bridge import PROMPT
+            prompt = PROMPT.format(program_seconds=duration, action_limit=budgets["max_actions"],
+                                  sdk_request_limit=100 if duration == 22 else 600)
         require(self.scenario.get("instructions_sha256") == hashlib.sha256(prompt.encode()).hexdigest()
                 and self.scenario.get("reasoning") == {"effort": "low"}, "frozen_prompt_mismatch")
         readiness_policy=self.readiness_policy()
@@ -786,6 +930,7 @@ class CosmicRuntime:
                        docker_image_id=self.manifest["docker_image_id"],
                        docker_binding=self.docker_binding(),
                        readiness_policy=readiness_policy,
+                       **({"adaptive_protocol": protocol} if adaptive else {}),
                        trial_context={"scenario_fingerprint": spec["scenario_fingerprint"],
                                       "baseline_sha256": spec["baseline_sha256"]})
             terminal_seen = None
@@ -829,6 +974,8 @@ class CosmicRuntime:
             raise
         self.copy_controller_metadata()
         result = self.state["result"]
+        if adaptive:
+            return self.verify_adaptive_controller()
         api = result["api"]
         require(result.get("source") == "full-client-trial" and result["controller"]["id"] == self.run_id
                 and result["controller"]["model"] == spec["model"] and api["model"] == spec["model"]
@@ -855,19 +1002,49 @@ class CosmicRuntime:
                 "controller_ms": timeline["program_ended_ms"] - timeline["program_started_ms"],
                 "recording_complete": True}
 
+    def verify_adaptive_controller(self):
+        from full_client_adaptive_evidence import verify_result
+        from full_client_publish import _verify_readiness_policy
+        result, spec = self.state["result"], self.context["request"]
+        controller = result["controller"]
+        require(controller.get("id") == self.run_id and controller.get("mode") == "api"
+                and controller.get("dockerImageId") == self.manifest["docker_image_id"]
+                and same_json(controller.get("dockerBinding"), self.docker_binding())
+                and same_json(result.get("trialContext"), {"scenario_fingerprint": spec["scenario_fingerprint"],
+                    "baseline_sha256": spec["baseline_sha256"]}), "controller_trial_context_mismatch")
+        try:
+            verified = verify_result(result, self.directory, protocol=self.scenario["adaptive_protocol"], model=spec["model"])
+            _verify_readiness_policy({"result": result, "artifacts": self.state["artifacts"],
+                "budgets": self.scenario["budgets"]}, self.directory, {"baseline": self.baseline}, self.scenario)
+        except (EvidenceError, ValueError, KeyError, TypeError):
+            raise RuntimeErrorCode("adaptive_evidence_mismatch") from None
+        started, timeline = result["timing"]["startedAtMs"], result["timeline"]
+        session = self.state["session"]
+        for field, offset in (("api_started_at_ms", "api_started_ms"), ("api_ended_at_ms", "api_ended_ms"),
+                              ("controller_started_at_ms", "program_started_ms"), ("controller_ended_at_ms", "program_ended_ms")):
+            session[field] = started + timeline[offset]
+        session.update(protocol=self.scenario["protocol"], api_intervals=verified["api_intervals"],
+                       adaptive_trace_sha256=result["adaptiveTrace"]["sha256"])
+        require(started >= session["login_at_ms"] and result["timing"]["endedAtMs"] <= self.host.now(),
+                "controller_host_clock_mismatch")
+        self.validate_settlement()
+        usage = verified["counters"]
+        return {"status": "completed", "protocol": self.trial_protocol(),
+                "requested_model": spec["model"], "returned_model": spec["model"],
+                "api_requests": usage["api_requests_started"], "output_tokens": usage["actual_output_tokens"],
+                "total_tokens": usage["actual_total_tokens"], "actions": usage["actions"],
+                "controller_ms": verified["wall_elapsed_ms"], "recording_complete": True}
+
     def verify_api_result(self, prompt):
-        from full_client_publish import PROGRAM_FORMAT
+        from model_providers import (bind_request_identity, exchange_receipt, parse_program_response,
+                                     program_request, provider_for_model, response_identity_matches)
         arts, result = self.state["artifacts"], self.state["result"]
         request = parse_json(read_artifact_bytes(self.directory, arts["api_request"], "api_request"))
         response = parse_json(read_artifact_bytes(self.directory, arts["api_response"], "api_response"))
-        require(set(request) == {"model", "store", "reasoning", "instructions", "input",
-                                 "max_output_tokens", "text", "metadata"}
-                and request["model"] == self.context["request"]["model"] and request["store"] is False
-                and request["reasoning"] == {"effort": "low"} and request["instructions"] == prompt
-                and same_json(parse_json(request["input"]), {"observation": result["initial"]})
-                and request["max_output_tokens"] == 3000
-                and same_json(request["text"], {"format": PROGRAM_FORMAT})
-                and request["metadata"].get("maplebench_run_id") == self.run_id, "actual_api_request_mismatch")
+        model = self.context["request"]["model"]
+        _, expected_request = program_request(model,prompt,{"observation":result["initial"]},3000)
+        require(same_json(request,bind_request_identity(model,expected_request,self.run_id)),
+                "actual_api_request_mismatch")
         readiness=parse_json(read_artifact_bytes(self.directory,arts['readiness'],'readiness'))
         require(same_json(readiness,result.get('readiness'))
                 and arts['readiness']['sha256']==result.get('readinessSha256')
@@ -876,15 +1053,15 @@ class CosmicRuntime:
                 and readiness.get('run_id')==self.run_id
                 and readiness.get('initial_observation_sha256')==observation_sha256(result['initial']),
                 'readiness_receipt_mismatch')
-        require(all(same_json(response.get(k), result["api"].get(k)) for k in ("id", "status", "model", "usage"))
-                and response.get("metadata", {}).get("maplebench_run_id") == self.run_id,
+        program, meta = parse_program_response(model,response)
+        compared = tuple(meta) if provider_for_model(model)=='anthropic' else ('id','status','model','usage')
+        require(all(same_json(meta.get(k), result["api"].get(k)) for k in compared)
+                and response_identity_matches(model,response,self.run_id),
                 "actual_api_response_mismatch")
-        text = "".join(part["text"] for item in response["output"] if item.get("type") == "message"
-                       for part in item["content"] if part.get("type") == "output_text")
-        program = parse_json(text)
-        require(set(program) == {"note", "code"} and isinstance(program["note"], str)
-                and isinstance(program["code"], str) and 0 < len(program["code"]) <= 12000
-                and len(program["note"]) <= 2000, "invalid_provider_program")
+        if provider_for_model(model)=='anthropic':
+            require(same_json(result['api'].get('provider_exchange'),
+                exchange_receipt(model,request,response,self.run_id)), 'actual_api_exchange_mismatch')
+        require(program is not None and meta.get('status')=='completed', "invalid_provider_program")
         raw = read_artifact_bytes(self.directory, arts["program"], "program", maximum=65536)
         require(raw == program["code"].encode() and arts["program"]["sha256"] == result["programSha256"],
                 "executed_program_mismatch")
@@ -899,11 +1076,26 @@ class CosmicRuntime:
                  "capture": "capture.json", "capture_ready": "capture-ready.json",
                  "capture_clock": "capture-clock.json", "capture_terminal": "capture-terminal.json",
                  "readiness":"readiness.json"}
+        adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
+        if adaptive:
+            for key in ("api_request", "api_response", "program"):
+                names.pop(key)
         for key, filename in names.items():
             path = source / filename
             raw = self.read_stable(path, JSON_LIMIT)
             self.state["artifacts"][key] = self.artifact("controller-" + filename, raw=raw)
         self.state["result"] = parse_json(read_artifact_bytes(self.directory, self.state["artifacts"]["result"], "result"))
+        if adaptive:
+            from full_client_adaptive_evidence import references
+            for ref in references(self.state["result"]):
+                raw = read_artifact_bytes(source, ref, "adaptive_cycle", maximum=JSON_LIMIT)
+                destination = self.directory / ref["path"]
+                parent = self.directory
+                for part in Path(ref["path"]).parts[:-1]:
+                    parent = private_directory(parent / part, create=True)
+                copied = save_bytes(destination, raw)
+                require(copied["sha256"] == ref["sha256"], "adaptive_evidence_mismatch")
+            self.state["artifacts"]["adaptive"] = self.state["result"]["adaptiveTrace"]
         recording = parse_json(read_artifact_bytes(self.directory, self.state["artifacts"]["recording"], "recording"))
         require(recording.get("status") == "completed" and SHA.fullmatch(recording.get("sha256", ""))
                 and recording.get("overlay") == {"controller_id": self.run_id, "mode": "api",
@@ -932,13 +1124,15 @@ class CosmicRuntime:
         self.state["artifacts"]["video"] = {"path": "video.webm", "sha256": recording["sha256"]}
         from full_client_publish import _probe_video, verify_capture_bundle
         try:
-            probe = _probe_video(self.directory / "video.webm", recording["sha256"]) | {"video_sha256": recording["sha256"]}
+            probe = _probe_video(self.directory / "video.webm", recording["sha256"],
+                **({"maximum_ms": 335000} if getattr(self, "scenario", {}).get("protocol") == "full-client-adaptive-pilot-v1" else {})) | {"video_sha256": recording["sha256"]}
         except EvidenceError:
             raise RuntimeErrorCode("recording_probe_failed") from None
-        require(type(recording.get("duration_ms")) in (int, float)
-                and math.isfinite(recording["duration_ms"])
-                and abs(probe["duration_ms"] - recording["duration_ms"]) <= 100,
-                "recording_duration_mismatch")
+        from full_client_capture import verify_video_duration
+        try:
+            verify_video_duration(probe,recording,getattr(self,'scenario',{}).get('adaptive_protocol',{}).get('capture_duration_policy'))
+        except (ValueError,TypeError):
+            raise RuntimeErrorCode('recording_duration_mismatch') from None
         self.state["artifacts"]["video_probe"] = self.artifact("video-probe.json", probe)
         try:
             verify_capture_bundle({"result": self.state["result"], "video": recording,
@@ -1051,7 +1245,7 @@ class CosmicRuntime:
         self.disconnect()
         self.validate_settlement()
         self.copy_run()
-        final = self.host.snapshot(self.config["mysql"], self.run_id)
+        final = self.snapshot()
         self.event("collection_completed", final["captured_at_ms"])
         arts = self.state["artifacts"]
         arts["final_db"] = self.artifact("final-db.json", final)
@@ -1072,22 +1266,67 @@ class CosmicRuntime:
                             "native_logs_sha256": arts["native_log"]["sha256"], "save_error_count": 0,
                             "log_checked_from_ms": self.state["session"]["server_started_at_ms"],
                             "log_checked_through_ms": final["captured_at_ms"]}}
-        evidence = {"schema_version": 1, "source": SOURCE, "run_id": self.run_id,
+        adaptive = self.scenario.get("protocol") == "full-client-adaptive-pilot-v1"
+        evidence = {"schema_version": 2 if adaptive else 1, "source": SOURCE, "run_id": self.run_id,
                     "scenario_fingerprint": self.config["scenario"]["sha256"],
                     "baseline": {"sha256": self.config["baseline"]["sha256"],
                                  "character": self.baseline["character"], "keymap": self.baseline["keymap"]},
                     "reset": self.state["reset"], "session": session,
                     "initial": self.state["initial"] | {"evidence_sha256": arts["initial_db"]["sha256"]},
                     "final": final | {"evidence_sha256": arts["final_db"]["sha256"]}}
+        if adaptive:
+            evidence["protocol"] = self.scenario["protocol"]
+            if self.scenario['adaptive_protocol'].get('skill_toolkit') is not None:
+                evidence['baseline'].update(skill_toolkit_id=self.baseline['skill_toolkit_id'],
+                    learned_skills=self.baseline['learned_skills'])
         arts["session"] = self.artifact("session.json", session)
-        arts["persistence"] = self.artifact("persistence.json", evidence)
+        windows = self.xp_window_contract()
+        if windows is None:
+            arts["persistence"] = self.artifact("persistence.json", evidence)
         self.ownership()
         self.owned_server()
         self.frozen()
-        score = verify_trial_bundle(evidence, self.directory, arts)
+        if windows:
+            evidence, score = self.collect_xp_windows(windows)
+        else:
+            score = verify_trial_bundle(evidence, self.directory, arts)
         arts["score"] = self.artifact("score.json", score)
         self.write_publication_candidate(score, arts)
         return {"evidence": evidence, "artifacts": arts}
+
+    def collect_xp_windows(self, contract):
+        """Only after ordinary logout; missing evidence is recorded as unknown."""
+        require(self.account_state() == 0 and self.state.get("ordinary_logout"),
+                "normal_committed_logout_required")
+        arts = self.state["artifacts"]
+        status = {"schema_version":1, "protocol":xp_windows.PROTOCOL, "run_id":self.run_id,
+                  "status":"unknown", "task_score":None, "publication_eligible":False}
+        try:
+            raw = self.read_stable(Path(self.state["native_directory"]) / "xp.jsonl", xp_windows.MAX_LEDGER_BYTES)
+            arts["xp_ledger"] = self.artifact("native-xp.jsonl", raw=raw)
+            require(self.state.get("xp_header", {}).get("sha256") == hashlib.sha256(raw.splitlines(keepends=True)[0]).hexdigest(),
+                    "native_xp_header_invalid")
+            names = {"native_save":"save", "baseline_sql":"baseline", "controller_result":"result"}
+            refs = {name:arts[names.get(name,name)] for name in ("xp_ledger", "native_save", "native_log", "initial_db",
+                "final_db", "session", "scenario", "controller_result", "baseline_sql", "baseline_snapshot", "reset", "server_log")}
+            timing = self.state["result"]["adaptive"]["timing"]
+            evidence = {"schema_version":1, "protocol":xp_windows.PROTOCOL, **self.identity(),
+                "window":{"start_at_ms":timing["wall_started_at_ms"], "deadline_at_ms":timing["wall_deadline_at_ms"], "window_ms":15000},
+                "normalization":contract["normalization"], "experience_table_sha256":contract["experience_table_sha256"],
+                "baseline_sha256":self.config["baseline"]["sha256"], "scenario_fingerprint":self.config["scenario"]["sha256"],
+                "artifacts":refs}
+            arts["xp_manifest"] = self.artifact("xp-window-manifest.json", evidence)
+            score = xp_windows.verify_trial_bundle(evidence, self.directory, arts)
+            status.update(status="verified_native_windows", task_score=score["task_score"])
+        except (EvidenceError, RuntimeErrorCode, OSError, ValueError, TypeError, KeyError, IndexError):
+            status["reason"] = "missing_or_inconsistent_native_window_evidence"
+            arts["xp_window_status"] = self.artifact("xp-window-status.json", status)
+            self.state["xp_window_status"] = status
+            self.persist()
+            raise RuntimeErrorCode("xp_window_evidence_incomplete") from None
+        arts["xp_window_status"] = self.artifact("xp-window-status.json", status)
+        self.state["xp_window_status"] = status
+        return evidence, score
 
     def write_publication_candidate(self, score, arts):
         recording = parse_json(read_artifact_bytes(self.directory, arts["recording"], "recording"))
@@ -1099,6 +1338,15 @@ class CosmicRuntime:
                                   "reset_fingerprint": self.config["baseline"]["sha256"]},
                      "score": score, "video": recording | {"path": arts["video"]["path"], "reviewed": False},
                      "artifacts": dict(arts)}
+        if self.scenario.get("protocol") == "full-client-adaptive-pilot-v1":
+            candidate.update(schema_version=3, protocol=self.scenario["protocol"], run_kind="adaptive_pilot",
+                candidate_status="awaiting_adaptive_publication_review", publication_eligible=False,
+                authoritative_peak_xp_per_minute=None, authoritative_window_status="not_collected")
+        if self.xp_window_contract():
+            candidate.update(schema_version=4, protocol=xp_windows.PROTOCOL, run_kind="xp_window_pilot",
+                candidate_status="awaiting_native_window_publication_acceptance", publication_eligible=False,
+                authoritative_peak_xp_per_minute=score["peak_normalized_xp_per_minute"],
+                authoritative_window_status="verified_native_windows")
         self.artifact("publication-candidate.json", candidate)
 
     def settle_owned_controller(self):
@@ -1128,8 +1376,9 @@ class CosmicRuntime:
             if not self.state.get("failure_cleanup_status"):
                 self.state["failure_cleanup_status"] = status
                 self.persist()
-            if run.get("failureAcknowledged") is not True:
-                self.admin("release_failed_run", run_id=self.run_id)
+            # cancel() sets an in-memory acknowledgment, but ordinary login
+            # after restart also requires a durable release receipt.
+            self.admin("release_failed_run", run_id=self.run_id)
 
     def preserve_failure_evidence(self):
         require(self.account_state() == 0, "controller_collection_requires_logout")
@@ -1194,7 +1443,37 @@ class CosmicRuntime:
         self.state["configuration_cleanup"]["phase"] = "verified"
         self.persist()
 
+    def prepare_cleanup_wait(self):
+        """Confirm ordinary waiting navigation within a separate finite window."""
+        requested = self.host.now()
+        self.state.setdefault("cleanup_wait_requests", []).append(requested)
+        self.persist()
+        deadline = self.host.deadline
+        self.host.deadline = min(deadline, time.monotonic() + 15)
+        try:
+            self.admin("prepare_wait")
+            def waiting():
+                status = self.admin("status")
+                session, bridge = status.get("session", {}), status.get("bridge", {})
+                run = bridge.get("run") or {}
+                initial = run.get("id") is None and run.get("status") == "idle"
+                terminal = not run or initial or run.get("status") in ("completed", "failed", "timed_out", "cancelled")
+                return (status if session.get("state") == "waiting" and session.get("fresh") is True
+                        and session.get("pinned") is True and session.get("captureState") == "idle"
+                        and session.get("artifactsSettled") is True and terminal
+                        and run.get("workerActive") is not True and run.get("leaseReleasePending") is not True
+                        and bridge.get("browserReleasePending") is not True else None)
+            status = self.wait_for(waiting)
+        finally:
+            self.host.deadline = deadline
+        self.state["cleanup_wait"] = {"requested_at_ms": requested, "verified_at_ms": self.host.now(),
+                                      "session": status["session"]}
+        self.persist()
+
     def cleanup(self):
+        # No earlier clean receipt can survive an uncertain fresh cleanup.
+        self.state["clean"] = False
+        self.persist()
         # Recovery can encounter a start whose response was lost. Native env plus
         # the exact recorded drop-in is required before adopting that invocation.
         unit = self.unit("cosmic")
@@ -1221,7 +1500,12 @@ class CosmicRuntime:
         if self.state.get("dropin"):
             self.remove_trial_configuration()
         require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_configuration_still_loaded")
+        self.prepare_cleanup_wait()
+        require(self.stopped(self.unit("cosmic")) and self.account_state() == 0,
+                "cleanup_requires_stopped_offline")
+        require(self.trial_configuration_absent(self.unit("cosmic")), "cleanup_configuration_still_loaded")
         self.state["clean"] = True
+        self.persist()
         return {"clean": True}
 
     def perform(self, operation, context, *, timeout_seconds):
@@ -1239,6 +1523,8 @@ class CosmicRuntime:
             state_file = self.directory / "backend-state.json"
             if state_file.exists():
                 self.state = read_private_json(state_file)
+                if self.state.get("adaptive_result_ref"):
+                    self.state["result"] = parse_json(read_artifact_bytes(self.directory, self.state["adaptive_result_ref"], "result"))
                 require(self.state.get("attempt_id") == self.run_id, "backend_owner_mismatch")
         if operation == "status":
             return self.status()
@@ -1252,7 +1538,8 @@ class CosmicRuntime:
             self.online_identity()
         else:
             self.frozen()
-        require(same_json(self.scenario.get("trial_budgets"), spec["budgets"]), "scenario_trial_budgets_mismatch")
+        require(same_json(self.scenario.get("trial_budgets"), spec["budgets"])
+                and (spec.get("protocol") == self.trial_protocol()), "scenario_trial_budgets_mismatch")
         if self.state is None:
             if operation == "cleanup":
                 status = self.status()

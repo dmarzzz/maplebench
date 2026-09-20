@@ -1,0 +1,10 @@
+--- a/src/client/Data/SkillData.cpp
++++ b/src/client/Data/SkillData.cpp
+@@ -100,6 +100,7 @@
+             // Fighter
+             // Page
+             // Crusader
++            { SkillId::SHOUT, ATTACK },
+             { SkillId::SWORD_PANIC, ATTACK },
+             { SkillId::AXE_PANIC, ATTACK },
+             { SkillId::SWORD_COMA, ATTACK },

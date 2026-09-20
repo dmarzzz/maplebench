@@ -3,19 +3,41 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MapleBench · Full-client results</title>
+  <meta name="description" content="AI agents playing MapleStory. Explore saved XP, recorded gameplay, model calls, and the evidence behind every attempt.">
+  <title>MapleBench — AI agents in MapleStory</title>
   <link rel="stylesheet" href="./style.css">
   <script src="./dashboard.js" defer></script>
 </head>
-<body>
+<body id="top">
+  <div class="world-backdrop" aria-hidden="true"><img src="./henesys-world.png" width="1536" height="1024" alt="" decoding="async"></div>
+  <header class="site-header"><nav aria-label="Sections"><a href="#overview">Overview</a><a href="#results">Results</a><a href="#recordings">Recordings</a><a href="#methodology">Methodology</a></nav><a href="https://github.com/dmarzzz/maplebench">Source code</a></header>
   <main>
-    <header>
-      <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 15 7 20 5 18 11 23 13 15 18 13 17 13 23 11 23 11 17 9 18 1 13 6 11 4 5 9 7Z" fill="currentColor"/></svg><div><strong>Maple<b>Bench</b></strong><span>Full-client results</span></div></div>
+    <section class="hero" id="overview" aria-labelledby="overview-title">
+      <h1 id="overview-title"><img src="./maple-leaf.png" width="1254" height="1254" alt="" class="maple-leaf">MapleBench</h1>
+      <p class="hero-description">A benchmark for AI agents playing MapleStory</p>
+      <div class="hero-actions"><a href="https://github.com/dmarzzz/maplebench">Code</a><a href="#results">Explore results</a></div>
+      <div class="gallery-scene"><span>Leafre · recorded gameplay</span><img src="./maple-companions.png" width="1536" height="1024" alt=""></div>
+      <div id="gameplay-preview" class="gameplay-preview"><p class="empty">Recorded attempts appear here once their evidence is verified.</p></div>
+      <p class="preview-caption">Latest verified recordings, shown chronologically. Select one to inspect the full replay.</p>
+      <p class="hero-objective">Agents write code to earn XP that survives logout.</p>
+      <p id="hero-summary" class="hero-summary"></p>
       <p id="connection" role="status">Waiting for results</p>
-    </header>
-    <section class="live" aria-labelledby="live-title">
+    </section>
+    <section class="research-intro" id="results" aria-labelledby="research-title">
+      <div class="section-heading"><div><h2 id="research-title">Results</h2>
+        <p>Same character, knowledge, controls and time budget. Every planned attempt stays visible.</p></div><span class="pill">Pilot · unranked</span></div>
+      <p class="note">Five-minute adaptive runs count model wait inside the controller budget. The score is signed session net XP, verified after ordinary logout and including its bounded tail. Watch the recording to inspect model calls and inputs. Earlier protocols remain separate.</p>
+      <div class="section-heading matrix-heading"><h3>Model × declared class / task</h3><label>Evidence protocol<select id="research-protocol" aria-label="Evidence protocol"></select></label></div>
+      <nav id="catalog-cohorts" aria-label="Class cohort progress" hidden></nav>
+      <p id="research-protocol-detail" class="note"></p>
+      <div id="research-matrix" class="table-wrap"></div>
+      <p id="research-empty" class="empty">A protocol-declared cohort is required for the research matrix. Existing run evidence remains below.</p>
+      <p class="note">Every planned attempt remains in the denominator. Valid zero, negative, death and no-input outcomes are retained; missing evidence has no score. Sample spread is descriptive. This small pilot does not establish an overall model ranking, and initial/final XP does not establish a peak XP rate.</p>
+    </section>
+    <section class="live" id="recordings" aria-labelledby="recordings-title">
+      <div class="section-heading"><h2 id="recordings-title">Recordings &amp; run evidence</h2></div>
       <div class="live-heading"><span id="live-badge" class="pill">No active attempt</span><span id="live-id"></span></div>
-      <h1 id="live-title">The next run starts here.</h1>
+      <h3 id="live-title">The next run starts here.</h3>
       <p id="live-description">This page shows actual full-client attempts as their evidence arrives.</p>
       <ol id="phases" aria-label="Trial phases"></ol>
       <dl class="live-stats">
@@ -24,6 +46,13 @@
         <div><dt id="live-xp-label">Live XP change · diagnostic</dt><dd id="live-xp">—</dd></div>
         <div><dt>Last observed state</dt><dd id="live-survival">—</dd></div>
       </dl>
+      <div id="featured-recording"></div>
+      <div id="adaptive-evidence"></div>
+    </section>
+    <section id="release-reliability" hidden aria-labelledby="reliability-title">
+      <div class="section-heading"><div><h2 id="reliability-title">Did every attempt yield evidence?</h2><p>Every planned group remains visible. A failed attempt can reflect a model program or the runtime; this summary does not assign the cause.</p></div></div>
+      <div id="reliability-groups"></div>
+      <p class="note">Three consecutive clean groups are an operational release check, not an SLA or a model ranking. Zero and negative scores count as valid outcomes.</p>
     </section>
     <section aria-labelledby="comparison-title">
       <div class="section-heading"><div><h2 id="comparison-title">Results by frozen inputs</h2><p>Every group is shown. Matching inputs do not prove identical live monster scenes.</p></div><span class="pill">Unranked</span></div>
@@ -36,7 +65,14 @@
       <div class="table-wrap"><table><caption class="visually-hidden">Full-client attempt history</caption><thead><tr><th>Attempt / exact model</th><th>Status</th><th>Persisted XP</th><th>Diagnostic XP</th><th>Input actions</th><th>Publication evidence</th><th>Recording</th></tr></thead><tbody id="history"></tbody></table></div>
       <p id="history-empty" class="empty">No attempts have been exported yet.</p>
     </section>
-    <footer><span id="scope">Read-only results. No runs are started from this page.</span><span>Full-client gameplay / Cosmic persistence</span></footer>
+    <section id="methodology" aria-labelledby="methodology-title">
+      <div class="section-heading method-heading"><img src="./skill-book.png" width="1254" height="1254" alt="" loading="lazy"><h2 id="methodology-title">Methodology</h2></div>
+      <div id="native-qualification" hidden></div>
+      <div class="method-grid"><div><h3>What the agent sees</h3><p>Structured game state and a frozen knowledge pack. It writes programs that observe the world and press ordinary game keys. Recordings show the run for human inspection.</p></div><div><h3>What the score means</h3><p>XP saved after ordinary logout minus starting XP, including penalties and the bounded logout tail. The five-minute controller budget includes model wait. Missing evidence stays unscored.</p></div><div><h3>What this pilot can tell us</h3><p>Results describe these declared fixtures and model settings. Live monster scenes vary. Four samples per model describe observed spread; they do not establish statistical significance or an overall ranking.</p></div></div>
+      <p class="note">Earlier protocols stay separate. Input delivery, native skill qualification and persisted score are distinct evidence checks; a key press alone does not prove a successful cast or hit.</p>
+      <p><a href="https://github.com/dmarzzz/maplebench/blob/v0.1.0/docs/V1_COHORT.md">Read the full protocol and limitations</a></p>
+    </section>
+    <footer><p id="scope">Read-only results. No runs are started from this page.</p><p><a href="https://github.com/dmarzzz/maplebench">Source code</a> · <a href="https://github.com/dmarzzz/maplebench/releases/tag/v0.1.0">Release files</a> · Full-client gameplay / Cosmic persistence</p><p>MapleBench is independent and is not affiliated with, endorsed by, or sponsored by Nexon or MapleStory. Decorative fan artwork is separate from recorded gameplay. MapleStory names and game assets belong to their respective owners.</p></footer>
   </main>
   <dialog id="replay" aria-labelledby="replay-title" aria-describedby="replay-verification">
     <div class="replay-heading">
@@ -44,6 +80,17 @@
       <button id="replay-close" type="button" autofocus>Close replay</button>
     </div>
     <video id="replay-video" controls playsinline preload="metadata" aria-label="Recorded full-client gameplay"></video>
+    <section id="replay-events" hidden aria-label="Verified replay timeline">
+      <div class="replay-event-heading"><strong id="replay-call-state">Between model calls</strong><span id="replay-position"></span></div>
+      <canvas id="replay-event-chart" width="1000" height="66" aria-label="Model calls in violet and input delivery in orange; use the slider to seek"></canvas>
+      <label for="replay-seek">Seek recorded timeline<input id="replay-seek" type="range" min="0" max="1" step="0.05" value="0"></label>
+      <div id="replay-input-state" class="replay-input-state"></div>
+      <div id="replay-api-jumps" class="replay-api-jumps" aria-label="Jump to model calls"></div>
+      <p id="replay-clock-note" class="note"></p>
+      <button id="replay-download" type="button">Download event timeline</button>
+    </section>
+    <div class="replay-controls"><button id="replay-agent" type="button" hidden>Agent play</button> <button id="replay-full" type="button">Full recording</button></div>
+    <p id="replay-timing"></p>
     <p id="replay-playback-status" role="status"></p>
   </dialog>
 </body>

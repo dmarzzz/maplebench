@@ -1,0 +1,133 @@
+--- a/src/client/Character/Look/Afterimage.cpp
++++ b/src/client/Character/Look/Afterimage.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "Afterimage.h"
++#include "AfterimageRange.h"
+ 
+ #include "../../Util/Misc.h"
+ 
+@@ -35,7 +36,12 @@
+ 
+         if (!src)
+         {
+-            src = nl::nx::character["Afterimage"][name + ".img"][level / 10][stance_name];
++            src = weapon_afterimage(nl::nx::character["Afterimage"][name + ".img"],
++                level / 10, stance_name, [](nl::node node) {
++                    return node["lt"].data_type() == nl::node::type::vector
++                        && node["rb"].data_type() == nl::node::type::vector
++                        && valid_melee_range(Rectangle<int16_t>(node));
++                });
+         }
+ 
+         range = src;
+--- /dev/null
++++ b/src/client/Character/Look/AfterimageRange.h
+@@ -0,0 +1,64 @@
++// MapleBench authored afterimage lookup, AGPL-3.0-or-later.
++#pragma once
++#include <string>
++
++namespace jrc
++{
++    template<class Rectangle>
++    bool valid_melee_range(const Rectangle& range)
++    {
++        return range.l() < range.r() && range.t() < range.b();
++    }
++
++    // Keep an exact authored bucket. Higher-level weapons can outgrow the
++    // asset's bucket set; use the nearest lower valid bucket for this same
++    // family and stance, independent of child ordering. Never invent reach.
++    template<class Node, class Valid>
++    Node weapon_afterimage(Node family, int requested, const std::string& stance,
++                          Valid valid)
++    {
++        if (requested < 0 || family.size() > 64)
++            return {};
++        Node exact = family[requested][stance];
++        if (valid(exact))
++            return exact;
++        Node selected;
++        int selected_bucket = -1;
++        for (Node bucket : family)
++        {
++            const std::string name = bucket.name();
++            if (name.empty() || name.size() > 3)
++                continue;
++            int number = 0;
++            bool numeric = true;
++            for (char c : name)
++            {
++                if (c < '0' || c > '9') { numeric = false; break; }
++                number = number * 10 + c - '0';
++            }
++            if (!numeric || std::to_string(number) != name || number > requested
++                || number <= selected_bucket)
++                continue;
++            Node candidate = bucket[stance];
++            if (valid(candidate))
++            {
++                selected = candidate;
++                selected_bucket = number;
++            }
++        }
++        return selected;
++    }
++
++    template<class Rectangle>
++    bool authored_melee_range(Rectangle& target, const Rectangle& afterimage,
++                              const Rectangle& skill)
++    {
++        if (valid_melee_range(afterimage))
++            target = afterimage;
++        else if (valid_melee_range(skill))
++            target = skill;
++        else
++            return false;
++        return true;
++    }
++}
+--- a/src/client/Gameplay/Combat/RegularAttack.cpp
++++ b/src/client/Gameplay/Combat/RegularAttack.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "RegularAttack.h"
++#include "../../Character/Look/AfterimageRange.h"
+ 
+ namespace jrc
+ {
+@@ -35,7 +36,9 @@
+         attack.stance = user.get_look().get_stance();
+         if (attack.type == Attack::CLOSE)
+         {
+-            attack.range = user.get_afterimage().get_range();
++            if (!authored_melee_range(attack.range,
++                user.get_afterimage().get_range(), Rectangle<int16_t>{}))
++                attack.mobcount = 0;
+         }
+     }
+ 
+--- a/src/client/Gameplay/Combat/Skill.cpp
++++ b/src/client/Gameplay/Combat/Skill.cpp
+@@ -16,6 +16,7 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.    //
+ //////////////////////////////////////////////////////////////////////////////
+ #include "Skill.h"
++#include "../../Character/Look/AfterimageRange.h"
+ #include "SpellDamagePolicy.h"
+ #include "CombatBuffPolicy.h"
+ #include <cmath>
+@@ -286,7 +287,9 @@
+             attack.stance = user.get_look().get_stance();
+             if (attack.type == Attack::CLOSE && !projectile)
+             {
+-                attack.range = user.get_afterimage().get_range();
++                if (!authored_melee_range(attack.range,
++                    user.get_afterimage().get_range(), stats.range))
++                    attack.mobcount = 0;
+             }
+         }
+     }

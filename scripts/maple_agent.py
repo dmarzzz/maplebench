@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenAI code controller; trusted HTTP proxy around disposable Docker programs.
+"""Native API code controller; trusted HTTP proxy around disposable Docker programs.
 
 The queue owns scenario resets, recording, and server-authoritative scoring.
 Generated JavaScript never runs in the Python worker or a host Node process.
@@ -20,19 +20,16 @@ import urllib.parse
 import uuid
 
 from full_client_docker import DockerBindingError, bound_invocation, validate_binding
+from model_providers import (MODELS, SCHEMA, endpoint_for_model, parse_program_response,
+                             program_request, provider_for_model, request_headers)
 
-MODELS = ('gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_LINE_BYTES = 16384
 MAX_PROGRAM_OUTPUT = 131072
 # Leave time for the next relay poll and a post-hold acknowledgement. This is
 # an admission reserve, never permission to extend the program deadline.
 PRESS_KEYS_ACK_SECONDS = 0.5
-SCHEMA = {
-    'type': 'object', 'additionalProperties': False,
-    'properties': {'note': {'type': 'string'}, 'code': {'type': 'string'}},
-    'required': ['note', 'code'],
-}
+PRESS_KEYS_ENDPOINT_SECONDS = 3
 PROMPT = '''You control a character in an offline MapleStory v83 simulation.
 Write a short JavaScript async function body using the provided frozen `sdk`.
 It may contain loops, local variables, and console.log. Top-level await works.
@@ -67,16 +64,25 @@ while you think. Score comes from server events, never from your own output.'''
 # even if a remote peer trickles bytes indefinitely (socket timeouts do not).
 HTTP_WORKER = r'''
 import json, sys, urllib.request, urllib.error
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+def pairs(items):
+    value = {}
+    for key, item in items:
+        if key in value: raise ValueError()
+        value[key] = item
+    return value
+def constant(_): raise ValueError()
 try:
     value = json.load(sys.stdin)
-    headers = {'Content-Type': 'application/json'}
-    if value.get('key'): headers['Authorization'] = 'Bearer ' + value['key']
     body = value.get('payload')
-    req = urllib.request.Request(value['url'], data=None if body is None else json.dumps(body).encode(), headers=headers)
-    with urllib.request.urlopen(req, timeout=value['timeout']) as response:
+    req = urllib.request.Request(value['url'], data=None if body is None else json.dumps(body, allow_nan=False).encode(), headers=value['headers'])
+    # Never forward an API credential to a redirected endpoint or replay a POST.
+    with urllib.request.build_opener(NoRedirect()).open(req, timeout=value['timeout']) as response:
         raw = response.read(1024 * 1024 + 1)
     if len(raw) > 1024 * 1024: raise ValueError()
-    print(json.dumps({'ok': True, 'value': json.loads(raw)}))
+    print(json.dumps({'ok': True, 'value': json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)}))
 except urllib.error.HTTPError as error:
     print(json.dumps({'ok': False, 'error': 'HTTP ' + str(error.code)}))
 except Exception:
@@ -102,7 +108,8 @@ def write_json(path, value):
 def bounded_request(url, payload=None, key=None, timeout=20):
     if timeout <= 0:
         raise TimeoutError('Request deadline reached')
-    encoded = json.dumps({'url': url, 'payload': payload, 'key': key, 'timeout': timeout}).encode()
+    encoded = json.dumps({'url': url, 'payload': payload, 'headers': request_headers(url, key),
+                          'timeout': timeout}, allow_nan=False).encode()
     try:
         result = subprocess.run([sys.executable, '-c', HTTP_WORKER], input=encoded,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -156,6 +163,13 @@ def validate_rpc(message, scenario):
         keys, duration = args
         allowed = {'LEFT', 'RIGHT', 'UP', 'DOWN', 'JUMP', 'ATTACK', 'BRANDISH',
                    'COMBO', 'BOOSTER', 'MAPLE_WARRIOR', 'HP_POTION', 'MP_POTION'}
+        if scenario.get('protocol') in ('full-client-adaptive-pilot-v1','scripted-native-acceptance-v1','scripted-native-acceptance-v2','scripted-native-hero-toolkit-v1'):
+            allowed=(allowed-{'BRANDISH','COMBO','BOOSTER','MAPLE_WARRIOR'}) | {'PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2'}
+        if 'skill_toolkit' in scenario:
+            if scenario.get('protocol') not in ('full-client-adaptive-pilot-v1','scripted-native-hero-toolkit-v1'):
+                raise ValueError('Expanded skills require a frozen toolkit protocol')
+            from full_client_hero_toolkit import allowed_keys
+            allowed = allowed_keys(scenario['skill_toolkit'])
         if (type(keys) is not list or not 1 <= len(keys) <= 3
                 or any(type(key) is not str or key not in allowed for key in keys)
                 or len(set(keys)) != len(keys)
@@ -259,7 +273,7 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
     end = min(deadline, time.monotonic() + program_seconds)
     remaining = end - time.monotonic()
     if remaining <= 0:
-        return {'reason': 'time_limit', 'actions': 0, 'actionAttempts': 0, 'error': None, 'steps': []}
+        return {'reason': 'time_limit', 'actions': 0, 'actionAttempts': 0, 'rpcRequests': 0, 'error': None, 'steps': []}
     name = 'maplebench-agent-' + uuid.uuid4().hex
     # Full-client trials supply a frozen local executable/endpoint. Generic
     # adapters retain their operator-configured Docker command for compatibility.
@@ -356,7 +370,7 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                             raise ValueError('SDK request ID was reused')
                         seen_ids.add(rpc_id)
                     except ValueError as error:
-                        record({'kind': 'rejected_rpc', 'error': str(error)})
+                        record({'kind': 'rejected_rpc', 'error': str(error), 'rpc': message})
                         # Invalid IDs cannot be safely correlated with the JS SDK.
                         if type(rpc_id) is not int or not 1 <= rpc_id <= 10000:
                             raise AgentError('Invalid SDK request ID') from None
@@ -365,12 +379,18 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                     if method not in ('observe', 'wait') and action_attempts >= max_actions:
                         outcome = {'reason': 'action_limit', 'error': None}
                         finished = True; break
+                    if cancel_event is not None and cancel_event.is_set():
+                        outcome = {'reason': 'replaced', 'error': None}
+                        finished = True; break
                     left = end - time.monotonic()
                     if left <= 0:
                         raise TimeoutError('Program deadline reached')
-                    if method == 'pressKeys' and left < action['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS:
-                        # Do not shorten or dispatch the model's hold. Preserve
-                        # the fixed budget with a passive, cancellable tail.
+                    if method == 'pressKeys' and left < max(PRESS_KEYS_ENDPOINT_SECONDS,
+                            action['durationMs']/1000 + PRESS_KEYS_ACK_SECONDS):
+                        # Reserve the complete endpoint interval before sending.
+                        # A shorter interval can expire while the relay waits
+                        # for a poll that still fits its hold/ACK admission rule.
+                        # Keep the original program deadline and model hold.
                         cancelled = cancel_event.wait(left) if cancel_event is not None else time.sleep(left)
                         outcome = {'reason': 'replaced' if cancelled else 'time_limit', 'error': None}
                         finished = True; break
@@ -391,7 +411,8 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                         try:
                             result = (request_fn(base_url + '/v1/observe', timeout=min(3, left))
                                       if method == 'observe' else
-                                      request_fn(base_url + '/v1/action', action, timeout=min(3, left)))
+                                      request_fn(base_url + '/v1/action', action,
+                                          timeout=PRESS_KEYS_ENDPOINT_SECONDS if method == 'pressKeys' else min(3, left)))
                         except Exception as error:
                             safe_error = 'endpoint_timeout' if isinstance(error, TimeoutError) else 'endpoint_error'
                             record({'kind': 'sdk_error', 'method': method, 'args': message['args'],
@@ -402,7 +423,7 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                             finished = True; break
                         if method != 'observe' and isinstance(result, dict) and result.get('accepted') is True:
                             actions += 1
-                    step = {'kind': 'sdk', 'method': method, 'args': message['args'], 'result': result}
+                    step = {'kind': 'sdk', 'rpcId': rpc_id, 'method': method, 'args': message['args'], 'result': result}
                     record(step)
                     obs = result if method == 'observe' else result.get('observation', {}) if isinstance(result, dict) else {}
                     if obs.get('character', {}).get('alive') is False:
@@ -436,27 +457,14 @@ def _execute_program(code, scenario, base_url, *, deadline, max_actions,
                 pass  # Its independent GNU timeout still applies.
             except DockerBindingError as error:
                 outcome = {'reason': 'infrastructure_error', 'error': str(error)}
-    return outcome | {'actions': actions, 'actionAttempts': action_attempts, 'steps': steps, 'logs': logs}
+    return outcome | {'actions': actions, 'actionAttempts': action_attempts,
+                      'rpcRequests': min(rpc_count,max_requests), 'steps': steps, 'logs': logs}
 
 
 def model_decision(model, instructions, input_value, api_key, *, output_tokens, timeout, request_fn=bounded_request):
-    body = {'model': model, 'store': False, 'reasoning': {'effort': 'low'},
-            'instructions': instructions, 'input': json.dumps(input_value), 'max_output_tokens': output_tokens,
-            'text': {'format': {'type': 'json_schema', 'name': 'maple_program', 'strict': True, 'schema': SCHEMA}}}
-    response = request_fn('https://api.openai.com/v1/responses', body, api_key, timeout)
-    meta = {key: response.get(key) for key in ('id', 'model', 'usage', 'service_tier', 'status')}
-    if response.get('status') != 'completed':
-        return None, meta
-    text = ''.join(content.get('text', '') for item in response.get('output', []) if item.get('type') == 'message'
-                   for content in item.get('content', []) if content.get('type') == 'output_text')
-    try:
-        choice = json.loads(text)
-        if (set(choice) != {'note', 'code'} or type(choice['note']) is not str or type(choice['code']) is not str
-                or not 0 < len(choice['code']) <= 12000 or len(choice['note']) > 2000):
-            return None, meta
-    except (TypeError, ValueError):
-        return None, meta
-    return choice, meta
+    url, body = program_request(model, instructions, input_value, output_tokens)
+    response = request_fn(url, body, api_key, timeout)
+    return parse_program_response(model, response)
 
 
 def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
@@ -471,7 +479,7 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
     SDK steps are flushed to steps.jsonl after each request for crash recovery.
     """
     if model not in MODELS:
-        raise ValueError('Model is not in the OpenAI API comparison set')
+        raise ValueError('Model is not in the native API comparison set')
     base_url = validate_base_url(base_url)
     for value, low, high, label in ((max_calls, 1, 1000, 'API call budget'),
                                    (max_output_tokens, 256, 10000, 'output token budget'),
@@ -498,9 +506,10 @@ def run_agent(model, scenario, base_url, api_key, output_dir, *, max_calls=12,
                          'before acting because the world changes during planning. No fallback policy, '
                          'automatic replay or healing is supplied. Replanning begins after about '
                          + str(replan_seconds) + ' seconds. Use up to 600 SDK requests per program.')
-    controller = {'name': 'OpenAI Responses API (programmable SDK)', 'model': model,
+    provider = provider_for_model(model)
+    controller = {'name': ('OpenAI Responses API' if provider == 'openai' else 'Anthropic Messages API') + ' (programmable SDK)', 'model': model,
                   'controlMode': control_mode, 'reasoning': 'low', 'scenario': scenario.get('id', 'unknown'),
-                  'inference': 'api.openai.com', 'sandbox': 'Docker; no network; no credentials',
+                  'inference': urllib.parse.urlsplit(endpoint_for_model(model)).hostname, 'sandbox': 'Docker; no network; no credentials',
                   'limits': {'calls': max_calls, 'outputTokensPerCall': max_output_tokens,
                              'totalTokens': max_total_tokens, 'wallSeconds': wall_seconds,
                              'programSeconds': program_seconds, 'actions': max_actions,

@@ -22,7 +22,7 @@
     pill.className='pill';if(status.tone)pill.classList.add(status.tone);node.append(pill);
     if(status.detail)node.append(el('small',status.detail));
   }
-  let replayFocus=null,replayRunId=null,replaySection=null;
+  let replayFocus=null,replayRunId=null,replaySection=null,replayCue=null,replayStart=0;
   const replay=$('replay'),player=$('replay-video');
   function stopReplay(){player.pause();player.removeAttribute('src');player.load();}
   function replayVerification(row){
@@ -39,12 +39,31 @@
     replayFocus=trigger;replayRunId=row.id;replaySection=trigger.closest('tbody')?.id;
     $('replay-title').textContent=`${row.returned_model||row.requested_model||'Script / no evaluated model'} · ${row.id.slice(0,12)}`;
     replayVerification(row);
+    const cue=row.recording?.playback;
+    replayCue=cue&&Number.isFinite(cue.start_ms)&&cue.start_ms>=0&&cue.start_ms<125000
+      &&['first_acknowledged_input','program_start'].includes(cue.basis)?cue:null;
+    replayStart=replayCue?replayCue.start_ms/1000:0;
+    $('replay-agent').hidden=!replayCue;
+    $('replay-agent').textContent=replayCue?.basis==='first_acknowledged_input'?'First input':'Program start';
+    $('replay-timing').textContent=(Number.isFinite(row.timing?.api_ms)?`API wait: ${seconds(row.timing.api_ms)}. `:'')
+      +(row.no_op===true?(row.sdk_calls===0?'The program exited without any SDK calls. ':'No input actions were executed in this run. ')+'Showing the full recording.'
+      :replayCue?`Opens near ${replayCue.basis==='first_acknowledged_input'?'the first confirmed input':'program start; first-input timing was not recorded'}. Full recording includes the opening wait.`
+      :'Showing the full recording; a verified playback cue is unavailable.');
     $('replay-playback-status').textContent='Loading recording…';
     stopReplay();player.src=url.href;
     if(!replay.open)replay.showModal();
     $('replay-close').focus();
-    player.play().catch(()=>{if(replay.open&&player.src===url.href)$('replay-playback-status').textContent='Use Play to start the recording.';});
   }
+  function playFrom(seconds){
+    replayStart=seconds;
+    if(!replay.open||player.readyState<1)return;
+    try{player.currentTime=Number.isFinite(player.duration)&&seconds>=player.duration?0:seconds;}
+    catch{$('replay-playback-status').textContent='Seeking is unavailable. Use the video controls.';return;}
+    player.play().catch(()=>{if(replay.open)$('replay-playback-status').textContent='Use Play to start the recording.';});
+  }
+  player.addEventListener('loadedmetadata',()=>playFrom(replayStart));
+  $('replay-agent').addEventListener('click',()=>{if(replayCue)playFrom(replayCue.start_ms/1000);});
+  $('replay-full').addEventListener('click',()=>playFrom(0));
   $('replay-close').addEventListener('click',()=>replay.close());
   replay.addEventListener('close',()=>{
     stopReplay();
@@ -77,29 +96,30 @@
     }
     node.replaceChildren(el('span',`${format(row.acknowledged_actions)} acknowledged`));
     if(Number.isFinite(row.action_attempts))node.append(el('small',`${format(row.action_attempts)} attempted`));
-    if(row.no_op===true)node.append(el('small','No input actions executed'));
+    if(row.no_op===true)node.append(el('small',row.sdk_calls===0?'Exited without SDK calls':'No input actions executed'));
     else if(row.action_verification==='receipts_incomplete')node.append(el('small','Action evidence incomplete'));
     else if(row.action_verification!=='receipts_rechecked')node.append(el('small','Action receipts not verified'));
   }
   function renderLive(){
     const rows=snapshot.attempts;
-    const row=rows.find(item=>['running','recovering','requesting'].includes(item.status))||rows[0];
+    const row=rows.find(item=>item.id===snapshot.featured_run_id&&item.status==='completed')||rows.find(item=>['running','recovering','requesting'].includes(item.status))||rows[0];
     if(!row)return;
     const liveBadge=badge(row.status);
     if(row.status==='completed')liveBadge.textContent='Completed · saved result';
     $('live-badge').replaceWith(Object.assign(liveBadge,{id:'live-badge'}));
     $('live-id').textContent=row.id;
-    $('live-title').textContent=row.requested_model?`${row.status==='completed'?'Latest result: ':''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
+    $('live-title').textContent=row.requested_model?`${row.status==='completed'?'Latest verified result: ':''}${row.requested_model}${row.status==='completed'?'':' attempt'}`:row.mode==='script'?'Scripted integration attempt':'Full-client attempt';
     const phase=phases.find(([key])=>key===row.phase)?.[1]||'Preparing';
     const failedPhase=phases.find(([key])=>key===row.failure_phase)?.[1]||phase;
     const expectsRenderer=['running','requesting'].includes(row.status)&&['login','run_controller'].includes(row.phase);
     $('live-description').textContent=row.failure_code?`${failedPhase}: ${row.failure_code.replaceAll('_',' ')}.${row.api_response_saved?' The API response was saved; this attempt has no verified persisted score.':''}`
-      :row.status==='completed'?'The latest saved run completed. Every group of frozen inputs appears below.'
+      :row.status==='completed'?'This verified run is featured for sharing. More recent failed attempts, if any, remain in the history below.'
       :`${phase}${expectsRenderer&&row.renderer_fresh===false?' · waiting for fresh renderer state':''}. ${row.kind==='integration'?'Integration run; no persisted benchmark score.':'Persisted XP becomes available after logout and verification.'}`;
     const current=phases.findIndex(([key])=>key===row.phase);$('phases').replaceChildren();
     for(const [index,[key,label]]of phases.entries()){const node=el('li',label),state=row.phase_states?.[key];if(state==='failed'){node.textContent=`${label}: failed`;node.className='phase-failed';}else if(row.status==='completed'||state==='returned')node.className='done';else if(index===current)node.className='current';$('phases').append(node);}
     $('live-model').textContent=row.returned_model||'Awaiting exact attribution';
     inputDetails($('live-actions'),row);
+    const featured=$('featured-recording'); if(featured){featured.replaceChildren();if(row.status==='completed'&&row.recording)recording(featured,row);}
     const saved=Number.isFinite(row.persisted_xp);
     $('live-xp-label').textContent=saved?'Persisted XP · verified after logout':'Live XP change · diagnostic';
     $('live-xp').textContent=xp(saved?row.persisted_xp:row.diagnostic_xp);$('live-survival').textContent=alive(saved?row.alive_at_logout:row.alive_at_last_observation);
@@ -140,7 +160,7 @@
       if(row.kind==='integration')state.append(el('small','Unranked integration'));
       scoreCell(tr,row);cell(tr,xp(row.diagnostic_xp),'numeric');inputDetails(cell(tr,null,'input-summary'),row);publicationCell(tr,row);recording(cell(tr),row);$('history').append(tr);
     }
-    $('scope').textContent=snapshot.truncated?'Comparison scope: displayed attempts only. Older attempts are outside this export.':'Read-only results. No runs are started from this page.';
+    $('scope').textContent='Saved unranked results. No runs are started from this page.';
   }
   function freshness(){
     if(!snapshot)return;
@@ -159,7 +179,7 @@
       snapshot=next;renderLive();renderComparisons();renderHistory();freshness();
       if(replay.open){const row=snapshot.attempts.find(item=>item.id===replayRunId);if(row)replayVerification(row);}
     }catch{$('connection').className='stale';$('connection').textContent=snapshot?'Results feed unavailable · showing saved snapshot':'Results feed unavailable';}
-    finally{if(!closed)timer=setTimeout(refresh,2000);}
+    finally{ /* Saved sharing page: fetch once; no live-feed polling. */ }
   }
   window.addEventListener('pagehide',()=>{closed=true;clearTimeout(timer);stopReplay();});
   refresh();

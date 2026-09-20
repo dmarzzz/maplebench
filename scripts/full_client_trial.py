@@ -28,6 +28,7 @@ import uuid
 
 from full_client_score import verify_trial_bundle
 from full_client_freeze import FREEZE_ERROR_CODES
+import full_client_xp_windows as xp_windows
 
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\Z")
@@ -45,6 +46,8 @@ MAX_ERROR_JSON = 512
 # dashboard boundary. A safe-looking identifier or exception type is not enough.
 RELAY_ERROR_CODES = frozenset("""
 invalid_run_identity client_state_stale run_owner_changed recorder_not_ready
+invalid_provider_key_configuration conflicting_openai_key_configuration api_provider_mismatch
+api_usage_missing_or_invalid api_actual_token_limit_exceeded adaptive_api_provider_mismatch
 client_busy_or_not_ready api_key_not_configured
 invalid_input_acknowledgement client_already_connected unknown_recording_run
 recording_client_mismatch recording_already_saved capture_metadata_already_saved
@@ -64,8 +67,10 @@ untrusted_docker_executable invalid_docker_socket invalid_docker_command docker_
 readiness_policy_required invalid_readiness_policy readiness_timeout readiness_state_changed
 """.split())
 RUNTIME_ERROR_CODES = frozenset("""
-account_state_unavailable actual_api_request_mismatch actual_api_response_mismatch
-admin_operation_failed admin_request_limit admin_response_limit
+account_state_unavailable account_still_online actual_api_request_mismatch actual_api_response_mismatch
+actual_api_exchange_mismatch baseline_skill_toolkit_mismatch native_skill_toolkit_mismatch
+invalid_frozen_knowledge_pack knowledge_files_not_frozen
+admin_operation_failed admin_request_limit admin_response_limit adaptive_evidence_mismatch
 artifact_changed_during_collection artifact_size_limit artifact_symlink
 attempt_directory_mismatch backend_owner_mismatch backend_state_missing
 baseline_identity_mismatch bridge_budget_mismatch capture_metadata_hash_mismatch capture_verification_failed
@@ -109,6 +114,9 @@ unowned_server_cleanup_refused unprivileged_services_required unsupported_progra
 unsupported_runtime_config waiting_browser_required web_entrypoint_mismatch web_interpreter_mismatch
 web_process_missing web_process_predates_frozen_sources web_runtime_paths_mismatch web_uid_mismatch
 world_helper_or_worker_active world_or_queue_lock_not_owned
+xp_window_opt_in_required unsupported_xp_window_protocol invalid_xp_window_contract
+native_xp_ledger_class_missing native_xp_initialization_missing native_xp_header_invalid
+xp_window_evidence_incomplete
 """.split()) | FREEZE_ERROR_CODES | RELAY_ERROR_CODES
 
 
@@ -222,28 +230,35 @@ def private_directory(path, *, create=False):
     return path
 
 
-def read_private_json(path):
+def read_private_json(path, *, expected_sha256=None):
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     with os.fdopen(fd, "rb") as source:
         info = os.fstat(source.fileno())
         require(stat.S_ISREG(info.st_mode) and info.st_uid in (0, os.geteuid())
                 and not info.st_mode & 0o077, "private_file_required")
-        return decode(source.read(MAX_JSON + 1))
+        raw = source.read(MAX_JSON + 1)
+        require(expected_sha256 is None or isinstance(expected_sha256, str)
+                and SHA.fullmatch(expected_sha256) and hashlib.sha256(raw).hexdigest() == expected_sha256,
+                "recovery_journal_changed")
+        return decode(raw)
 
 
 def validate_spec(spec):
     require(isinstance(spec, dict), "invalid_spec")
-    require(set(spec) == {"schema_version", "model", "scenario_fingerprint",
-                          "baseline_sha256", "budgets"}, "invalid_spec_fields")
-    require(type(spec["schema_version"]) is int and spec["schema_version"] == 1,
-            "unsupported_schema")
+    adaptive = spec.get("schema_version") in (2, 3)
+    fields = {"schema_version", "model", "scenario_fingerprint", "baseline_sha256", "budgets"}
+    require(set(spec) == fields | ({"protocol"} if adaptive else set()), "invalid_spec_fields")
+    require(type(spec["schema_version"]) is int and spec["schema_version"] in (1, 2, 3), "unsupported_schema")
+    if adaptive:
+        require(spec.get("protocol") == (xp_windows.PROTOCOL if spec["schema_version"] == 3 else "full-client-adaptive-pilot-v1"),
+                "unsupported_protocol")
     require(isinstance(spec["model"], str) and ID.fullmatch(spec["model"]), "invalid_model")
     for name in ("scenario_fingerprint", "baseline_sha256"):
         require(isinstance(spec[name], str) and SHA.fullmatch(spec[name]), "invalid_" + name)
-    bounds = {"total_seconds": (1, 1800), "operation_seconds": (1, 300),
+    bounds = {"total_seconds": (1, 1800), "operation_seconds": (335, 600) if adaptive else (1, 300),
               "controller_seconds": (1, 300), "max_actions": (1, 10000),
-              "max_api_requests": (1, 1), "max_output_tokens": (1, 32000),
+              "max_api_requests": (1, 16) if adaptive else (1, 1), "max_output_tokens": (1, 48000) if adaptive else (1, 32000),
               "max_total_tokens": (1, 1000000)}
     budgets = spec["budgets"]
     require(isinstance(budgets, dict) and set(budgets) == set(bounds), "invalid_budgets")
@@ -252,6 +267,8 @@ def validate_spec(spec):
                 "invalid_budget_" + name)
     require(budgets["controller_seconds"] <= budgets["total_seconds"]
             and budgets["max_output_tokens"] <= budgets["max_total_tokens"], "inconsistent_budgets")
+    if adaptive:
+        require(budgets["controller_seconds"] == 300 and budgets["total_seconds"] >= 600, "inconsistent_adaptive_budgets")
     return copy.deepcopy(spec)
 
 
@@ -308,7 +325,7 @@ class CommandAdapter:
                 arguments.append(path)
         scorer = Path(sys.modules[verify_trial_bundle.__module__].__file__).resolve()
         self.pinned_files = sorted({str(path.absolute()) for path in
-                                    (executable, Path(__file__), scorer,
+                                    (executable, Path(__file__), scorer, Path(xp_windows.__file__).resolve(),
                                      *arguments, *(Path(path) for path in dependencies))})
         self.fingerprint = self._fingerprint()
 
@@ -449,10 +466,10 @@ class TrialRunner:
         self.state["events"].append(event)
         atomic_json(self.root / self.state["attempt_id"] / "journal.json", self.state)
 
-    def _load(self, attempt_id):
+    def _load(self, attempt_id, *, expected_sha256=None):
         require(isinstance(attempt_id, str) and ID.fullmatch(attempt_id), "invalid_attempt_id")
         private_directory(self.root / attempt_id)
-        state = read_private_json(self.root / attempt_id / "journal.json")
+        state = read_private_json(self.root / attempt_id / "journal.json", expected_sha256=expected_sha256)
         require(isinstance(state, dict) and type(state.get("schema_version")) is int
                 and state.get("schema_version") == 1
                 and state.get("attempt_id") == attempt_id
@@ -463,13 +480,16 @@ class TrialRunner:
         validate_spec(state.get("request"))
         return state
 
-    def _require_no_unrecovered(self):
+    def _require_no_unrecovered(self, proposed_id=None):
+        import full_client_pre_runtime_abort as abort
+        retired, certified_failed = abort.certified(self.root)
+        require(proposed_id not in retired, "attempt_permanently_retired")
         for child in self.root.iterdir():
             if child.name.startswith("."):
                 continue
             # Unknown/corrupt attempts are quarantines, never ignored.
             state = self._load(child.name)
-            require(state.get("status") in ("completed", "recovered"), "recovery_required")
+            require(state.get("status") in ("completed", "recovered") or child.name in certified_failed, "recovery_required")
 
     def preflight(self, timeout_seconds=30):
         require(type(timeout_seconds) is int and 1 <= timeout_seconds <= 120,
@@ -534,7 +554,9 @@ class TrialRunner:
                               ("controller_ms", budgets["controller_seconds"] * 1000)):
             require(type(receipt.get(name)) is int and 0 <= receipt[name] <= maximum,
                     "usage_invalid_" + name)
-        require(receipt["api_requests"] == 1 and receipt["total_tokens"] >= receipt["output_tokens"],
+        require((receipt["api_requests"] >= 1 if spec["schema_version"] in (2, 3) else receipt["api_requests"] == 1)
+                and (spec["schema_version"] == 1 or receipt.get("protocol") == spec["protocol"])
+                and receipt["total_tokens"] >= receipt["output_tokens"],
                 "usage_inconsistent")
         self.state["api_outcome"] = "confirmed"
         self.state["charged_usage"] = {k: receipt[k] for k in ("api_requests", "total_tokens")}
@@ -551,7 +573,7 @@ class TrialRunner:
         attempt_id = attempt_id or uuid.uuid4().hex
         require(isinstance(attempt_id, str) and ID.fullmatch(attempt_id), "invalid_attempt_id")
         with self._locks():
-            self._require_no_unrecovered()
+            self._require_no_unrecovered(attempt_id)
             attempt_dir = self.root / attempt_id
             require(not attempt_dir.exists() and not attempt_dir.is_symlink(), "attempt_exists")
             self.state = {"schema_version": 1, "attempt_id": attempt_id, "request": spec,
@@ -577,11 +599,17 @@ class TrialRunner:
                         evidence = receipt.get("evidence")
                         require(isinstance(evidence, dict) and evidence.get("run_id") == attempt_id,
                                 "evidence_attempt_mismatch")
-                        require(evidence.get("scenario_fingerprint") == spec["scenario_fingerprint"]
-                                and isinstance(evidence.get("baseline"), dict)
-                                and evidence["baseline"].get("sha256") == spec["baseline_sha256"],
-                                "evidence_baseline_mismatch")
-                        self.state["score"] = self.verify_bundle(evidence, attempt_dir, receipt.get("artifacts"))
+                        if spec["schema_version"] == 3:
+                            require(evidence.get("protocol") == xp_windows.PROTOCOL
+                                    and evidence.get("scenario_fingerprint") == spec["scenario_fingerprint"]
+                                    and evidence.get("baseline_sha256") == spec["baseline_sha256"], "evidence_baseline_mismatch")
+                            self.state["score"] = xp_windows.verify_trial_bundle(evidence, attempt_dir, receipt.get("artifacts"))
+                        else:
+                            require(evidence.get("scenario_fingerprint") == spec["scenario_fingerprint"]
+                                    and isinstance(evidence.get("baseline"), dict)
+                                    and evidence["baseline"].get("sha256") == spec["baseline_sha256"],
+                                    "evidence_baseline_mismatch")
+                            self.state["score"] = self.verify_bundle(evidence, attempt_dir, receipt.get("artifacts"))
                         self._event("evidence_verified")
                     elif operation == "cleanup":
                         require(receipt.get("clean") is True, "cleanup_unconfirmed")
@@ -593,10 +621,10 @@ class TrialRunner:
                 self._quarantine(error)
                 raise
 
-    def recover(self, attempt_id, timeout_seconds=120):
+    def recover(self, attempt_id, timeout_seconds=120, *, expected_journal_sha256=None):
         require(type(timeout_seconds) is int and 1 <= timeout_seconds <= 300, "invalid_recovery_timeout")
         with self._locks():
-            self.state = self._load(attempt_id)
+            self.state = self._load(attempt_id, expected_sha256=expected_journal_sha256)
             require(self.state.get("status") not in ("completed", "recovered"), "attempt_already_terminal")
             require(self.state.get("adapter_fingerprint") == getattr(self.adapter, "fingerprint", None),
                     "recovery_adapter_mismatch")
@@ -622,12 +650,14 @@ class TrialRunner:
 
 
 def main(argv=None):
+    import full_client_operation_admission as admission
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adapter-config", required=True, type=Path,
                         help="Private JSON {argv:[absolute executable, fixed file arguments],dependencies:[absolute files]}")
     parser.add_argument("--state-root", required=True, type=Path)
     parser.add_argument("--world-lock", required=True, type=Path)
     parser.add_argument("--queue-lock", required=True, type=Path)
+    admission.add_arguments(parser, inherited=True)
     sub = parser.add_subparsers(dest="command", required=True)
     preflight = sub.add_parser("preflight", help="Read-only backend prerequisites/status; no locks or trial")
     preflight.add_argument("--timeout-seconds", type=int, default=30,
@@ -640,20 +670,63 @@ def main(argv=None):
     recover.add_argument("--timeout-seconds", type=int, default=120)
     args = parser.parse_args(argv)
     try:
+        require((args.operation_recovery is None and args.operation_recovery_sha256 is None)
+                or (args.command == "recover" and args.operation_envelope is not None),
+                "operation_recovery_forbidden")
         config = read_private_json(args.adapter_config)
         require(isinstance(config, dict) and set(config) == {"argv", "dependencies"}, "invalid_adapter_config")
         runner = TrialRunner(args.state_root, args.world_lock, args.queue_lock,
                              CommandAdapter(config["argv"], config["dependencies"]))
         if args.command == "preflight":
             result = {"status": "preflight", **runner.preflight(args.timeout_seconds)}
-        elif args.command == "run":
-            result = runner.run(read_private_json(args.request), args.attempt_id)
         else:
-            result = runner.recover(args.attempt_id, args.timeout_seconds)
+            require(sys.platform.startswith("linux") and os.geteuid() == 0, "linux_root_required")
+            require(isinstance(args.attempt_id, str) and ID.fullmatch(args.attempt_id), "explicit_attempt_id_required")
+            actual_config, config_ref = admission.private_ref(args.adapter_config)
+            require(actual_config == config, "adapter_config_changed")
+            request, request_ref = (admission.private_ref(args.request) if args.command == "run" else (None, None))
+            if any(value is not None for value in (args.operation_envelope, args.operation_envelope_sha256,
+                                                    args.operation_fd)):
+                with admission.inherited_trial(args, config_ref, request, request_ref) as joined:
+                    # The join descriptor stays here; it is never forwarded to
+                    # CommandAdapter or its two-descriptor world/queue bridge.
+                    if args.command == "recover":
+                        result = runner.recover(args.attempt_id, args.timeout_seconds,
+                            expected_journal_sha256=joined["recovery"]["journal"]["sha256"])
+                    else:
+                        result = runner.run(request, args.attempt_id)
+            else:
+                authority_ref, claim_ref = admission.argument_refs(args, reconcile=args.command == "recover")
+                authority = admission.gate.read_ref(authority_ref, 0, admission.gate.Budget())
+                require(authority["operation_id"] == args.attempt_id, "operation_attempt_mismatch")
+                if args.command == "recover":
+                    request_ref = authority["subject"]["request"]
+                    request = admission.gate.read_ref(request_ref, 0, admission.gate.Budget())
+                subject = admission.trial_subject(args, config_ref, request_ref)
+                with admission.admitted(authority_ref, subject, "standalone_trial", args.state_root,
+                        claim_ref=claim_ref, required_sources=(__file__,)) as operation:
+                    if operation.completed:
+                        result = {"status": "operation_already_completed", "attempt_id": args.attempt_id,
+                                  "terminal": operation.terminal, "new_api_requests": 0}
+                    else:
+                        if args.command == "run":
+                            result = runner.run(request, args.attempt_id)
+                        else:
+                            saved = runner._load(args.attempt_id)
+                            require(saved["request"] == request, "recovery_request_mismatch")
+                            if saved["status"] in ("completed", "recovered"):
+                                # Resolve a lost closeout reply without replaying
+                                # either the trial or its cleanup operations.
+                                runner.state = saved
+                                result = runner.summary()
+                            else:
+                                result = runner.recover(args.attempt_id, args.timeout_seconds)
+                        evidence = admission.trial_terminal(runner, args.attempt_id, request)
+                        result["operation_terminal"] = operation.finish(evidence)
         print(json.dumps(result, sort_keys=True))
         return 2 if args.command == "preflight" and not result["ready"] else 0
     except (Exception, KeyboardInterrupt) as error:
-        code = str(error) if isinstance(error, TrialError) else "runner_failed"
+        code = str(error) if isinstance(error, (TrialError, admission.gate.GateError)) else "runner_failed"
         print(json.dumps({"status": "blocked", "code": code, "publication_eligible": False}))
         return 1
 

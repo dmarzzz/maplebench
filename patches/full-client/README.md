@@ -9,6 +9,54 @@ From that checkout, apply `0001-demo-control-and-observation.patch` and
 Build with the upstream documented workflow. The verified ARM64 fallback used
 Emscripten 4.0.21, one build job, two CPUs, a 3500 MiB memory cap, and no swap.
 
+## Expanded v1 candidate
+
+The original two-patch instructions above describe the early integration. The
+expanded Hero candidate uses the complete ordered Client C series: `0001` through
+`0006`, then `0008` through `0023` (there is no `0007`). Exact patch and binary
+hashes, upstream revision and source revision are recorded in
+[V1_NATIVE_BUILD_INPUTS.json](../../docs/V1_NATIVE_BUILD_INPUTS.json).
+
+The recovered JavaScript and WebAssembly bytes independently matched those pins.
+Their historical build receipt is not fresh native skill qualification. Keep the
+whole patch series when reproducing that candidate: later patches depend on earlier
+combat, packet and observation changes. In particular, Combo/finishers and ordinary
+multi-field buffs require `0017` and `0023`. The included monster-status client
+decoder requires the matching Cosmic `0002-monster-status-order.patch`.
+
+The Client D candidate additionally applies `0024-authored-melee-afterimage.patch`.
+The equipped level-120 sword requests afterimage bucket `12`, while its authored
+weapon family ends at `10`. The repair preserves a valid exact bucket and otherwise
+chooses the highest valid lower numeric bucket for the same family and attack
+stance. It uses the asset's positive-area rectangle, with a bounded lookup. Missing
+weapon geometry can retain an explicit skill rectangle; otherwise close attacks
+produce no targets. The generic player range never becomes substitute melee reach.
+The focused C++ regression compiles the exact policy included in the patch. A new
+binary receipt and native qualification are required for this candidate.
+
+Client E also applies `0025-hero-shout-attack-route.patch`. It marks Shout as a
+physical attack, so the client sends the ordinary close-range attack packet.
+Shout's authored action and level-specific attack rectangle remain unchanged.
+The source regression compiles the actual skill-routing function and checks all
+17 declared Hero controls: seven physical attacks, nine self buffs or cures, and
+Armor Crash's ordinary enemy-debuff route. The preserved Client D source fails
+that check specifically for Shout; the patched source passes. This routing check
+does not certify every conditional effect. The separate native gate still
+requires direct effect evidence for the ten core skills.
+
+Client F additionally applies `0026-rush-selected-target.patch`. Attack results
+start with empty target endpoints and retain the last monster actually selected,
+including groups smaller than Rush's fifteen-target limit. Rush therefore uses
+an actual selected monster's position. The compiled source regression exercises
+the real target-selection and Rush functions with zero, one, fourteen, fifteen,
+and excess targets, plus candidates that disappear before damage application.
+Attack reach, damage lines, target limits, and packet encoding are unchanged.
+The fresh binary receipt is recorded in the build-input manifest; native
+qualification remains required.
+
+Game binaries and assets remain private. A newly instrumented server receives its
+own build/runtime hash before the cohort; it does not inherit the old JAR's pin.
+
 The first patch:
 
 - Queues browser keyboard callbacks onto the game loop to avoid entering an

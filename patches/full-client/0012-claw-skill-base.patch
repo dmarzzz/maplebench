@@ -1,0 +1,41 @@
+--- a/src/client/Gameplay/Combat/Attack.h
++++ b/src/client/Gameplay/Combat/Attack.h
+@@ -49,6 +49,8 @@
+         float critical      = 0.0f;
+         int32_t critical_bonus_percent = 0;
+         int32_t weapon_damage_percent = 100;
++        int32_t weaponattack = 0;
++        bool claw_projectile = false;
+         float ignoredef     = 0.0f;
+         int32_t matk        = 0;
+         int32_t totalmagic  = 0;
+--- a/src/client/Character/Player.cpp
++++ b/src/client/Character/Player.cpp
+@@ -357,6 +357,8 @@
+         }
+         attack.intelligence = stats.get_total(Equipstat::INT);
+         attack.luck         = stats.get_total(Equipstat::LUK);
++        attack.weaponattack = stats.get_total(Equipstat::WATK);
++        attack.claw_projectile = attacktype == Attack::RANGED && get_weapontype() == Weapon::CLAW;
+         attack.totalmagic   = attack.intelligence + stats.get_total(Equipstat::MAGIC);
+         // Critical Shot/Throw apply to projectile attacks, including ordinary
+         // shots. Resolve from current learned skills on every attack: removing
+--- a/src/client/Gameplay/Combat/Skill.cpp
++++ b/src/client/Gameplay/Combat/Skill.cpp
+@@ -212,6 +212,16 @@
+         }
+         else
+         {
++            // Lucky Seven/Triple Throw have a LUK-only base range and fixed
++            // 50% lower bound, before the ordinary skill/critical coefficient.
++            // Other claw attacks and melee fallback retain their regular base.
++            if (attack.type == Attack::RANGED && attack.claw_projectile
++                && (skillid == 4001344 || skillid == 4121007))
++            {
++                const double base = static_cast<double>(attack.luck) * attack.weaponattack / 100.0;
++                attack.mindamage = 2.5 * base;
++                attack.maxdamage = 5.0 * base;
++            }
+             // Ordinary physical skill damage and critical bonus are additive
+             // after defense. Arrow Bomb's splash coefficient is the exception:
+             // it modifies the base range, so critical is multiplicative there.

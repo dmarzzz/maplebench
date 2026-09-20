@@ -1,0 +1,247 @@
+{
+  "client_base_source_commit": "169c326cbe0cbdaf84c045c4fdc92af3834f20a2",
+  "client_build_history": [
+    {
+      "build_receipt_sha256": "adc6bb86cf09436bfaca3f81a25eaa7d8278de73638ba87bd88ab59d43b9ad9d",
+      "name": "Client C",
+      "outputs": {
+        "JourneyClient.js": {
+          "bytes": 233074,
+          "sha256": "297f8b78a68dffd6c4491a2991f875487e9c26e4f6bd92143625ed9055c63efc"
+        },
+        "JourneyClient.wasm": {
+          "bytes": 5408798,
+          "sha256": "cae2ec1b924cf2f110081466a808444a87e4bbd23b9e73fae46e1a920f4b74b3"
+        }
+      },
+      "role": "preserved_base_used_for_failed_native_attempts",
+      "source_commit": "169c326cbe0cbdaf84c045c4fdc92af3834f20a2",
+      "source_manifest_sha256": "46f15c659c493d1586de84057d113cf7ce7fe411e816a6dda73c9256ca361938"
+    },
+    {
+      "build_receipt_sha256": "f618f52f18418f609cd9f4db5f28c49f2b8257b63bc2dc733b4a77b40a390011",
+      "name": "Client D",
+      "outputs": {
+        "JourneyClient.js": {
+          "bytes": 233074,
+          "sha256": "297f8b78a68dffd6c4491a2991f875487e9c26e4f6bd92143625ed9055c63efc"
+        },
+        "JourneyClient.wasm": {
+          "bytes": 5411201,
+          "sha256": "bfb29dd81c071dd4be4e271cdda913872a24d265e5e8c388aa013a2831f2fb5f"
+        }
+      },
+      "parent_source_manifest_sha256": "46f15c659c493d1586de84057d113cf7ce7fe411e816a6dda73c9256ca361938",
+      "patch_sha256": "96a7e01b9f8c0493c5a16a7e603016b4fae99d9bbdcf5ed26a6ef4db8a7c972e",
+      "role": "preserved_afterimage_repair_candidate_not_used_for_native_qualification",
+      "source_manifest_sha256": "451e00152d2a5ab7dc2f512a3e37d3de8f6b5eb3b77e56262a0ae5a9a96590f2"
+    },
+    {
+      "build_receipt_sha256": "d13c52da7c5c299c77898d86ce1bdb56f14142b3ca58207e046cb5895e6bfb26",
+      "name": "Client E",
+      "outputs": {
+        "JourneyClient.js": {
+          "bytes": 233074,
+          "sha256": "40dbcdf823fc24366204721282a5e7e90a572454bd425769bd225e3c0a51640a"
+        },
+        "JourneyClient.wasm": {
+          "bytes": 5411214,
+          "sha256": "ecf60ec86e8853d3e3fd8e2c014ff252e0825b33231af565eb21892b1bc17ce1"
+        }
+      },
+      "parent_source_manifest_sha256": "451e00152d2a5ab7dc2f512a3e37d3de8f6b5eb3b77e56262a0ae5a9a96590f2",
+      "patch_sha256": "d6cc3d8f87e419c5ca87c3d2a07d9bd61aef58844c0106d14f3daa56c225d184",
+      "role": "preserved_afterimage_and_route_repair_used_for_failed_native_attempts",
+      "source_manifest_sha256": "4dbb8ea8fd49a35d106b2998337f99830aa14419b0859c4cc40e8f70451556d4"
+    }
+  ],
+  "client_build_limits": {
+    "cpus": 2,
+    "emscripten_image_id": "sha256:631841e7ee7a808bc2735a4f26aff3c1354119764df8459c38abfe2d0923dffb",
+    "inner_timeout_seconds": 280,
+    "jobs": 1,
+    "memory_limit_mib": 2300,
+    "network": "none",
+    "outer_timeout_seconds": 300,
+    "swap_mib": 0
+  },
+  "client_build_receipt_sha256": "fe31311cbae601a3aa3d8a6407de795e74e485ddf712a8f0dd77caa44303c052",
+  "client_outputs": {
+    "JourneyClient.js": {
+      "bytes": 233074,
+      "sha256": "40dbcdf823fc24366204721282a5e7e90a572454bd425769bd225e3c0a51640a"
+    },
+    "JourneyClient.wasm": {
+      "bytes": 5411205,
+      "sha256": "51b3396552c38fa34a746d3f52c70e7759ea6b2aee4abe6d945a63cc1fe9dd60"
+    }
+  },
+  "client_parent_source_manifest_sha256": "4dbb8ea8fd49a35d106b2998337f99830aa14419b0859c4cc40e8f70451556d4",
+  "client_patch_sha256": [
+    {
+      "path": "0001-demo-control-and-observation.patch",
+      "sha256": "a319e35f0ed6d1fee60a19884035274060ba9a4890b41184aca5b003a158088e"
+    },
+    {
+      "path": "0002-key-config-access.patch",
+      "sha256": "f2917e48f515069170ab07587abbb19ccb19990936b27ecae568022c5b3d36ca"
+    },
+    {
+      "path": "0003-projectile-ammunition.patch",
+      "sha256": "11a7402e0b63667c023e67317a0aa536e270bd6d6174adb114b21b47e8cd03b5"
+    },
+    {
+      "path": "0004-ranged-header-padding.patch",
+      "sha256": "75fb83ccdcd8705f810b5eb0046da0a2615520acd5d6d7687c483a30831cf5ff"
+    },
+    {
+      "path": "0005-fixture-attack-flags.patch",
+      "sha256": "0db3f6b343260b1ce63317bb74f3f7da6f845eefe146e8004edfe9de32c1ab2c"
+    },
+    {
+      "path": "0006-training-toolkit-attack-flags.patch",
+      "sha256": "9d88373bcfed962420a8b7b9bcf98ac9c77af6d5ad763b4e0ba91b4cc0ee2ce0"
+    },
+    {
+      "path": "0008-spell-damage.patch",
+      "sha256": "b641febb6ee31c094b32ac109cb1462ca9983cfe3bb6ab599602cdad52249547"
+    },
+    {
+      "path": "0009-bow-expert.patch",
+      "sha256": "d5c08b431b421c31eab21806d181bec394da4d57d044be5dd9273f2f8d3f47c7"
+    },
+    {
+      "path": "0010-critical-passives.patch",
+      "sha256": "200f47cef53145f5389db0f20e9c13cd3c634628d94d1d2faf229fe6f6ade34a"
+    },
+    {
+      "path": "0011-arrow-bomb-power.patch",
+      "sha256": "5bb2e2727ef8f43b2b4cf85970c81e307f3964c3c1efb7d610885d439eba2c77"
+    },
+    {
+      "path": "0012-claw-skill-base.patch",
+      "sha256": "b2426904ee7317315fba436888ad693900a7232ef9d6d4ed588951898e2121f5"
+    },
+    {
+      "path": "0013-shadow-stars-cost-and-presence.patch",
+      "sha256": "ab2ee8f7818df894ba4c84a7d5e5cf0f4fe8cb4d2ed3713f395097b10c949030"
+    },
+    {
+      "path": "0014-fixed-step-catch-up.patch",
+      "sha256": "8657f1c824e756dbe0437046ae6bfd818893e1f0dcb1c1c574bc5f065fa9926f"
+    },
+    {
+      "path": "0015-split-packet-framing.patch",
+      "sha256": "569fecf03d034658744681b0b59910d88219bf940d150713ba94b0da93beacea"
+    },
+    {
+      "path": "0016-mob-lifecycle-order.patch",
+      "sha256": "7caef44b87a3fcd039d60884ae8f141336328ffd24e6f860fd383715d0e0eff6"
+    },
+    {
+      "path": "0017-combat-buff-semantics.patch",
+      "sha256": "0a01b29641deabde4ee3bf3c42bd9e11137823f2267e678262929cbb0fc26f32"
+    },
+    {
+      "path": "0018-hurricane-channel.patch",
+      "sha256": "62372c0996adc42ecadc83ea3abe6b6cfb3fc0039d0bbbcbbe66085a4e397155"
+    },
+    {
+      "path": "0019-skill-effect-observation.patch",
+      "sha256": "40bbd2eb0ac9ed97f8ea4c97ef36737da67ffb748d406ffce4c0815f1e7e76fa"
+    },
+    {
+      "path": "0020-shadow-partner.patch",
+      "sha256": "50bef4dad4b358642d8442c4fe6c6ccb35fd061b5ba613eb8d8d108ef484b9a5"
+    },
+    {
+      "path": "0021-monster-movement-status.patch",
+      "sha256": "940eebb7ef6dfacea4e0f926feec85952fbfb473f27069b112ec35e48ca3db55"
+    },
+    {
+      "path": "0022-achilles-authority.patch",
+      "sha256": "8c77514c05e4e3bde1dc0db7e085fc6896b80c8ffcf39edf486d2414777f937c"
+    },
+    {
+      "path": "0023-ordinary-buff-wire-order.patch",
+      "sha256": "e0768b5a84a7223a37dfb7c7f353d3b2a50791822ada6f092adf2fc6b70db7f1"
+    },
+    {
+      "path": "0024-authored-melee-afterimage.patch",
+      "sha256": "96a7e01b9f8c0493c5a16a7e603016b4fae99d9bbdcf5ed26a6ef4db8a7c972e"
+    },
+    {
+      "path": "0025-hero-shout-attack-route.patch",
+      "sha256": "d6cc3d8f87e419c5ca87c3d2a07d9bd61aef58844c0106d14f3daa56c225d184"
+    },
+    {
+      "path": "0026-rush-selected-target.patch",
+      "sha256": "e4a04e4ac0f32a9926e663b6610e0657fe359da9bebdace76c95d8d59e2c4c28"
+    }
+  ],
+  "client_rush_target_check": {
+    "available_target_counts": [
+      0,
+      1,
+      14,
+      15,
+      20
+    ],
+    "damage_lines_and_target_limit_unchanged": true,
+    "disappearing_first_and_last_candidates_checked": true,
+    "native_effect_qualification_claimed": false,
+    "patched_client_f": "actual_selected_endpoints_and_rush_destination_pass",
+    "preserved_client_e_expected_failure": "one_target_with_fifteen_target_cap_has_no_initialized_last_endpoint",
+    "receipt_sha256": "e5cedca80336031aa1ea386f72b8067e5783391ada5607b25998ff2c1bbd4b8b",
+    "zero_target_limit_checked": true
+  },
+  "client_source_manifest_sha256": "a11bcd9438f70b6d1bc2d7e503b5768fa55aebd18761d44adb499f3aef661c93",
+  "client_source_route_check": {
+    "conditional_effects_certified": false,
+    "declared_active_skills": 17,
+    "enemy_debuff_routes": 1,
+    "patched_client_e": "all_declared_routes_pass",
+    "physical_attack_routes": 7,
+    "preserved_client_d_expected_failure": "Shout",
+    "receipt_sha256": "56121aeaaeb688a9315c74b577119b28bf984b3886c94865914e380eea7d4254",
+    "selected_client_f_route_source_identical_to_e": true,
+    "self_buff_or_cure_routes": 9
+  },
+  "client_upstream_commit": "bc0234fe7c7f53322453e7bdd79564d9aca4cd8b",
+  "matching_server_jar_sha256": "394c2afee55f3affee0bc7df720ec972a2bb36a96b0386b637fb113e87e9942c",
+  "matching_server_source_commit": "d2fe0671db0bf4932b44fc117e581c0258f65dbb",
+  "native_skill_producer_candidate": {
+    "build_receipt_sha256": "eaed4c7b3c67daf53f07c5f1a22cc5e07dce9ee484a0b900c0070a161d1849fc",
+    "cpus": 2,
+    "forks": 1,
+    "input_sha256": {
+      "patches/cosmic/0003-native-hero-skill-evidence.patch": "d2d07d42652dd4a7cce7606fc16ce7dd4e5e152f0d889add1312a6ed7bcda386",
+      "patches/cosmic/overlay/src/main/java/server/bots/MapleBenchSkillControlServer.java": "d88d1ddfb5105f1d87bda40a8924a2086bc754326ee59a1dc8e3a6901b244917",
+      "patches/cosmic/overlay/src/main/java/server/bots/MapleBenchSkillHooks.java": "597e5ac8bcd1447c8a1e1df9334eb4d3dd943e56b858f381688d3e78f1b9c350",
+      "patches/cosmic/overlay/src/main/java/server/bots/MapleBenchSkillLedger.java": "6f7ccf458b64a3f6f75c21eaec50afb3dcab73cdaa896c8bcec3339fd40ddf3a",
+      "patches/cosmic/overlay/src/test/java/server/bots/MapleBenchSkillEvidenceTest.java": "03df9f0625b20b2cdc05d133fdd40cdae4a79d46f6e543900cb021bdf3ffcedc"
+    },
+    "jar_bytes": 54053717,
+    "jar_sha256": "87a35206c651348c25ef7b60e4e9bb257d0c815165bb9a6a41a140c15164f99e",
+    "live_qualification": false,
+    "maven_heap_mib": 768,
+    "memory_limit_mib": 2300,
+    "original_source_cache_and_jar_unchanged": true,
+    "parent_jar_sha256": "394c2afee55f3affee0bc7df720ec972a2bb36a96b0386b637fb113e87e9942c",
+    "source_manifest_sha256": "9117a9e8e185b916a899c9d0b9955b128cdbe50343cd3e6fe2a13819f63ef145",
+    "status": "built_native_qualification_pending",
+    "test_heap_mib": 1024,
+    "tests": {
+      "MapleBenchSkillEvidenceTest": {
+        "errors": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 9
+      }
+    }
+  },
+  "schema_version": 1,
+  "selected_client": "Client F",
+  "server_overlay_change_requires_new_jar_pin": true,
+  "status": "repaired_client_built_native_release_qualification_pending"
+}

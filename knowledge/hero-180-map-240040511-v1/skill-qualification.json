@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "id": "hero-180-v1-control-qualification",
+  "fixture": {
+    "profile_id": "hero-180-expanded-v1",
+    "class_name": "Hero",
+    "level": 180,
+    "expected_map_id": 240040511,
+    "protocol": "full-client-adaptive-pilot-v1"
+  },
+  "toolkit": {
+    "policy_id": "full-client-hero-toolkit-v1",
+    "invocable_skill_count": 17,
+    "passive_count": 8,
+    "unsupported_count": 4
+  },
+  "status_meanings": {
+    "native_accepted": "A committed public evidence summary reports this capability in prior native Hero runs.",
+    "not_established": "The committed public evidence does not establish this exact control or effect.",
+    "planned": "The v1 release must run and verify this check; no successful release result is claimed."
+  },
+  "release_status": "planned",
+  "controls": [
+    {
+      "name": "LEFT",
+      "mapping": "move left",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input followed by fresh native leftward displacement"
+    },
+    {
+      "name": "RIGHT",
+      "mapping": "move right",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input followed by fresh native rightward displacement"
+    },
+    {
+      "name": "UP",
+      "mapping": "up input",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input and fixture-relevant native effect, if any"
+    },
+    {
+      "name": "DOWN",
+      "mapping": "down input",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input and fixture-relevant native effect, if any"
+    },
+    {
+      "name": "JUMP",
+      "mapping": "jump",
+      "historical_status": "native_accepted",
+      "release_status": "planned",
+      "check": "accepted input followed by fresh native jump displacement"
+    },
+    {
+      "name": "ATTACK",
+      "mapping": "basic attack",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input causally linked to native attack and damage evidence"
+    },
+    {
+      "name": "HP_POTION",
+      "mapping": "mapped HP consumable input",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input linked to native inventory decrement and HP change"
+    },
+    {
+      "name": "MP_POTION",
+      "mapping": "mapped MP consumable input",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input linked to native inventory decrement and MP change"
+    },
+    {
+      "name": "PRIMARY_SKILL",
+      "mapping": "Brandish",
+      "historical_status": "native_accepted",
+      "release_status": "planned",
+      "check": "accepted input causally linked to native Brandish damage and ordinary saved XP"
+    },
+    {
+      "name": "SECONDARY_SKILL",
+      "mapping": "Combo Attack",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input linked to exact native buff state, then server-confirmed hits and native-instrumented combo-orb changes; sdk.observe does not expose buffs or orbs"
+    },
+    {
+      "name": "BUFF_1",
+      "mapping": "Sword Booster",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input linked to exact native buff state plus HP and MP costs"
+    },
+    {
+      "name": "BUFF_2",
+      "mapping": "Maple Warrior",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input linked to exact native buff and stat changes"
+    },
+    {
+      "name": "SKILL_5",
+      "mapping": "Rush",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input linked to native attack damage and resource use; displacement and contact behavior remain outside the core-ten qualification receipt"
+    },
+    {
+      "name": "SKILL_6",
+      "mapping": "Sword Coma",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "with native-instrumented combo charge, accepted input linked to native finisher damage and orb consumption; stun or other status effects remain outside the core-ten qualification receipt, and sdk.observe does not expose orbs"
+    },
+    {
+      "name": "SKILL_7",
+      "mapping": "Sword Panic",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "after server-confirmed hits rebuild native-instrumented combo charge, accepted input linked to native finisher damage and orb consumption; sdk.observe does not expose orbs"
+    },
+    {
+      "name": "SKILL_8",
+      "mapping": "Power Stance",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input linked to exact native buff state; do not infer knockback behavior from the cast alone"
+    },
+    {
+      "name": "SKILL_9",
+      "mapping": "Rage",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input linked to exact native attack and defense stat changes"
+    },
+    {
+      "name": "SKILL_10",
+      "mapping": "Power Guard",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input linked to native buff state and resource use; contact-damage ratio and behavior remain outside the core-ten qualification receipt"
+    },
+    {
+      "name": "SKILL_11",
+      "mapping": "Enrage",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input reaches the declared native skill route; its buff effect remains outside the core-ten qualification receipt"
+    },
+    {
+      "name": "SKILL_12",
+      "mapping": "Hero's Will",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input reaches the declared native skill route; effect qualification requires a removable status and is not claimed"
+    },
+    {
+      "name": "SKILL_13",
+      "mapping": "Shout",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input reaches the declared native attack route; no stun probability is claimed"
+    },
+    {
+      "name": "SKILL_14",
+      "mapping": "Armor Crash",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input reaches the declared native skill route; effect qualification requires a suitable monster buff and is not claimed"
+    },
+    {
+      "name": "SKILL_15",
+      "mapping": "Iron Body",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input reaches the declared native skill route; its buff effect remains outside the core-ten qualification receipt"
+    },
+    {
+      "name": "SKILL_16",
+      "mapping": "Power Strike",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input reaches the declared native attack route; damage remains outside the core-ten qualification receipt"
+    },
+    {
+      "name": "SKILL_17",
+      "mapping": "Slash Blast",
+      "historical_status": "not_established",
+      "release_status": "planned",
+      "check": "accepted input reaches the declared native attack route; damage remains outside the core-ten qualification receipt"
+    }
+  ],
+  "historical_sources": [
+    {
+      "path": "docs/FULL_CLIENT_ACCEPTANCE.md",
+      "supports": "prior Hero movement, active Brandish combat, persisted positive net XP, unchanged keymap, and ordinary save evidence"
+    },
+    {
+      "path": "docs/CLASS_MATRIX_ADMISSION.md",
+      "supports": "prior visible movement, jump, buffs, Brandish damage, and positive saved XP; it also requires fresh release re-qualification"
+    }
+  ],
+  "native_release_result": null
+}

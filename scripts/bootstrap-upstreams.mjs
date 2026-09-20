@@ -181,7 +181,35 @@ function installCosmicOverlay(cosmicDir) {
   const characterPath = join(cosmicDir, 'src/main/java/client/Character.java');
   const xpAnchor = '            totalExpGained += total;';
   const xpReplacement = `${xpAnchor}\n            server.bots.MapleBenchEventSink.recordXpGain(this, total);`;
-  replaceOnce(characterPath, xpAnchor, xpReplacement, 'authoritative XP event hook');
+  if (!readFileSync(characterPath, 'utf8').includes('MapleBenchEventSink.recordXpGain(this, total)'))
+    replaceOnce(characterPath, xpAnchor, xpReplacement, 'authoritative XP event hook');
+
+  // XP-window protocol: instrument the settled outer transaction. Recursive
+  // overflow gains and level-up arithmetic are nested and cannot be double counted.
+  function wrapXpMethod(signature, nextSignature, kind) {
+    const source = readFileSync(characterPath, 'utf8');
+    const begin = source.indexOf(signature), end = source.indexOf(nextSignature, begin + signature.length);
+    if (begin < 0 || end < 0) throw new Error('Missing pinned XP method boundary');
+    const block = source.slice(begin, end);
+    if (block.includes('MapleBenchXpLedger.Mutation maplebenchXpMutation')) return;
+    const open = block.indexOf('{'), close = block.lastIndexOf('\n    }');
+    if (open < 0 || close <= open || block.slice(close + 6).trim()) throw new Error('Ambiguous pinned XP method boundary');
+    const body = block.slice(open + 1, close);
+    const wrapped = block.slice(0, open + 1)
+      + `\n        server.bots.MapleBenchXpLedger.Mutation maplebenchXpMutation = server.bots.MapleBenchXpLedger.begin(getId(), getAccountID(), level, exp.get(), "${kind}");\n        try {`
+      + body.split('\n').map(line => line ? '    ' + line : line).join('\n')
+      + '\n        } finally {\n            if (maplebenchXpMutation != null) server.bots.MapleBenchXpLedger.end(maplebenchXpMutation, level, exp.get(), getWorldServer().getExpRate());\n        }'
+      + block.slice(close);
+    writeFileSync(characterPath, source.slice(0, begin) + wrapped + source.slice(end));
+  }
+  replaceOnce(characterPath, '    public void setExp(int amount) {',
+    '    public synchronized void setExp(int amount) {', 'serialize XP setters with XP/save transactions');
+  replaceOnce(characterPath, '    public void setLevel(int level) {',
+    '    public synchronized void setLevel(int level) {', 'serialize level setters with XP/save transactions');
+  wrapXpMethod('    private synchronized void gainExpInternal(', '    private Pair<Integer, Integer> applyFame(', 'xp_transaction');
+  wrapXpMethod('    public synchronized void levelUp(', '    public boolean leaveParty(', 'level_up');
+  wrapXpMethod('    public synchronized void setExp(', '    public void setGachaExp(', 'set_exp');
+  wrapXpMethod('    public synchronized void setLevel(', '    public void setMap(', 'set_level');
 
   // Bind receipts to the real transaction, never a client acknowledgement or
   // the account's offline flag. The anchor is specific to saveCharToDB and must
@@ -192,8 +220,12 @@ function installCosmicOverlay(cosmicDir) {
                 }
 
                 con.commit();`;
+  if (readFileSync(characterPath, 'utf8').includes('server.bots.MapleBenchPersistence.committed(getId(), getAccountID());')) replaceOnce(characterPath,
+    'server.bots.MapleBenchPersistence.committed(getId(), getAccountID());',
+    'server.bots.MapleBenchPersistence.committed(getId(), getAccountID(), level, Math.abs(exp.get()), getWorldServer().getExpRate());',
+    'XP-aware committed save receipt');
   replaceOnce(characterPath, saveAnchor,
-    `${saveAnchor}\n                server.bots.MapleBenchPersistence.committed(getId(), getAccountID());`,
+    `${saveAnchor}\n                server.bots.MapleBenchPersistence.committed(getId(), getAccountID(), level, Math.abs(exp.get()), getWorldServer().getExpRate());`,
     'positive character-save receipt');
   const saveFailureAnchor = '            log.error("Error saving chr {}, level: {}, job: {}", name, level, job.getId(), e);';
   replaceOnce(characterPath, saveFailureAnchor,
@@ -204,9 +236,10 @@ function installCosmicOverlay(cosmicDir) {
   const mainAnchor = '        Server.getInstance().init();';
   const mainReplacement = `${mainAnchor}\n        server.bots.MapleBenchControlServer.startFromEnvironment();`;
   replaceOnce(serverPath, mainAnchor, mainReplacement, 'control-plane startup hook');
-  replaceOnce(serverPath, mainAnchor,
-    `        server.bots.MapleBenchPersistence.initializeFromEnvironment();\n${mainAnchor}`,
-    'persistence journal startup');
+  const oldPersistenceStartup = `        server.bots.MapleBenchPersistence.initializeFromEnvironment();\n${mainAnchor}`;
+  const xpStartup = `        server.bots.MapleBenchPersistence.initializeFromEnvironment();\n        server.bots.MapleBenchXpLedger.initializeFromEnvironment();\n${mainAnchor}`;
+  replaceOnce(serverPath, readFileSync(serverPath, 'utf8').includes(oldPersistenceStartup) ? oldPersistenceStartup : mainAnchor,
+    xpStartup, 'persistence and XP ledger startup');
 }
 
 const patchOnly = process.argv.includes('--patch-only');
