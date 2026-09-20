@@ -14,11 +14,11 @@ No scored attempt has yet run for this expanded candidate.
   available. Credentials are private runtime files.
 - A fresh, bounded worker uses the six-unit runtime toolkit, an enrolled operation
   gate, the expanded baseline and separately pinned client/server binaries.
-- The candidate at `cc720e5` passed Linux CI, including the native runner's real
+- The candidate at `f3a71f5` passed Linux CI, including the native runner's real
   process-ownership test and the full-history secret scan. Later changes require
   their own focused checks.
 
-## Implemented, awaiting live release acceptance
+## Implemented, awaiting scored cohort and publication
 
 - Native OpenAI and Anthropic generation, exact request/response attribution and
   conservative error/token accounting.
@@ -55,8 +55,8 @@ game, recorded the client, logged out and restored the baseline:
   Its movement allowance ran out before Rush was pressed, so the complete
   core-ten gate still failed.
 
-Six buff effects and Brandish, Coma and Panic damage have been observed. Core-ten
-qualification has not passed. Investigation found that the equipped sword's level-120
+Those seven failed attempts preceded the successful qualification described below.
+Investigation found that the equipped sword's level-120
 afterimage bucket is absent from the pinned client data. The ordinary-attack
 fallback used by both finishers replaces their range with an empty rectangle.
 The client lookup now falls back to a valid authored range for the same weapon
@@ -75,20 +75,36 @@ was retained without execution. A minimal client correction initializes target
 endpoints and updates the last ID for each actual selected target; an exact-source
 regression fails on the prior client and passes with the correction, including
 partial groups, zero targets and disappearing candidates. The fresh Client F
-build passed under bounded offline resources; live effect evidence remains required.
+build passed under bounded offline resources and the eighth native attempt then
+qualified all ten core effects.
 No qualification attempt made a model API call or produced a model score. Original recordings,
 failure receipts and restoration evidence remain separate from scored results.
 
+## Successful native qualification and handoff
+
+The eighth native attempt, `d5a349905f2c481faeada396cee1f481`, passed using
+source `f3a71f5096be4651d9ce95e6436a2018678680d4` and Client F. Its receipt
+reports `native_skill_qualification_verified`, clean ordinary logout and exact
+baseline restoration, with zero model API calls. The independent public
+projector reverified all ten core effects and the 17-control/25-learned-row
+fixture. The root reviewer actually inspected three original-video frames;
+this is sampled review, not continuous playback or every-action verification.
+
+The user requested a stop and handoff to another coding assistant because of
+coding-assistant credit consumption. The model cohort was not created or launched.
+No release tag, release publication, merge or new production deployment occurred.
+See [the continuation handoff](HANDOFF_2026-09-20.md).
+
 ## Remaining acceptance
 
-1. Verify the corrected recipe under a new frozen live attempt.
-2. Verify all 17 bindings and 25 learned rows, qualify the core ten effects,
-   inspect the original recording and confirm exact restoration.
-3. Freeze actual source/runtime/baseline/provider settings and declare 16 attempts.
-4. Run and retain every attempt, verify three consecutive clean groups, and
-   recheck original evidence and recordings independently.
-5. Publish the reviewed public projection, methodology and limitations; verify
-   deployed bytes and clean up the worker after a verified private backup.
+1. Accept the successful native evidence and finish any additional visual checks.
+2. Create and inspect the immutable 16-attempt plan using the prepared V10 helpers.
+3. Run and retain every attempt; require three consecutive clean groups and
+   independently verify scores, recordings and all planned dispositions.
+4. Publish the public projection, methodology and limitations, then verify
+   deployed bytes and actual replay behavior.
+5. Verify private backups and actual worker deletion. The worker remains idle
+   with a time-limited lease; exact private deadlines are in the operator handoff.
 
 Hostnames, account metadata, credentials and operator-specific run paths belong
 in private operational records. Historical deployment receipts in the companion

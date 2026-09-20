@@ -1,7 +1,8 @@
 # v1 cohort: a repeated cross-provider Hero pilot
 
-Status: **release requirements, revised 2026-09-19**. Implementation and native
-qualification are in progress. This document is not a result or acceptance receipt.
+Status: **release requirements, revised 2026-09-20**. Implementation and native
+core-ten qualification are complete; the scored cohort has not started.
+See V1_STATUS.md for evidence and handoff state. This document is not a result receipt.
 It supersedes the earlier four-OpenAI-model, no-knowledge plan.
 
 ## Frozen evaluated system

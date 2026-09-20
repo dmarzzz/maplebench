@@ -9,7 +9,9 @@ with frozen gameplay knowledge and a declared 17-skill Hero toolkit.
 The release will include original gameplay recordings, held-key visualization,
 and a timeline of model calls and input delivery. Results are a descriptive pilot:
 signed session net XP, all planned attempts, spread and evidence-completion counts.
-See the [release requirements](docs/V1_COHORT.md) and [current status](docs/V1_STATUS.md).
+The expanded native ten-skill qualification has passed; the 16 scored attempts
+have not started. See the [release requirements](docs/V1_COHORT.md),
+[current status](docs/V1_STATUS.md) and [continuation handoff](docs/HANDOFF_2026-09-20.md).
 The [public site](https://maplebench.vercel.app/) currently contains earlier pilot
 evidence, which is separate from this candidate.
 
