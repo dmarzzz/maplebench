@@ -2,6 +2,8 @@
 import copy
 import hashlib
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 import unittest
@@ -161,6 +163,8 @@ class HeroNativeTests(unittest.TestCase):
             self.assertTrue("'"+skill['slot']+"'" in code
                             or '"'+skill['slot']+'"' in code)
         self.assertEqual(len(selected), 10)
+        self.assertLess(code.index('const combatFloorReady=await settleOnCombatFloor()'),
+                        code.index("await cast('PRIMARY_SKILL')"))
         self.assertLess(code.index('"SECONDARY_SKILL"'),
                         code.index("'PRIMARY_SKILL'"))
         self.assertLess(code.index("['SKILL_6','SKILL_7']"),
@@ -171,6 +175,71 @@ class HeroNativeTests(unittest.TestCase):
         changed['skill_toolkit']['skills'][0]['level'] = 1
         with self.assertRaises(ValueError):
             validate_contract(changed)
+
+    @unittest.skipUnless(shutil.which('node'),
+                         'Node is required for finite Hero recipe execution')
+    def test_recipe_lands_on_fresh_lower_floor_and_never_attacks_stale_airborne(self):
+        native = contract('hero', 'a' * 64, protocol=HERO_TOOLKIT_PROTOCOL)
+        code = program(native)
+        fixture = r"""
+const body=BODY;
+async function exercise(stale){
+  let now=0,requests=0,descent=0;
+  const actions=[];
+  const character={x:669,y:1129,hp:12000,maxHp:12000,mp:6000,maxMp:6000,
+    exp:0,mapId:240040511,level:180,alive:true};
+  Date.now=()=>now;
+  const observe=()=>{
+    const staticAirborne=stale&&descent===2;
+    return {ready:true,ageMs:staticAirborne?400:10,
+      renderAgeMs:staticAirborne?400:10,character:{...character},
+      monsters:[{objectId:1,x:character.x+58,y:character.y}]};
+  };
+  const sdk={
+    async observe(){requests++;return observe();},
+    async wait(ms){requests++;now+=ms;
+      if(!stale&&descent===2&&ms>=350){character.x=842;character.y=1454;}
+      return {waitedMs:ms};},
+    async pressKeys(keys,ms){requests++;actions.push({key:keys[0],ms,at:now});now+=ms;
+      if(keys[0]==='RIGHT'&&ms===250&&descent<2){
+        descent++;Object.assign(character,descent===1?{x:731,y:1131}:{x:814,y:1310});
+      }
+      return {accepted:true,observation:observe()};}
+  };
+  await (new Function('sdk','return (async()=>{'+body+'})()'))(sdk);
+  return {actions,requests,elapsed:now};
+}
+(async()=>process.stdout.write(JSON.stringify({fresh:await exercise(false),
+  stale:await exercise(true)})))().catch(error=>{console.error(error);process.exitCode=1;});
+""".replace('BODY', json.dumps(code))
+        result = subprocess.run([shutil.which('node'), '--max-old-space-size=64',
+            '-e', fixture], capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        evidence = json.loads(result.stdout)
+        fresh = evidence['fresh']
+        selected = set(native['qualification_skill_ids'])
+        by_slot = {skill['slot']: skill['skill_id']
+                   for skill in native['skill_toolkit']['skills']}
+        buffs = [skill['slot'] for skill in native['skill_toolkit']['skills']
+                 if skill['skill_id'] in selected and skill['route'] == 'buff']
+        expected = buffs + ['PRIMARY_SKILL'] * 3 + ['SKILL_5'] \
+            + ['PRIMARY_SKILL'] * 4 + ['SKILL_6'] \
+            + ['PRIMARY_SKILL'] * 4 + ['SKILL_7']
+        core = [row['key'] for row in fresh['actions']
+                if by_slot.get(row['key']) in selected]
+        self.assertEqual(core, expected)
+        self.assertEqual({by_slot[key] for key in core}, selected)
+        self.assertNotIn('JUMP', [row['key'] for row in fresh['actions']])
+        self.assertEqual([row['ms'] for row in fresh['actions']
+                          if row['key'] == 'RIGHT' and row['ms'] == 250], [250, 250])
+        self.assertTrue(all(row['ms'] == 30 for row in fresh['actions']
+                            if row['key'] in ('LEFT', 'RIGHT') and row['ms'] != 250))
+        self.assertLessEqual(len(fresh['actions']), native['max_actions'])
+        self.assertLessEqual(fresh['requests'], native['max_sdk_requests'])
+        self.assertLess(fresh['elapsed'], native['wall_seconds'] * 1000)
+        stale_attacks = {'ATTACK', 'PRIMARY_SKILL', 'SKILL_5', 'SKILL_6', 'SKILL_7'}
+        self.assertFalse(stale_attacks.intersection(
+            row['key'] for row in evidence['stale']['actions']))
 
     def test_effect_level_ledger_qualifies_all_ten_without_using_acks(self):
         native, raw, expected = native_ledger()

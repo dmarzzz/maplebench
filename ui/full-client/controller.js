@@ -301,6 +301,7 @@ import { createPostRenderRecorder } from './webcodecs-recorder.js';
       // frame. They make no claim that an input caused a cast, hit or XP award.
       const controls=['LEFT','RIGHT','UP','DOWN','JUMP','ATTACK','PRIMARY_SKILL','SECONDARY_SKILL','BUFF_1','BUFF_2','HP_POTION','MP_POTION'];
       const short=['←','→','↑','↓','Jump','Attack','Skill 1','Skill 2','Buff 1','Buff 2','HP','MP'];
+      if(expandedToolkit)short.splice(6,4,'Brandish','Combo','Booster','Maple');
       if(expandedToolkit){controls.push('SKILL_5','SKILL_6','SKILL_7','SKILL_8','SKILL_9','SKILL_10');short.push('Rush','Coma','Panic','Stance','Rage','Guard');}
       if(fullToolkit){controls.push('SKILL_11','SKILL_12','SKILL_13','SKILL_14','SKILL_15','SKILL_16','SKILL_17');short.push('Enrage','Will','Shout','Crash','Iron body','P. strike','S. blast');}
       const columns=12,gap=3,keyWidth=(width-24-gap*(columns-1))/columns;

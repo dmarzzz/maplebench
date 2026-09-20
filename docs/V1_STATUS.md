@@ -1,8 +1,8 @@
 # v1 release status
 
-Snapshot: **2026-09-19**, candidate branch `codex/v1-cross-provider-release`, based
-on `codex/v1-release-integration` at `5c94df5`. No scored attempt has yet run for
-this expanded candidate. [V1_COHORT.md](V1_COHORT.md) is the current release scope.
+Snapshot: **2026-09-20 UTC**, candidate branch `codex/v1-cross-provider-release`.
+No scored attempt has yet run for this expanded candidate.
+[V1_COHORT.md](V1_COHORT.md) is the current release scope.
 
 ## Established inputs
 
@@ -12,12 +12,12 @@ this expanded candidate. [V1_COHORT.md](V1_COHORT.md) is the current release sco
   distributor; a private receipt records its exact hash and size.
 - Both provider credentials authenticated, and all four selected model IDs are
   available. Credentials are private runtime files.
-- The existing six-unit fresh-runtime toolkit is being integrated into the
-  companion infrastructure repository; its database/enrollment path is reused.
-- The preceding integration revision passed its Linux CI. New candidate changes
-  require their own focused and native checks.
+- A fresh, bounded worker uses the six-unit runtime toolkit, an enrolled operation
+  gate, the expanded baseline and separately pinned client/server binaries.
+- The candidate at `19de290` passed Linux CI, including the native runner's real
+  process-ownership test. Later changes require their own focused checks.
 
-## Work in progress
+## Implemented, awaiting live release acceptance
 
 - Native OpenAI and Anthropic generation, exact request/response attribution and
   conservative error/token accounting.
@@ -26,13 +26,25 @@ this expanded candidate. [V1_COHORT.md](V1_COHORT.md) is the current release sco
 - Sixteen-attempt publication, per-model spread, retained denominators and
   consecutive operational groups.
 - Recorded held-key HUD and media-clock model/input replay timeline.
-- Fresh isolated worker lease, paired client/server builds and expanded baseline.
+- Light MapleStory-inspired results and replay UI, checked at desktop and narrow
+  widths; development preview data is explicitly unscored.
+
+## Native qualification findings
+
+Two unsuccessful qualification attempts are retained privately. The first stopped
+before gameplay because the launcher supplied the wrong process ancestry; the
+corrected launcher passed a real Linux ownership check. The second reached the
+game, recorded the client, logged out and restored the baseline. Its finite
+control script walked off a platform before testing attacks, so the strict native
+verifier rejected it. Six buff effects were observed; core-ten qualification has
+not passed. The targeting recipe is being corrected without relaxing the effect
+requirements. Neither attempt made a model API call or produced a model score.
 
 ## Remaining acceptance
 
-1. Complete focused tests and review the provider, persistence and publication
-   boundaries; retain legacy behavior for historical protocols.
-2. Build and qualify the paired native fixture and all declared Hero controls.
+1. Complete the native recipe correction and its focused checks.
+2. Verify all 17 bindings and 25 learned rows, qualify the core ten effects,
+   inspect the original recording and confirm exact restoration.
 3. Freeze actual source/runtime/baseline/provider settings and declare 16 attempts.
 4. Run and retain every attempt, verify three consecutive clean groups, and
    recheck original evidence and recordings independently.

@@ -142,6 +142,42 @@ class HeroNativeRunnerTests(unittest.TestCase):
         self.assertEqual(value['native_input_reference'], reference)
         self.assertEqual(value['intents'], [])
 
+    def test_clean_restored_failure_can_close_gate_without_qualification(self):
+        common = {'schema_version': 1, 'protocol': VERIFIER_PROTOCOL,
+            'run_id': 'd' * 32, 'api_calls': 0, 'model': None,
+            'publication_eligible': False, 'clean': True,
+            'native_restored': True, 'artifacts': {}}
+        failed = common | {
+            'status': 'failed_native_skill_qualification_closed',
+            'runtime_lifecycle_verified': False, 'result': None,
+            'failure': {'phase': 'collect_final',
+                'error_type': 'RuntimeErrorCode', 'status': 'failed_preserved',
+                'reason': 'hero_native_ledger_invalid', 'api_calls': 0,
+                'model': None}}
+        self.assertEqual(runner._closed_receipt(failed, 'd' * 32),
+                         'failed_native_skill_qualification_closed')
+        for changed in (failed | {'clean': False},
+                        failed | {'native_restored': False},
+                        failed | {'publication_eligible': True},
+                        failed | {'runtime_lifecycle_verified': True},
+                        failed | {'result': {}},
+                        failed | {'failure': failed['failure'] |
+                            {'reason': 'untrusted_failure'}}):
+            with self.subTest(changed=changed), self.assertRaises(runner.RunnerError):
+                runner._closed_receipt(changed, 'd' * 32)
+
+    def test_verified_receipt_still_requires_lifecycle_and_result(self):
+        verified = {'schema_version': 1, 'protocol': VERIFIER_PROTOCOL,
+            'run_id': 'd' * 32, 'api_calls': 0, 'model': None,
+            'publication_eligible': False, 'clean': True,
+            'native_restored': True, 'artifacts': {},
+            'status': 'native_skill_qualification_verified',
+            'runtime_lifecycle_verified': True, 'failure': None, 'result': {}}
+        self.assertEqual(runner._closed_receipt(verified, 'd' * 32),
+                         'native_skill_qualification_verified')
+        with self.assertRaises(runner.RunnerError):
+            runner._closed_receipt(verified | {'result': None}, 'd' * 32)
+
 
 if __name__ == '__main__':
     unittest.main()

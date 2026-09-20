@@ -98,6 +98,49 @@ def _failure_code(error, fallback):
     return value if SAFE_CODE.fullmatch(value) else fallback
 
 
+def _closed_receipt(value, run_id):
+    """Accept success or a clean restored qualification failure for gate closure."""
+    need(isinstance(value, dict)
+         and value.get('schema_version') == 1
+         and type(value.get('schema_version')) is int
+         and value.get('protocol') == VERIFIER_PROTOCOL
+         and value.get('run_id') == run_id
+         and value.get('api_calls') == 0
+         and type(value.get('api_calls')) is int
+         and value.get('model') is None
+         and value.get('publication_eligible') is False
+         and value.get('clean') is True
+         and value.get('native_restored') is True
+         and isinstance(value.get('artifacts'), dict),
+         'hero_native_completion_invalid')
+    if value.get('status') == 'native_skill_qualification_verified':
+        need(value.get('runtime_lifecycle_verified') is True
+             and value.get('failure') is None
+             and isinstance(value.get('result'), dict),
+             'hero_native_completion_invalid')
+        return value['status']
+    need(value.get('status') == 'failed_native_skill_qualification_closed'
+         and value.get('runtime_lifecycle_verified') is False
+         and value.get('result') is None,
+         'hero_native_completion_invalid')
+    failure = value.get('failure')
+    need(isinstance(failure, dict)
+         and set(failure) == {'phase', 'error_type', 'status', 'reason',
+                              'api_calls', 'model'}
+         and failure['phase'] in ('preflight', 'restore_baseline',
+                                  'start_server', 'login', 'native_window',
+                                  'collect_final')
+         and isinstance(failure['error_type'], str)
+         and 1 <= len(failure['error_type']) <= 128
+         and failure['status'] == 'failed_preserved'
+         and failure['reason'] in hero_runtime.FAILURE_CODES
+         and failure['api_calls'] == 0
+         and type(failure['api_calls']) is int
+         and failure['model'] is None,
+         'hero_native_completion_invalid')
+    return value['status']
+
+
 def _message(status, code=None):
     value = {'schema_version': 1, 'status': status, 'api_calls': 0,
              'publication_eligible': False}
@@ -217,13 +260,11 @@ def guarded(config_ref, request_ref, lock_owner_pid, guard_pid, descriptors):
     runtime.state = _initial_state(run_id, native_ref)
     runtime.persist()
     receipt = execute_owned(runtime)
-    need(receipt.get('status') == 'native_skill_qualification_verified'
-         and receipt.get('runtime_lifecycle_verified') is True
-         and receipt.get('clean') is True and receipt.get('native_restored') is True,
-         'hero_native_qualification_failed')
+    _closed_receipt(receipt, run_id)
     complete, complete_ref = admission.private_ref(directory / 'complete.json',
                                                    owner_uid=0)
     need(complete == receipt, 'hero_native_complete_receipt_changed')
+    _closed_receipt(complete, run_id)
     return complete_ref
 
 
@@ -376,11 +417,14 @@ def main(argv=None):
             complete, complete_ref = admission.private_ref(
                 Path(config['attempt_root']) / request['attempt_id'] / 'complete.json',
                 owner_uid=0)
-            need(complete.get('status') == 'native_skill_qualification_verified'
-                 and complete.get('runtime_lifecycle_verified') is True
-                 and complete.get('clean') is True,
-                 'hero_native_qualification_failed')
+            status = _closed_receipt(complete, request['attempt_id'])
             terminal = operation.finish([complete_ref])
+        if status == 'failed_native_skill_qualification_closed':
+            print(json.dumps({'status': 'native_skill_qualification_failed',
+                'code': complete['failure']['reason'],
+                'attempt_id': request['attempt_id'], 'complete': complete_ref,
+                'terminal': terminal, 'publication_eligible': False}, sort_keys=True))
+            return 1
         print(json.dumps({'status': 'native_skill_qualification_verified',
                           'attempt_id': request['attempt_id'],
                           'complete': complete_ref, 'terminal': terminal}, sort_keys=True))

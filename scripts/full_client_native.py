@@ -139,22 +139,53 @@ async function probe(keys,ms=100,settle=1600){
   await sdk.observe();
   return true;
 }
+async function settleOnCombatFloor(){
+  const origin=await sdk.observe();
+  if(origin.character.alive===false)return false;
+  // The accepted Hero fixture starts on a small ledge. Two bounded ordinary
+  // right inputs descend to the broad lower platform seen in fixture capture.
+  for(let step=0;step<2;step++){
+    if(!await input(['RIGHT'],250))return false;
+    await sdk.wait(200);
+  }
+  for(let sample=0;sample<12&&room();sample++){
+    const first=await sdk.observe();
+    if(first.character.alive===false)return false;
+    await sdk.wait(350);
+    const second=await sdk.observe();
+    if(second.character.alive===false)return false;
+    const refreshed=second.ageMs<350&&second.renderAgeMs<350;
+    const landed=refreshed&&second.character.y>=origin.character.y+180&&
+      Math.abs(second.character.x-first.character.x)<=4&&
+      Math.abs(second.character.y-first.character.y)<=4;
+    const nearby=second.monsters.some(m=>
+      Math.abs(m.y-second.character.y)<=50&&
+      Math.abs(m.x-second.character.x)<=180);
+    if(landed&&nearby)return true;
+    await sdk.wait(250);
+  }
+  return false;
+}
 async function faceTarget(){
-  for(let step=0;step<4&&room();step++){
+  // Refresh telemetry at a finite cadence. Direction inputs only face the
+  // character; this does not chase a target or risk leaving the platform.
+  for(let step=0;step<12&&room();step++){
     const scene=await sdk.observe();
     if(scene.character.alive===false)return false;
     const near=scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=50)
       .sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x));
-    if(!near.length)return false;
-    const target=near[0],dx=target.x-scene.character.x,inRange=Math.abs(dx)<=100;
-    if(!await input([dx<0?'LEFT':'RIGHT'],inRange?30:250))return false;
+    const target=near.find(m=>Math.abs(m.x-scene.character.x)<=180);
+    if(!target){await sdk.wait(250);continue;}
+    const dx=target.x-scene.character.x;
+    if(!await input([dx<0?'LEFT':'RIGHT'],30))return false;
+    await sdk.wait(120);
     const after=await sdk.observe();
     const current=after.monsters.find(m=>m.objectId===target.objectId);
     if(after.character.alive===false)return false;
-    if(inRange&&current&&Math.abs(current.y-after.character.y)<=50&&
-      Math.abs(current.x-after.character.x)<=100&&
+    if(current&&Math.abs(current.y-after.character.y)<=50&&
+      Math.abs(current.x-after.character.x)<=180&&
       ((current.x-after.character.x<0)===(dx<0)))return true;
-    await sdk.wait(120);
+    await sdk.wait(250);
   }
   return false;
 }
@@ -163,16 +194,18 @@ async function cast(key,hold=100,settle=1800){
   return probe([key],hold,settle);
 }
 await sdk.wait(1000);
-await probe(['JUMP'],300,1600);
 for(const key of __BUFFS__)await probe([key]);
+const combatFloorReady=await settleOnCombatFloor();
 // Combo is active before damage opportunities. Actual server hits must build orbs.
-for(let hit=0;hit<3;hit++)await cast('PRIMARY_SKILL');
-await cast('ATTACK');
-await cast('SKILL_5');
-for(const finisher of ['SKILL_6','SKILL_7']){
-  // Rebuild before each finisher because the preceding finisher consumes orbs.
-  for(let hit=0;hit<4;hit++)await cast('PRIMARY_SKILL');
-  await cast(finisher);
+if(combatFloorReady){
+  for(let hit=0;hit<3;hit++)await cast('PRIMARY_SKILL');
+  await cast('ATTACK');
+  await cast('SKILL_5');
+  for(const finisher of ['SKILL_6','SKILL_7']){
+    // Rebuild before each finisher because the preceding finisher consumes orbs.
+    for(let hit=0;hit<4;hit++)await cast('PRIMARY_SKILL');
+    await cast(finisher);
+  }
 }
 await sdk.wait(2000);
 await sdk.observe();
