@@ -34,6 +34,7 @@ RUN = re.compile(r'[a-f0-9]{32}\Z')
 TIMEOUT_SECONDS = 600
 GUARD_EXIT_GRACE_SECONDS = 10
 KIND = 'standalone_lifecycle'
+SAFE_CODE = re.compile(r'[a-z0-9_]{1,128}\Z')
 
 
 class RunnerError(ValueError):
@@ -92,12 +93,84 @@ def _initial_state(run_id, native_ref):
             'native_input_reference': native_ref}
 
 
-def guarded(config_ref, request_ref, lock_owner_pid, descriptors):
+def _failure_code(error, fallback):
+    value = str(error) if isinstance(error, (RunnerError, RuntimeErrorCode)) else ''
+    return value if SAFE_CODE.fullmatch(value) else fallback
+
+
+def _message(status, code=None):
+    value = {'schema_version': 1, 'status': status, 'api_calls': 0,
+             'publication_eligible': False}
+    if code is not None:
+        need(isinstance(code, str) and SAFE_CODE.fullmatch(code),
+             'hero_native_diagnostic_invalid')
+        value['code'] = code
+    return json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n'
+
+
+def _parse_message(raw, expected_status):
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError, UnicodeError):
+        raise RunnerError('hero_native_guard_diagnostic_invalid') from None
+    fields = {'schema_version', 'status', 'api_calls', 'publication_eligible'}
+    if expected_status == 'blocked':
+        fields.add('code')
+    need(isinstance(value, dict) and set(value) == fields
+         and value['schema_version'] == 1 and type(value['schema_version']) is int
+         and value['status'] == expected_status
+         and value['api_calls'] == 0 and type(value['api_calls']) is int
+         and value['publication_eligible'] is False
+         and (expected_status != 'blocked'
+              or isinstance(value['code'], str) and SAFE_CODE.fullmatch(value['code'])),
+         'hero_native_guard_diagnostic_invalid')
+    return value
+
+
+def _private_diagnostic(config_ref, request_ref, phase, code):
+    """Best-effort create-once private diagnostic; never changes attempt state."""
+    try:
+        need(phase in ('adapter_guard', 'owned_runtime')
+             and isinstance(code, str) and SAFE_CODE.fullmatch(code),
+             'hero_native_diagnostic_invalid')
+        config, actual_config = admission.private_ref(Path(config_ref['path']), owner_uid=0)
+        request, actual_request = admission.private_ref(Path(request_ref['path']), owner_uid=0)
+        need(actual_config == config_ref and actual_request == request_ref,
+             'hero_native_diagnostic_input_changed')
+        request_value(request, config_ref, config)
+        directory = private_directory(Path(config['attempt_root'])) / request['attempt_id']
+        if not directory.is_dir() or directory.is_symlink():
+            return
+        path = directory / 'guard-diagnostic.json'
+        if not os.path.lexists(path):
+            save_bytes(path, encoded({'schema_version': 1, 'status': 'blocked',
+                'phase': phase, 'code': code, 'api_calls': 0,
+                'publication_eligible': False}))
+    except Exception:
+        # Diagnostics never replace the original fixed-code failure.
+        return
+
+
+def validate_owned_ancestry(lock_owner_pid, guard_pid):
+    need(type(lock_owner_pid) is int and lock_owner_pid > 1
+         and type(guard_pid) is int and guard_pid > 1
+         and os.getppid() == guard_pid,
+         'hero_native_guard_invalid')
+    try:
+        rows = dict(line.split(':', 1) for line in
+                    Path('/proc/%d/status' % guard_pid).read_text().splitlines()
+                    if ':' in line)
+        parent = int(rows['PPid'].strip())
+    except (OSError, KeyError, TypeError, ValueError):
+        raise RunnerError('hero_native_guard_invalid') from None
+    need(parent == lock_owner_pid, 'hero_native_guard_invalid')
+
+
+def guarded(config_ref, request_ref, lock_owner_pid, guard_pid, descriptors):
     need(sys.platform.startswith('linux') and os.geteuid() == 0,
          'hero_native_linux_root_required')
-    need(type(lock_owner_pid) is int and lock_owner_pid > 1
-         and os.getppid() == lock_owner_pid
-         and len(descriptors) == 2 and len(set(descriptors)) == 2
+    validate_owned_ancestry(lock_owner_pid, guard_pid)
+    need(len(descriptors) == 2 and len(set(descriptors)) == 2
          and all(type(fd) is int and fd >= 3 for fd in descriptors),
          'hero_native_guard_invalid')
     config, actual_config_ref = admission.private_ref(
@@ -133,7 +206,7 @@ def guarded(config_ref, request_ref, lock_owner_pid, descriptors):
                                 host=host)
     runtime.context = {'schema_version': 1, 'attempt_id': run_id,
         'attempt_dir': str(directory), 'maintenance_protocol': VERIFIER_PROTOCOL,
-        'lock_owner_pid': lock_owner_pid, 'guard_pid': os.getpid(),
+        'lock_owner_pid': lock_owner_pid, 'guard_pid': guard_pid,
         'guard_parent_pid': lock_owner_pid,
         'lock_paths': {'world': str(Path(config['world_lock'])),
                        'queue': str(Path(config['queue_lock']))},
@@ -154,6 +227,31 @@ def guarded(config_ref, request_ref, lock_owner_pid, descriptors):
     return complete_ref
 
 
+def launch_owned(script, config_ref, request_ref, lock_owner_pid, lock_fds):
+    argv = [sys.executable, str(script), '_owned_runtime',
+        config_ref['path'], config_ref['sha256'], request_ref['path'],
+        request_ref['sha256'], str(lock_owner_pid), str(os.getpid()),
+        ','.join(str(fd) for fd in lock_fds)]
+    with tempfile.TemporaryFile() as output:
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+            stdout=output, stderr=subprocess.DEVNULL,
+            pass_fds=tuple(lock_fds), env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin',
+            'LC_ALL': 'C', 'PYTHONDONTWRITEBYTECODE': '1'})
+        try:
+            process.wait(timeout=TIMEOUT_SECONDS + 5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise RunnerError('hero_native_owned_runtime_timeout') from None
+        output.seek(0)
+        raw = output.read(4097)
+    need(len(raw) <= 4096, 'hero_native_guard_diagnostic_invalid')
+    if process.returncode != 0:
+        value = _parse_message(raw.decode('utf-8', 'strict'), 'blocked')
+        raise RunnerError(value['code'])
+    _parse_message(raw.decode('utf-8', 'strict'), 'owned_runtime_completed')
+
+
 def launch_guard(script, config_ref, request_ref, lock_fds):
     argv = [sys.executable, str(script), '_adapter_guard',
         config_ref['path'], config_ref['sha256'], request_ref['path'],
@@ -171,7 +269,20 @@ def launch_guard(script, config_ref, request_ref, lock_fds):
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
             raise RunnerError('hero_native_guard_timeout') from None
-    need(returncode == 0, 'hero_native_guard_failed')
+        output.seek(0)
+        raw = output.read(4097)
+    try:
+        need(len(raw) <= 4096, 'hero_native_guard_diagnostic_invalid')
+        if returncode != 0:
+            value = _parse_message(raw.decode('utf-8', 'strict'), 'blocked')
+            raise RunnerError(value['code'])
+        _parse_message(raw.decode('utf-8', 'strict'), 'adapter_guard_completed')
+    except (RunnerError, UnicodeError):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        raise
 
 
 def main(argv=None):
@@ -184,9 +295,37 @@ def main(argv=None):
             request_ref = reference(argv[3], argv[4])
             need(argv[5].isdigit(), 'hero_native_guard_invalid')
             descriptors = [int(value) for value in argv[6].split(',')]
-            guarded(config_ref, request_ref, int(argv[5]), descriptors)
+            need(os.getppid() == int(argv[5]), 'hero_native_guard_invalid')
+            launch_owned(Path(__file__).resolve(), config_ref, request_ref,
+                         int(argv[5]), descriptors)
+            sys.stdout.write(_message('adapter_guard_completed'))
             return 0
-        except (OSError, ValueError, KeyError, TypeError, RuntimeErrorCode):
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError,
+                RuntimeErrorCode) as error:
+            code = _failure_code(error, 'hero_native_adapter_guard_failed')
+            _private_diagnostic(config_ref if 'config_ref' in locals() else {},
+                request_ref if 'request_ref' in locals() else {}, 'adapter_guard', code)
+            sys.stdout.write(_message('blocked', code))
+            return 1
+
+    if argv and argv[0] == '_owned_runtime':
+        try:
+            need(len(argv) == 8, 'hero_native_guard_invalid')
+            config_ref = reference(argv[1], argv[2])
+            request_ref = reference(argv[3], argv[4])
+            need(argv[5].isdigit() and argv[6].isdigit(),
+                 'hero_native_guard_invalid')
+            descriptors = [int(value) for value in argv[7].split(',')]
+            guarded(config_ref, request_ref, int(argv[5]), int(argv[6]),
+                    descriptors)
+            sys.stdout.write(_message('owned_runtime_completed'))
+            return 0
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError,
+                RuntimeErrorCode) as error:
+            code = _failure_code(error, 'hero_native_owned_runtime_failed')
+            _private_diagnostic(config_ref if 'config_ref' in locals() else {},
+                request_ref if 'request_ref' in locals() else {}, 'owned_runtime', code)
+            sys.stdout.write(_message('blocked', code))
             return 1
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -246,10 +385,11 @@ def main(argv=None):
                           'attempt_id': request['attempt_id'],
                           'complete': complete_ref, 'terminal': terminal}, sort_keys=True))
         return 0
-    except (OSError, ValueError, KeyError, TypeError,
-            admission.gate.GateError, RuntimeErrorCode):
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError,
+            admission.gate.GateError, RuntimeErrorCode) as error:
+        code = _failure_code(error, 'hero_native_runner_failed')
         print(json.dumps({'status': 'blocked',
-                          'code': 'hero_native_runner_failed',
+                          'code': code,
                           'publication_eligible': False}, sort_keys=True))
         return 1
 

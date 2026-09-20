@@ -41,7 +41,8 @@ class HeroNativeRunnerTests(unittest.TestCase):
     def test_guard_launch_passes_only_two_inherited_descriptors(self):
         process = mock.Mock()
         process.wait.return_value = 0
-        with mock.patch.object(runner.subprocess, 'Popen', return_value=process) as popen:
+        with mock.patch.object(runner.subprocess, 'Popen', return_value=process) as popen, \
+                mock.patch.object(runner, '_parse_message') as parsed:
             runner.launch_guard(Path('/private/runner.py'),
                 {'path': '/private/config.json', 'sha256': 'a' * 64},
                 {'path': '/private/request.json', 'sha256': 'b' * 64}, [7, 8])
@@ -51,6 +52,73 @@ class HeroNativeRunnerTests(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs['pass_fds'], (7, 8))
         self.assertTrue(popen.call_args.kwargs['start_new_session'])
         process.wait.assert_called_once_with(timeout=610)
+        parsed.assert_called_once_with('', 'adapter_guard_completed')
+
+    def test_guard_launches_a_distinct_owned_runtime_child(self):
+        process = mock.Mock(returncode=0)
+        process.wait.return_value = 0
+        def spawn(_argv, **kwargs):
+            kwargs['stdout'].write(runner._message('owned_runtime_completed').encode())
+            kwargs['stdout'].flush()
+            return process
+        with mock.patch.object(runner.subprocess, 'Popen', side_effect=spawn) as popen:
+            runner.launch_owned(Path('/private/runner.py'),
+                {'path': '/private/config.json', 'sha256': 'a' * 64},
+                {'path': '/private/request.json', 'sha256': 'b' * 64}, 123, [7, 8])
+        argv = popen.call_args.args[0]
+        self.assertEqual(argv[2], '_owned_runtime')
+        self.assertEqual(argv[-3:], ['123', str(runner.os.getpid()), '7,8'])
+        self.assertEqual(popen.call_args.kwargs['pass_fds'], (7, 8))
+        self.assertNotIn('start_new_session', popen.call_args.kwargs)
+        process.wait.assert_called_once_with(timeout=605)
+
+    def test_owned_runtime_fixed_code_reaches_parent(self):
+        process = mock.Mock(returncode=1)
+        process.wait.return_value = 1
+        def spawn(_argv, **kwargs):
+            kwargs['stdout'].write(runner._message(
+                'blocked', 'guard_ancestry_mismatch').encode())
+            kwargs['stdout'].flush()
+            return process
+        with mock.patch.object(runner.subprocess, 'Popen', side_effect=spawn), \
+                self.assertRaisesRegex(runner.RunnerError,
+                                       'guard_ancestry_mismatch'):
+            runner.launch_owned(Path('/private/runner.py'),
+                {'path': '/private/config.json', 'sha256': 'a' * 64},
+                {'path': '/private/request.json', 'sha256': 'b' * 64}, 123, [7, 8])
+
+    def test_failed_guard_kills_its_process_group_and_preserves_fixed_code(self):
+        process = mock.Mock(pid=456)
+        process.wait.return_value = 1
+        def spawn(_argv, **kwargs):
+            kwargs['stdout'].write(runner._message(
+                'blocked', 'guard_ancestry_mismatch').encode())
+            kwargs['stdout'].flush()
+            return process
+        with mock.patch.object(runner.subprocess, 'Popen', side_effect=spawn), \
+                mock.patch.object(runner.os, 'killpg') as kill, \
+                self.assertRaisesRegex(runner.RunnerError,
+                                       'guard_ancestry_mismatch'):
+            runner.launch_guard(Path('/private/runner.py'),
+                {'path': '/private/config.json', 'sha256': 'a' * 64},
+                {'path': '/private/request.json', 'sha256': 'b' * 64}, [7, 8])
+        kill.assert_called_once_with(456, runner.signal.SIGKILL)
+
+    def test_oversized_guard_diagnostic_kills_its_process_group(self):
+        process = mock.Mock(pid=789)
+        process.wait.return_value = 0
+        def spawn(_argv, **kwargs):
+            kwargs['stdout'].write(b'x' * 4097)
+            kwargs['stdout'].flush()
+            return process
+        with mock.patch.object(runner.subprocess, 'Popen', side_effect=spawn), \
+                mock.patch.object(runner.os, 'killpg') as kill, \
+                self.assertRaisesRegex(runner.RunnerError,
+                                       'hero_native_guard_diagnostic_invalid'):
+            runner.launch_guard(Path('/private/runner.py'),
+                {'path': '/private/config.json', 'sha256': 'a' * 64},
+                {'path': '/private/request.json', 'sha256': 'b' * 64}, [7, 8])
+        kill.assert_called_once_with(789, runner.signal.SIGKILL)
 
     def test_timeout_kills_guard_process_group_and_never_reissues(self):
         process = mock.Mock(pid=123)

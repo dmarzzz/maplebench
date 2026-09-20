@@ -46,10 +46,14 @@ jobs:
               resource.setrlimit(resource.RLIMIT_AS, (768 * 1024**2, 768 * 1024**2))
               resource.setrlimit(resource.RLIMIT_CPU, (120, 120))
               os.sched_setaffinity(0, set(sorted(os.sched_getaffinity(0))[:2]))
-              result = subprocess.run([sys.executable, "-B", "-m", "unittest", "discover",
-                  "-s", "test", "-p", "test_full_client_operation_cli.py", "-v"], cwd=root,
-                  env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"}, timeout=120)
-              sys.exit(result.returncode)
+              environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"}
+              for pattern in ("test_full_client_operation_cli.py",
+                              "test_full_client_hero_native_runner_root.py"):
+                  result = subprocess.run([sys.executable, "-B", "-m", "unittest", "discover",
+                      "-s", "test", "-p", pattern, "-v"], cwd=root,
+                      env=environment, timeout=120)
+                  if result.returncode:
+                      sys.exit(result.returncode)
           PY
       - name: Verify native save receipts without game assets or a server
         env:
