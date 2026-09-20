@@ -44,6 +44,16 @@ that check specifically for Shout; the patched source passes. This routing check
 does not certify every conditional effect. The separate native gate still
 requires direct effect evidence for the ten core skills.
 
+Client F additionally applies `0026-rush-selected-target.patch`. Attack results
+start with empty target endpoints and retain the last monster actually selected,
+including groups smaller than Rush's fifteen-target limit. Rush therefore uses
+an actual selected monster's position. The compiled source regression exercises
+the real target-selection and Rush functions with zero, one, fourteen, fifteen,
+and excess targets, plus candidates that disappear before damage application.
+Attack reach, damage lines, target limits, and packet encoding are unchanged.
+The fresh binary receipt is recorded in the build-input manifest; native
+qualification remains required.
+
 Game binaries and assets remain private. A newly instrumented server receives its
 own build/runtime hash before the cohort; it does not inherit the old JAR's pin.
 

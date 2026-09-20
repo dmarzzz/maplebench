@@ -14,7 +14,7 @@ No scored attempt has yet run for this expanded candidate.
   available. Credentials are private runtime files.
 - A fresh, bounded worker uses the six-unit runtime toolkit, an enrolled operation
   gate, the expanded baseline and separately pinned client/server binaries.
-- The candidate at `a85b529` passed Linux CI, including the native runner's real
+- The candidate at `cc720e5` passed Linux CI, including the native runner's real
   process-ownership test and the full-history secret scan. Later changes require
   their own focused checks.
 
@@ -69,8 +69,14 @@ resuming input. Initial descent now uses fresh position feedback with a bounded
 number of movement steps. Its live effect requirements remain unchanged.
 The next recipe also uses the wider authored reach of Brandish and Rush and
 places Rush before repeated finisher sequences, preserving the movement cap.
-No qualification
-attempt made a model API call or produced a model score. Original recordings,
+Before dispatching that candidate, source review found Rush reading an unset
+last-target ID when fewer than its 15-target maximum were selected. The candidate
+was retained without execution. A minimal client correction initializes target
+endpoints and updates the last ID for each actual selected target; an exact-source
+regression fails on the prior client and passes with the correction, including
+partial groups, zero targets and disappearing candidates. The fresh Client F
+build passed under bounded offline resources; live effect evidence remains required.
+No qualification attempt made a model API call or produced a model score. Original recordings,
 failure receipts and restoration evidence remain separate from scored results.
 
 ## Remaining acceptance

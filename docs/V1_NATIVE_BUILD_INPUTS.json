@@ -35,6 +35,24 @@
       "patch_sha256": "96a7e01b9f8c0493c5a16a7e603016b4fae99d9bbdcf5ed26a6ef4db8a7c972e",
       "role": "preserved_afterimage_repair_candidate_not_used_for_native_qualification",
       "source_manifest_sha256": "451e00152d2a5ab7dc2f512a3e37d3de8f6b5eb3b77e56262a0ae5a9a96590f2"
+    },
+    {
+      "build_receipt_sha256": "d13c52da7c5c299c77898d86ce1bdb56f14142b3ca58207e046cb5895e6bfb26",
+      "name": "Client E",
+      "outputs": {
+        "JourneyClient.js": {
+          "bytes": 233074,
+          "sha256": "40dbcdf823fc24366204721282a5e7e90a572454bd425769bd225e3c0a51640a"
+        },
+        "JourneyClient.wasm": {
+          "bytes": 5411214,
+          "sha256": "ecf60ec86e8853d3e3fd8e2c014ff252e0825b33231af565eb21892b1bc17ce1"
+        }
+      },
+      "parent_source_manifest_sha256": "451e00152d2a5ab7dc2f512a3e37d3de8f6b5eb3b77e56262a0ae5a9a96590f2",
+      "patch_sha256": "d6cc3d8f87e419c5ca87c3d2a07d9bd61aef58844c0106d14f3daa56c225d184",
+      "role": "preserved_afterimage_and_route_repair_used_for_failed_native_attempts",
+      "source_manifest_sha256": "4dbb8ea8fd49a35d106b2998337f99830aa14419b0859c4cc40e8f70451556d4"
     }
   ],
   "client_build_limits": {
@@ -47,18 +65,18 @@
     "outer_timeout_seconds": 300,
     "swap_mib": 0
   },
-  "client_build_receipt_sha256": "d13c52da7c5c299c77898d86ce1bdb56f14142b3ca58207e046cb5895e6bfb26",
+  "client_build_receipt_sha256": "fe31311cbae601a3aa3d8a6407de795e74e485ddf712a8f0dd77caa44303c052",
   "client_outputs": {
     "JourneyClient.js": {
       "bytes": 233074,
       "sha256": "40dbcdf823fc24366204721282a5e7e90a572454bd425769bd225e3c0a51640a"
     },
     "JourneyClient.wasm": {
-      "bytes": 5411214,
-      "sha256": "ecf60ec86e8853d3e3fd8e2c014ff252e0825b33231af565eb21892b1bc17ce1"
+      "bytes": 5411205,
+      "sha256": "51b3396552c38fa34a746d3f52c70e7759ea6b2aee4abe6d945a63cc1fe9dd60"
     }
   },
-  "client_parent_source_manifest_sha256": "451e00152d2a5ab7dc2f512a3e37d3de8f6b5eb3b77e56262a0ae5a9a96590f2",
+  "client_parent_source_manifest_sha256": "4dbb8ea8fd49a35d106b2998337f99830aa14419b0859c4cc40e8f70451556d4",
   "client_patch_sha256": [
     {
       "path": "0001-demo-control-and-observation.patch",
@@ -155,9 +173,29 @@
     {
       "path": "0025-hero-shout-attack-route.patch",
       "sha256": "d6cc3d8f87e419c5ca87c3d2a07d9bd61aef58844c0106d14f3daa56c225d184"
+    },
+    {
+      "path": "0026-rush-selected-target.patch",
+      "sha256": "e4a04e4ac0f32a9926e663b6610e0657fe359da9bebdace76c95d8d59e2c4c28"
     }
   ],
-  "client_source_manifest_sha256": "4dbb8ea8fd49a35d106b2998337f99830aa14419b0859c4cc40e8f70451556d4",
+  "client_rush_target_check": {
+    "available_target_counts": [
+      0,
+      1,
+      14,
+      15,
+      20
+    ],
+    "damage_lines_and_target_limit_unchanged": true,
+    "disappearing_first_and_last_candidates_checked": true,
+    "native_effect_qualification_claimed": false,
+    "patched_client_f": "actual_selected_endpoints_and_rush_destination_pass",
+    "preserved_client_e_expected_failure": "one_target_with_fifteen_target_cap_has_no_initialized_last_endpoint",
+    "receipt_sha256": "e5cedca80336031aa1ea386f72b8067e5783391ada5607b25998ff2c1bbd4b8b",
+    "zero_target_limit_checked": true
+  },
+  "client_source_manifest_sha256": "a11bcd9438f70b6d1bc2d7e503b5768fa55aebd18761d44adb499f3aef661c93",
   "client_source_route_check": {
     "conditional_effects_certified": false,
     "declared_active_skills": 17,
@@ -166,6 +204,7 @@
     "physical_attack_routes": 7,
     "preserved_client_d_expected_failure": "Shout",
     "receipt_sha256": "56121aeaaeb688a9315c74b577119b28bf984b3886c94865914e380eea7d4254",
+    "selected_client_f_route_source_identical_to_e": true,
     "self_buff_or_cure_routes": 9
   },
   "client_upstream_commit": "bc0234fe7c7f53322453e7bdd79564d9aca4cd8b",
@@ -202,7 +241,7 @@
     }
   },
   "schema_version": 1,
-  "selected_client": "Client E",
+  "selected_client": "Client F",
   "server_overlay_change_requires_new_jar_pin": true,
   "status": "repaired_client_built_native_release_qualification_pending"
 }

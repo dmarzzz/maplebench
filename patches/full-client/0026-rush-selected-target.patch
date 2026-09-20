@@ -1,0 +1,27 @@
+--- a/src/client/Gameplay/Combat/Attack.h
++++ b/src/client/Gameplay/Combat/Attack.h
+@@ -145,8 +145,8 @@
+         uint8_t speed    = 0;
+         bool toleft      = false;
+         std::unordered_map<int32_t, std::vector<std::pair<int32_t, bool>>> damagelines;
+-        int32_t first_oid;
+-        int32_t last_oid;
++        int32_t first_oid = 0;
++        int32_t last_oid = 0;
+     };
+ 
+     struct AttackUser
+--- a/src/client/Gameplay/MapleMap/MapMobs.cpp
++++ b/src/client/Gameplay/MapleMap/MapMobs.cpp
+@@ -203,10 +203,7 @@
+                 {
+                     result.first_oid = target;
+                 }
+-                if (result.mobcount == mobcount)
+-                {
+-                    result.last_oid = target;
+-                }
++                result.last_oid = target;
+             }
+         }
+         return result;
