@@ -181,23 +181,30 @@ class HeroNativeTests(unittest.TestCase):
 const body=BODY;
 async function exercise(mode){
   const stale=mode==='stale',scarce=mode==='scarce';
+  const fast=mode==='fast-away'||mode==='fast-toward'||mode==='near-window';
+  const nearWindow=mode==='near-window';
   let now=0,requests=0,descent=0,landed=false;
-  let monsterX=1120,monsterDirection=-1,landedObserves=0;
+  let monsterX=nearWindow?930:100;
+  let monsterDirection=mode==='fast-toward'?1:-1,landedObserves=0;
+  let initialLandedDistance=null;
   const actions=[];
   const character={x:669,y:1129,hp:12000,maxHp:12000,mp:6000,maxMp:6000,
     exp:0,mapId:240040511,level:180,alive:true};
   Date.now=()=>now;
   const moveMonster=ms=>{
     if(stale||!landed)return;
-    monsterX+=monsterDirection*ms*.08;
-    while(monsterX<950||monsterX>1150){
-      if(monsterX<950){monsterX=1900-monsterX;monsterDirection=1;}
-      if(monsterX>1150){monsterX=2300-monsterX;monsterDirection=-1;}
+    monsterX+=monsterDirection*ms*(fast?.08:.02);
+    const lower=nearWindow?880:-600,upper=nearWindow?1080:550;
+    while(monsterX<lower||monsterX>upper){
+      if(monsterX<lower){monsterX=2*lower-monsterX;monsterDirection=1;}
+      if(monsterX>upper){monsterX=2*upper-monsterX;monsterDirection=-1;}
     }
   };
   const observe=()=>{
     const staticAirborne=stale&&descent===2;
     const visible=!scarce||!landed||landedObserves<=1;
+    if(landed&&initialLandedDistance===null)
+      initialLandedDistance=Math.abs(monsterX-character.x);
     return {ready:true,ageMs:staticAirborne?400:10,
       renderAgeMs:staticAirborne?400:10,character:{...character},
       monsters:visible?[{objectId:1,x:stale?character.x+58:monsterX,
@@ -215,15 +222,19 @@ async function exercise(mode){
       if(keys[0]==='RIGHT'&&ms===250&&descent<2){
         descent++;Object.assign(character,descent===1?{x:731,y:1131}:{x:814,y:1310});
       }
-      if(landed&&keys.length===1&&ms===250&&keys[0]==='RIGHT')character.x+=55;
-      if(landed&&keys.length===1&&ms===250&&keys[0]==='LEFT')character.x-=55;
-      if(landed&&keys.length===1&&ms===250)character.y=character.x>900?1468:1454;
+      if(landed&&keys.length===1&&keys[0]==='RIGHT')character.x+=ms*.35;
+      if(landed&&keys.length===1&&keys[0]==='LEFT')character.x-=ms*.35;
+      if(landed&&keys.length===1)
+        character.y=character.x>900?1468:(character.x<500?1444:1454);
       return {accepted:true,observation:observe()};}
   };
   await (new Function('sdk','return (async()=>{'+body+'})()'))(sdk);
-  return {actions,requests,elapsed:now};
+  return {actions,requests,elapsed:now,initialLandedDistance};
 }
 (async()=>process.stdout.write(JSON.stringify({fresh:await exercise('fresh'),
+  fastAway:await exercise('fast-away'),
+  fastToward:await exercise('fast-toward'),
+  nearWindow:await exercise('near-window'),
   stale:await exercise('stale'),scarce:await exercise('scarce')})))()
   .catch(error=>{console.error(error);process.exitCode=1;});
 """.replace('BODY', json.dumps(code))
@@ -244,29 +255,45 @@ async function exercise(mode){
                 if by_slot.get(key) in selected]
         self.assertEqual(core, expected)
         self.assertEqual({by_slot[key] for key in core}, selected)
+        for label in ('fastAway', 'fastToward', 'nearWindow'):
+            moving = evidence[label]
+            moving_core = [key for row in moving['actions']
+                           for key in row['keys']
+                           if by_slot.get(key) in selected]
+            self.assertEqual(moving_core, expected, label)
+            moving_steps = [row for row in moving['actions']
+                            if row['keys'] in (['LEFT'], ['RIGHT'])]
+            self.assertLessEqual(len(moving_steps[2:]), 48, label)
+            self.assertLess(len(moving['actions']), 120)
+            self.assertLessEqual(moving['requests'], native['max_sdk_requests'])
+            self.assertLess(moving['elapsed'], 112000)
+        self.assertGreaterEqual(evidence['fastAway']['initialLandedDistance'], 700)
+        self.assertGreaterEqual(evidence['fastToward']['initialLandedDistance'], 700)
+        self.assertGreater(evidence['nearWindow']['initialLandedDistance'], 82)
+        self.assertLess(evidence['nearWindow']['initialLandedDistance'], 100)
         self.assertNotIn('JUMP', [key for row in fresh['actions']
                                   for key in row['keys']])
-        lower_floor_moves = [row for row in fresh['actions']
-            if row['keys'] in (['LEFT'], ['RIGHT']) and row['ms'] == 250]
-        self.assertEqual([row['keys'] for row in lower_floor_moves[:2]],
+        movement = [row for row in fresh['actions']
+            if row['keys'] in (['LEFT'], ['RIGHT'])]
+        self.assertEqual([row['keys'] for row in movement[:2]],
                          [['RIGHT'], ['RIGHT']])
-        reposition = lower_floor_moves[2:]
+        reposition = movement[2:]
         self.assertGreaterEqual(len(reposition), 1)
-        self.assertLessEqual(len(reposition), 8)
+        self.assertLessEqual(len(reposition), 48)
+        self.assertTrue(all(30 <= row['ms'] <= 250 for row in reposition))
+        self.assertGreater(fresh['initialLandedDistance'], 420)
         stale_attacks = {'ATTACK', 'PRIMARY_SKILL', 'SKILL_5', 'SKILL_6', 'SKILL_7'}
         self.assertTrue(all(len(row['keys']) == 2 for row in fresh['actions']
                             if stale_attacks.intersection(row['keys'])))
-        self.assertLessEqual(len(fresh['actions']), native['max_actions'])
+        self.assertLess(len(fresh['actions']), 120)
         self.assertLessEqual(fresh['requests'], native['max_sdk_requests'])
-        self.assertLess(fresh['elapsed'], native['wall_seconds'] * 1000)
+        self.assertLess(fresh['elapsed'], 112000)
         self.assertFalse(stale_attacks.intersection(
             key for row in evidence['stale']['actions'] for key in row['keys']))
         self.assertLessEqual(evidence['scarce']['requests'],
                              native['max_sdk_requests'])
-        self.assertLessEqual(len(evidence['scarce']['actions']),
-                             native['max_actions'])
-        self.assertLess(evidence['scarce']['elapsed'],
-                        native['wall_seconds'] * 1000)
+        self.assertLess(len(evidence['scarce']['actions']), 120)
+        self.assertLess(evidence['scarce']['elapsed'], 112000)
 
     def test_effect_level_ledger_qualifies_all_ten_without_using_acks(self):
         native, raw, expected = native_ledger()

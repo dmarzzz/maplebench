@@ -89,7 +89,7 @@
       "mapping": "Combo Attack",
       "historical_status": "not_established",
       "release_status": "planned",
-      "check": "accepted input linked to exact native buff state, then server-confirmed hits and observed combo-orb changes"
+      "check": "accepted input linked to exact native buff state, then server-confirmed hits and native-instrumented combo-orb changes; sdk.observe does not expose buffs or orbs"
     },
     {
       "name": "BUFF_1",
@@ -110,21 +110,21 @@
       "mapping": "Rush",
       "historical_status": "not_established",
       "release_status": "planned",
-      "check": "accepted input linked to native attack contact, damage, and target-dependent displacement"
+      "check": "accepted input linked to native attack damage and resource use; displacement and contact behavior remain outside the core-ten qualification receipt"
     },
     {
       "name": "SKILL_6",
       "mapping": "Sword Coma",
       "historical_status": "not_established",
       "release_status": "planned",
-      "check": "with observed combo orbs, accepted input linked to native finisher damage, orb consumption, and any status effect"
+      "check": "with native-instrumented combo charge, accepted input linked to native finisher damage and orb consumption; stun or other status effects remain outside the core-ten qualification receipt, and sdk.observe does not expose orbs"
     },
     {
       "name": "SKILL_7",
       "mapping": "Sword Panic",
       "historical_status": "not_established",
       "release_status": "planned",
-      "check": "after rebuilding observed combo orbs, accepted input linked to native finisher damage and orb consumption"
+      "check": "after server-confirmed hits rebuild native-instrumented combo charge, accepted input linked to native finisher damage and orb consumption; sdk.observe does not expose orbs"
     },
     {
       "name": "SKILL_8",
@@ -145,7 +145,7 @@
       "mapping": "Power Guard",
       "historical_status": "not_established",
       "release_status": "planned",
-      "check": "accepted input linked to exact native buff state and separately observed contact-damage behavior"
+      "check": "accepted input linked to native buff state and resource use; contact-damage ratio and behavior remain outside the core-ten qualification receipt"
     },
     {
       "name": "SKILL_11",

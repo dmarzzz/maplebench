@@ -1,15 +1,64 @@
 {
-  "client_build_receipt_sha256": "adc6bb86cf09436bfaca3f81a25eaa7d8278de73638ba87bd88ab59d43b9ad9d",
+  "client_base_source_commit": "169c326cbe0cbdaf84c045c4fdc92af3834f20a2",
+  "client_build_history": [
+    {
+      "build_receipt_sha256": "adc6bb86cf09436bfaca3f81a25eaa7d8278de73638ba87bd88ab59d43b9ad9d",
+      "name": "Client C",
+      "outputs": {
+        "JourneyClient.js": {
+          "bytes": 233074,
+          "sha256": "297f8b78a68dffd6c4491a2991f875487e9c26e4f6bd92143625ed9055c63efc"
+        },
+        "JourneyClient.wasm": {
+          "bytes": 5408798,
+          "sha256": "cae2ec1b924cf2f110081466a808444a87e4bbd23b9e73fae46e1a920f4b74b3"
+        }
+      },
+      "role": "preserved_base_used_for_failed_native_attempts",
+      "source_commit": "169c326cbe0cbdaf84c045c4fdc92af3834f20a2",
+      "source_manifest_sha256": "46f15c659c493d1586de84057d113cf7ce7fe411e816a6dda73c9256ca361938"
+    },
+    {
+      "build_receipt_sha256": "f618f52f18418f609cd9f4db5f28c49f2b8257b63bc2dc733b4a77b40a390011",
+      "name": "Client D",
+      "outputs": {
+        "JourneyClient.js": {
+          "bytes": 233074,
+          "sha256": "297f8b78a68dffd6c4491a2991f875487e9c26e4f6bd92143625ed9055c63efc"
+        },
+        "JourneyClient.wasm": {
+          "bytes": 5411201,
+          "sha256": "bfb29dd81c071dd4be4e271cdda913872a24d265e5e8c388aa013a2831f2fb5f"
+        }
+      },
+      "parent_source_manifest_sha256": "46f15c659c493d1586de84057d113cf7ce7fe411e816a6dda73c9256ca361938",
+      "patch_sha256": "96a7e01b9f8c0493c5a16a7e603016b4fae99d9bbdcf5ed26a6ef4db8a7c972e",
+      "role": "preserved_afterimage_repair_candidate_not_used_for_native_qualification",
+      "source_manifest_sha256": "451e00152d2a5ab7dc2f512a3e37d3de8f6b5eb3b77e56262a0ae5a9a96590f2"
+    }
+  ],
+  "client_build_limits": {
+    "cpus": 2,
+    "emscripten_image_id": "sha256:631841e7ee7a808bc2735a4f26aff3c1354119764df8459c38abfe2d0923dffb",
+    "inner_timeout_seconds": 280,
+    "jobs": 1,
+    "memory_limit_mib": 2300,
+    "network": "none",
+    "outer_timeout_seconds": 300,
+    "swap_mib": 0
+  },
+  "client_build_receipt_sha256": "d13c52da7c5c299c77898d86ce1bdb56f14142b3ca58207e046cb5895e6bfb26",
   "client_outputs": {
     "JourneyClient.js": {
       "bytes": 233074,
-      "sha256": "297f8b78a68dffd6c4491a2991f875487e9c26e4f6bd92143625ed9055c63efc"
+      "sha256": "40dbcdf823fc24366204721282a5e7e90a572454bd425769bd225e3c0a51640a"
     },
     "JourneyClient.wasm": {
-      "bytes": 5408798,
-      "sha256": "cae2ec1b924cf2f110081466a808444a87e4bbd23b9e73fae46e1a920f4b74b3"
+      "bytes": 5411214,
+      "sha256": "ecf60ec86e8853d3e3fd8e2c014ff252e0825b33231af565eb21892b1bc17ce1"
     }
   },
+  "client_parent_source_manifest_sha256": "451e00152d2a5ab7dc2f512a3e37d3de8f6b5eb3b77e56262a0ae5a9a96590f2",
   "client_patch_sha256": [
     {
       "path": "0001-demo-control-and-observation.patch",
@@ -98,9 +147,27 @@
     {
       "path": "0023-ordinary-buff-wire-order.patch",
       "sha256": "e0768b5a84a7223a37dfb7c7f353d3b2a50791822ada6f092adf2fc6b70db7f1"
+    },
+    {
+      "path": "0024-authored-melee-afterimage.patch",
+      "sha256": "96a7e01b9f8c0493c5a16a7e603016b4fae99d9bbdcf5ed26a6ef4db8a7c972e"
+    },
+    {
+      "path": "0025-hero-shout-attack-route.patch",
+      "sha256": "d6cc3d8f87e419c5ca87c3d2a07d9bd61aef58844c0106d14f3daa56c225d184"
     }
   ],
-  "client_source_commit": "169c326cbe0cbdaf84c045c4fdc92af3834f20a2",
+  "client_source_manifest_sha256": "4dbb8ea8fd49a35d106b2998337f99830aa14419b0859c4cc40e8f70451556d4",
+  "client_source_route_check": {
+    "conditional_effects_certified": false,
+    "declared_active_skills": 17,
+    "enemy_debuff_routes": 1,
+    "patched_client_e": "all_declared_routes_pass",
+    "physical_attack_routes": 7,
+    "preserved_client_d_expected_failure": "Shout",
+    "receipt_sha256": "56121aeaaeb688a9315c74b577119b28bf984b3886c94865914e380eea7d4254",
+    "self_buff_or_cure_routes": 9
+  },
   "client_upstream_commit": "bc0234fe7c7f53322453e7bdd79564d9aca4cd8b",
   "matching_server_jar_sha256": "394c2afee55f3affee0bc7df720ec972a2bb36a96b0386b637fb113e87e9942c",
   "matching_server_source_commit": "d2fe0671db0bf4932b44fc117e581c0258f65dbb",
@@ -135,6 +202,7 @@
     }
   },
   "schema_version": 1,
+  "selected_client": "Client E",
   "server_overlay_change_requires_new_jar_pin": true,
-  "status": "recovered_build_native_release_qualification_pending"
+  "status": "repaired_client_built_native_release_qualification_pending"
 }

@@ -24,25 +24,25 @@ SLOTS = {
     'PRIMARY_SKILL': ('Brandish',1121008,30,'attack',
         'Two-handed sword attack; face monsters on the same platform.'),
     'SECONDARY_SKILL': ('Combo Attack',1111002,30,'buff',
-        'Activate before combat; only confirmed hits may be treated as orb-building evidence.'),
+        'Activate before combat. Landed attacks build combo charge, but sdk.observe does not expose buff or orb state; infer charge cautiously from your own action history and visible outcomes.'),
     'BUFF_1': ('Sword Booster',1101004,20,'buff',
-        'Weapon-speed buff with HP and MP cost; verify the native buff and costs.'),
+        'Speeds sword attacks and costs HP and MP; direct buff state is unavailable to sdk.observe.'),
     'BUFF_2': ('Maple Warrior',1121000,20,'buff',
-        'Base-stat buff; verify the exact native state change.'),
+        'Raises base stats during the run; direct stat and buff state is unavailable to sdk.observe.'),
     'SKILL_5': ('Rush',1121006,30,'attack_movement',
         'Attack-movement skill; no target means no proven rush movement.'),
     'SKILL_6': ('Sword Coma',1111005,30,'attack',
-        'Area finisher candidate; build and observe combo orbs before trying it.'),
+        'Area finisher candidate that consumes combo charge. Build inferred charge with landed attacks first; sdk.observe does not expose combo orbs.'),
     'SKILL_7': ('Sword Panic',1111003,30,'attack',
-        'Focused finisher candidate; rebuild and observe combo orbs after another finisher.'),
+        'Focused finisher candidate that consumes combo charge. Rebuild inferred charge with landed attacks after another finisher; sdk.observe does not expose combo orbs.'),
     'SKILL_8': ('Power Stance',1121002,30,'buff',
         'Knockback-resistance buff; it does not promise damage prevention.'),
     'SKILL_9': ('Rage',1101006,20,'buff',
-        'Weapon-attack buff with a defense tradeoff; verify exact native values.'),
+        'Raises weapon attack with a defense tradeoff; direct stat and buff state is unavailable to sdk.observe.'),
     'SKILL_10': ('Power Guard',1101007,30,'buff',
         'Contact-damage defensive buff; continue to manage HP.'),
     'SKILL_11': ('Enrage',1121010,8,'buff',
-        'Single-target damage buff; availability is exposed but its effect is not qualified by the core native receipt.'),
+        'Temporary weapon-attack buff; availability is exposed but its effect is not qualified by the core native receipt.'),
     'SKILL_12': ("Hero's Will",1121011,5,'buff',
         'Status-clearing skill; availability is exposed but requires a qualifying status to prove an effect.'),
     'SKILL_13': ('Shout',1111008,30,'attack',
@@ -148,7 +148,8 @@ def sdk_scenario(protocol):
 
 def prompt_reference(value):
     value=validate_toolkit(value)
-    lines=['Frozen 17-slot two-handed-sword Hero toolkit (core native receipt covers only the ten planned entries):']
+    lines=['Frozen 17-slot two-handed-sword Hero toolkit (core native receipt covers only the ten planned entries):',
+           'sdk.observe exposes character x/y, HP/MP, EXP, map, level and life state plus monster IDs/x/y; buffs, combo orbs, cooldowns, other stats, monster HP and inventory are unavailable, and separate native qualification checks are not model observations.']
     for skill in value['skills']:
         lines.append('  %s: %s level %d — %s' %
             (skill['slot'],skill['name'],skill['level'],skill['description']))

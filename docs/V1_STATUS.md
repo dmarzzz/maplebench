@@ -14,8 +14,9 @@ No scored attempt has yet run for this expanded candidate.
   available. Credentials are private runtime files.
 - A fresh, bounded worker uses the six-unit runtime toolkit, an enrolled operation
   gate, the expanded baseline and separately pinned client/server binaries.
-- The candidate at `19de290` passed Linux CI, including the native runner's real
-  process-ownership test. Later changes require their own focused checks.
+- The candidate at `c69a3bc` passed Linux CI, including the native runner's real
+  process-ownership test and the full-history secret scan. Later changes require
+  their own focused checks.
 
 ## Implemented, awaiting live release acceptance
 
@@ -31,14 +32,31 @@ No scored attempt has yet run for this expanded candidate.
 
 ## Native qualification findings
 
-Two unsuccessful qualification attempts are retained privately. The first stopped
+Four unsuccessful qualification attempts are retained privately. The first stopped
 before gameplay because the launcher supplied the wrong process ancestry; the
-corrected launcher passed a real Linux ownership check. The second reached the
-game, recorded the client, logged out and restored the baseline. Its finite
-control script walked off a platform before testing attacks, so the strict native
-verifier rejected it. Six buff effects were observed; core-ten qualification has
-not passed. The targeting recipe is being corrected without relaxing the effect
-requirements. Neither attempt made a model API call or produced a model score.
+corrected launcher passed a real Linux ownership check. The next three reached the
+game, recorded the client, logged out and restored the baseline:
+
+- The second attempt walked off the spawn platform before testing attacks.
+- The third demonstrated Brandish damage and combo growth, but its target window
+  skipped Rush, Coma and Panic.
+- The fourth activated Coma and Panic and consumed their resources, but neither
+  produced linked damage. It then stopped approaching distant monsters, leaving
+  Rush untested. Those missing effects are qualification failures.
+
+Six buff effects and Brandish damage have been observed. Core-ten qualification
+has not passed. Investigation found that the equipped sword's level-120
+afterimage bucket is absent from the pinned client data. The ordinary-attack
+fallback used by both finishers replaces their range with an empty rectangle.
+The next correction must repair that client lookup and recipe reachability
+without relaxing the effect requirements. No qualification
+attempt made a model API call or produced a model score. Original recordings,
+failure receipts and restoration evidence remain separate from scored results.
+
+A source-route audit also found Shout missing from the client's attack
+classification. Its learned row and key binding alone did not make it a working
+attack. That route must be corrected before scored play. Source routing checks
+do not replace native effect evidence for the seven additional skills.
 
 ## Remaining acceptance
 

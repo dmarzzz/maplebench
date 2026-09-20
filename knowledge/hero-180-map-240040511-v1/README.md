@@ -15,11 +15,14 @@ The task is to maximize **signed persisted net XP** during the declared
 EXP. It includes death penalties and may be zero or negative. Client-reported EXP
 is diagnostic; the persisted before/after score is authoritative.
 
-Use current observations for positions, HP, MP, EXP, level, life state, map, and
-monsters. This pack does not assert map geometry, monster identity, spawn timing,
-inventory quantities, damage rolls, or buff state. Game time continues while the
-model plans. Get a productive loop running, re-observe, and adapt without risking
-death or exhausting the remaining action, SDK, request, and time budgets.
+Use current observations for character position, HP, MP, EXP, level, life state,
+map, and monster object IDs and positions. `sdk.observe()` does not expose active
+buffs, combo-orb count, cooldowns, monster HP, inventory quantities, or damage
+rolls. Infer Combo charge cautiously from your own Combo activation and landed
+attack history; each finisher consumes that inferred charge, so rebuild it before
+trying the other finisher. Game time continues while the model plans. Get a
+productive loop running, re-observe, and adapt without risking death or exhausting
+the remaining action, SDK, request, and time budgets.
 
 ## Provenance
 

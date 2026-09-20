@@ -31,6 +31,11 @@ The frozen Hero-180 slot mapping is:
 These mappings say what each slot requests. They do not claim that a cast lands,
 a buff activates, an attack deals damage, or a potion is available. Only a fresh
 accepted action receipt plus native outcome evidence can establish those facts.
+`sdk.observe()` reports character position, HP, MP, EXP, level, life state and map,
+plus monster object IDs and positions. It does not report buff state, combo orbs,
+cooldowns, monster HP, damage rolls, or inventory. After activating Combo Attack,
+treat landed attacks as charge-building opportunities. Coma and Panic consume
+that inferred charge; rebuild with landed attacks between finishers.
 
 Useful conservative loop:
 

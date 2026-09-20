@@ -158,10 +158,9 @@ async function settleOnCombatFloor(){
     const landed=refreshed&&second.character.y>=origin.character.y+180&&
       Math.abs(second.character.x-first.character.x)<=4&&
       Math.abs(second.character.y-first.character.y)<=4;
-    const nearby=second.monsters.some(m=>
-      Math.abs(m.y-second.character.y)<=50&&
-      Math.abs(m.x-second.character.x)<=420);
-    if(landed&&nearby)return second.character.y;
+    const targetAvailable=second.monsters.some(m=>
+      Math.abs(m.y-second.character.y)<=50);
+    if(landed&&targetAvailable)return second.character.y;
     await sdk.wait(250);
   }
   return null;
@@ -170,28 +169,56 @@ let repositionActions=0;
 async function targetDirection(combatFloorY){
   // Only reposition on the confirmed broad lower platform. The global cap
   // prevents an observed moving target from turning this into an open chase.
-  for(let step=0;step<12&&room();step++){
+  let unavailablePolls=0;
+  for(let step=0;step<36&&room();step++){
     const scene=await sdk.observe();
     if(scene.character.alive===false||
       Math.abs(scene.character.y-combatFloorY)>50)return null;
-    if(scene.ageMs>=350||scene.renderAgeMs>=350){await sdk.wait(150);continue;}
+    if(scene.ageMs>=350||scene.renderAgeMs>=350){
+      if(++unavailablePolls>=4)return null;
+      await sdk.wait(150);continue;
+    }
     const near=scene.monsters.filter(m=>Math.abs(m.y-scene.character.y)<=50)
       .sort((a,b)=>Math.abs(a.x-scene.character.x)-Math.abs(b.x-scene.character.x));
-    const target=near.find(m=>Math.abs(m.x-scene.character.x)<=420);
-    if(!target){await sdk.wait(250);continue;}
+    if(!near.length){
+      if(++unavailablePolls>=4)return null;
+      await sdk.wait(250);continue;
+    }
+    unavailablePolls=0;
+    const target=near[0];
     const dx=target.x-scene.character.x;
-    if(Math.abs(dx)>180){
-      if(repositionActions>=8){await sdk.wait(250);continue;}
-      if(!await input([dx<0?'LEFT':'RIGHT'],250))return null;
+    const distance=Math.abs(dx);
+    // Every authored two-handed-sword bucket-10 stance covers target centers
+    // from 47 through 92 px on the facing side. Approach or back off into a
+    // narrower band, allowing for an observed target moving 80 px/s against
+    // the Hero's roughly 350 px/s ground speed. Then combine direction and
+    // skill in one physical input.
+    if(distance>82){
+      if(repositionActions>=48)return null;
+      const duration=Math.max(30,Math.min(250,
+        Math.round((distance-70)/.27)));
+      if(!await input([dx<0?'LEFT':'RIGHT'],duration))return null;
       repositionActions++;
-      await sdk.wait(160);
+      await sdk.wait(80);
+      continue;
+    }
+    if(distance<58){
+      if(repositionActions>=48)return null;
+      const duration=Math.max(30,Math.min(250,
+        Math.round((70-distance)/.27)));
+      if(!await input([dx<0?'RIGHT':'LEFT'],duration))return null;
+      repositionActions++;
+      await sdk.wait(80);
       continue;
     }
     return dx<0?'LEFT':'RIGHT';
   }
   return null;
 }
-async function cast(key,combatFloorY,hold=100,settle=1800){
+// 1200 ms exceeds the pinned client's source-derived core melee animation
+// maximum (848 ms including an unboosted scheduling phase). Native events,
+// rather than this wait, still decide whether an effect occurred.
+async function cast(key,combatFloorY,hold=100,settle=1200){
   if(!room())return false;
   const direction=await targetDirection(combatFloorY);
   if(direction===null||!await input([direction,key],hold))return false;
