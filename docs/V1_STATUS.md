@@ -1,7 +1,7 @@
 # v1 release status
 
 Snapshot: **2026-09-20 UTC**, candidate branch `codex/v1-cross-provider-release`.
-No scored attempt has yet run for this expanded candidate.
+The predeclared sixteen-attempt cohort has run to a sealed terminal state.
 [V1_COHORT.md](V1_COHORT.md) is the current release scope.
 
 ## Established inputs
@@ -18,7 +18,52 @@ No scored attempt has yet run for this expanded candidate.
   process-ownership test and the full-history secret scan. Later changes require
   their own focused checks.
 
-## Implemented, awaiting scored cohort and publication
+## Scored cohort outcome
+
+All sixteen predeclared attempts were submitted and settled; the experiment is
+sealed with scope `entire_declared_attempt_set`. Fourteen completed with verified
+persisted artifacts. Two are retained failures, kept in the denominator.
+
+| Model | Verified | Planned | Mean net XP | Median | Min | Max | Sample SD |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `gpt-6-astra` | 3 | 4 | 32,083 | 32,000 | 27,500 | 36,750 | 4,626 |
+| `gpt-5.6-sol` | 4 | 4 | 25,188 | 27,500 | 18,250 | 27,500 | 4,625 |
+| `claude-opus-5` | 3 | 4 | 22,833 | 18,250 | 18,250 | 32,000 | 7,939 |
+| `claude-sonnet-5` | 4 | 4 | 16,000 | 16,000 | 13,750 | 18,250 | 2,598 |
+
+Rows keep the predeclared model order and are not sorted by score. With one
+fixture, three or four repetitions per model and uncontrolled game randomness,
+these are descriptive results. They establish no ranking and no provider claim.
+
+Both failures were infrastructure outcomes, not model behaviour, and both carry
+`api_outcome: uncertain` with the full request and token envelope charged:
+
+- One `claude-opus-5` attempt reached `settlement_upload_timeout` after the model
+  had already acted, so its recording was discarded while its evidence was saved.
+- One `gpt-6-astra` attempt failed earlier with `adaptive_input_receipt_uncertain`.
+
+Neither was retried. The runner's policy is `failure: stop`, `retries: 0` and
+`resume: explicit_future_unsubmitted_only`, so recovery could only ever advance to
+attempts that had never been submitted. Six clean attempts ran before the first
+failure and eight ran after the second, at a stable ~322.8s per attempt.
+
+## Sampled recording review
+
+Fourteen published recordings each received a sampled visual review; seventy
+frames were actually inspected. Thirteen recordings passed. One is flagged
+`attention_required`: two of its sampled frames render the HUD text doubled by a
+capture-time compositing artifact. Its model header stayed sharp and correct, and
+its score derives from persisted artifacts rather than from the recording. The two
+attempts without published recordings are recorded as `unavailable`.
+
+The prepared sampler targets the request end of each request-to-acknowledgment
+interval, where no key is held yet, so its first input frame showed no held key in
+any run. Additional candidates near the acknowledgment end, permitted by the review
+policy, visually confirmed a held key in eight of the fourteen recordings. Held-key
+text and highlighted controls agreed in every inspected frame. Scope stays sampled
+frames, not continuous playback.
+
+## Implemented
 
 - Native OpenAI and Anthropic generation, exact request/response attribution and
   conservative error/token accounting.
