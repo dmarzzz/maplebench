@@ -1,7 +1,7 @@
 # Control guide
 
 The accepted `sdk.pressKeys` names are `LEFT`, `RIGHT`, `UP`, `DOWN`, `JUMP`,
-`ATTACK`, `HP_POTION`, `MP_POTION`, and the ten skill slots below. A call holds
+`ATTACK`, `HP_POTION`, `MP_POTION`, and the 17 skill slots below. A call holds
 one to three distinct names for 30–1500 ms. Do not
 combine `LEFT` with `RIGHT` or `UP` with `DOWN`. Physical letters, key codes,
 numeric skill IDs, and skill names are rejected as controls. `[protocol]`
