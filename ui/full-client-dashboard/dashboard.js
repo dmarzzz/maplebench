@@ -373,10 +373,54 @@
     container.replaceChildren(table);
   }
   $('research-protocol').addEventListener('change',renderResearch);
+  function plannedFor(model){
+    // Declared denominator, so a model with a retained failure reads 3 / 4.
+    const matrix=snapshot.research_matrix;
+    for(const row of (matrix&&Array.isArray(matrix.models)?matrix.models:[])){
+      if(row.model!==model)continue;
+      const total=(Array.isArray(row.cells)?row.cells:[]).reduce((a,c)=>a+(Number(c.planned)||0),0);
+      if(total)return total;
+    }
+    return null;
+  }
+  function renderLeaderboard(rows){
+    const body=$('leaderboard-rows'),note=$('leaderboard-note');
+    if(!body)return;
+    const byModel=new Map();
+    for(const row of rows){
+      const key=row.requested_model||'—';
+      if(!byModel.has(key))byModel.set(key,{model:key,scores:[],attempts:0});
+      const group=byModel.get(key);group.attempts++;
+      if(Number.isFinite(row.persisted_xp))group.scores.push(row.persisted_xp);
+    }
+    const stats=[...byModel.values()].map(group=>{
+      const sorted=[...group.scores].sort((a,b)=>a-b),n=sorted.length;
+      const mean=n?sorted.reduce((a,b)=>a+b,0)/n:null;
+      const median=n?(n%2?sorted[(n-1)/2]:(sorted[n/2-1]+sorted[n/2])/2):null;
+      return Object.assign({},group,{n,mean,median,best:n?sorted[n-1]:null});
+    }).sort((a,b)=>(b.mean===null?-Infinity:b.mean)-(a.mean===null?-Infinity:a.mean));
+    body.replaceChildren();
+    stats.forEach((group,index)=>{
+      const tr=el('tr');
+      cell(tr,String(index+1),'rank');
+      cell(tr,group.model,'leader-model');
+      cell(tr,`${group.n} / ${plannedFor(group.model)||group.attempts}`);
+      cell(tr,group.mean===null?'—':xp(Math.round(group.mean)),'score');
+      cell(tr,group.median===null?'—':xp(Math.round(group.median)));
+      cell(tr,group.best===null?'—':xp(group.best));
+      body.append(tr);
+    });
+    const scored=stats.reduce((a,g)=>a+g.n,0);
+    const planned=stats.reduce((a,g)=>a+(plannedFor(g.model)||g.attempts),0);
+    if(note)note.textContent=`${scored} verified of ${planned} planned attempts · ordered by mean saved XP.`
+      +' One fixture and a few repetitions per model: descriptive only, not a ranking claim.';
+  }
   function renderComparisons(){
     const groups=snapshot.comparisons.map(group=>({group,rows:snapshot.attempts.filter(item=>group.attempt_ids.includes(item.id))}));
     const latest=rows=>Math.max(0,...rows.map(row=>row.created_at_ms||0));
     groups.sort((a,b)=>latest(b.rows)-latest(a.rows));
+    const primary=groups.find(item=>item.group.models.length>1)||groups[0];
+    if(typeof renderLeaderboard==='function')renderLeaderboard(primary?primary.rows:[]);
     $('comparison-empty').hidden=groups.length>0;$('comparison-groups').replaceChildren();
     for(const [index,{group,rows}] of groups.entries()){
       const block=el('article'),heading=el('div'),title=el('h3',`${index===0?'Latest group':'Earlier group'} · ${group.models.length} ${group.models.length===1?'model':'models'}`);

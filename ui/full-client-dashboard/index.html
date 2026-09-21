@@ -7,12 +7,14 @@
   <title>MapleBench — AI agents in MapleStory</title>
   <link rel="stylesheet" href="./style.css">
   <script src="./dashboard.js" defer></script>
+  <link rel="stylesheet" href="./fonts.css">
 </head>
 <body id="top">
+  <div class="world-backdrop" aria-hidden="true"><img src="./henesys-world.png" width="1536" height="1024" alt="" decoding="async" fetchpriority="low"></div>
   <div class="world-backdrop" aria-hidden="true"><img src="./henesys-world.png" width="1536" height="1024" alt="" decoding="async"></div>
   <header class="site-header"><nav aria-label="Sections"><a href="#overview">Overview</a><a href="#results">Results</a><a href="#recordings">Recordings</a><a href="#methodology">Methodology</a></nav><a href="https://github.com/dmarzzz/maplebench">Source code</a></header>
   <main>
-    <section class="hero" id="overview" aria-labelledby="overview-title">
+    <section class="hero" id="overview" aria-labelledby="overview-title" data-card="1">
       <h1 id="overview-title"><img src="./maple-leaf.png" width="1254" height="1254" alt="" class="maple-leaf">MapleBench</h1>
       <p class="hero-description">A benchmark for AI agents playing MapleStory</p>
       <div class="hero-actions"><a href="https://github.com/dmarzzz/maplebench">Code</a><a href="#results">Explore results</a></div>
@@ -23,19 +25,19 @@
       <p id="hero-summary" class="hero-summary"></p>
       <p id="connection" role="status">Waiting for results</p>
     </section>
-    <section class="research-intro" id="results" aria-labelledby="research-title">
-      <div class="section-heading"><div><h2 id="research-title">Results</h2>
+    <section class="research-intro" id="results" aria-labelledby="research-title" data-card="1">
+      <div class="section-heading"><div><span class="section-emblem emblem-meso-pouch" aria-hidden="true"></span><h2 id="research-title">Results</h2>
         <p>Same character, knowledge, controls and time budget. Every planned attempt stays visible.</p></div><span class="pill">Pilot · unranked</span></div>
       <p class="note">Five-minute adaptive runs count model wait inside the controller budget. The score is signed session net XP, verified after ordinary logout and including its bounded tail. Watch the recording to inspect model calls and inputs. Earlier protocols remain separate.</p>
       <div class="section-heading matrix-heading"><h3>Model × declared class / task</h3><label>Evidence protocol<select id="research-protocol" aria-label="Evidence protocol"></select></label></div>
       <nav id="catalog-cohorts" aria-label="Class cohort progress" hidden></nav>
       <p id="research-protocol-detail" class="note"></p>
-      <div id="research-matrix" class="table-wrap"></div>
+      <div class="leaderboard-panel"><div class="chart-heading"><h3>Leaderboard</h3><span>Mean saved XP per model</span></div><div class="table-scroll"><table class="leaderboard"><caption class="sr-only">Saved XP by model</caption><thead><tr><th scope="col">#</th><th scope="col">Model</th><th scope="col">Verified</th><th scope="col">Mean</th><th scope="col">Median</th><th scope="col">Best</th></tr></thead><tbody id="leaderboard-rows"></tbody></table></div><p id="leaderboard-note" class="muted small"></p></div><div id="research-matrix" class="table-wrap"></div>
       <p id="research-empty" class="empty">A protocol-declared cohort is required for the research matrix. Existing run evidence remains below.</p>
       <p class="note">Every planned attempt remains in the denominator. Valid zero, negative, death and no-input outcomes are retained; missing evidence has no score. Sample spread is descriptive. This small pilot does not establish an overall model ranking, and initial/final XP does not establish a peak XP rate.</p>
     </section>
-    <section class="live" id="recordings" aria-labelledby="recordings-title">
-      <div class="section-heading"><h2 id="recordings-title">Recordings &amp; run evidence</h2></div>
+    <section class="live" id="recordings" aria-labelledby="recordings-title" data-card="1">
+      <div class="section-heading"><span class="section-emblem emblem-ribbon-pig" aria-hidden="true"></span><h2 id="recordings-title">Recordings &amp; run evidence</h2></div>
       <div class="live-heading"><span id="live-badge" class="pill">No active attempt</span><span id="live-id"></span></div>
       <h3 id="live-title">The next run starts here.</h3>
       <p id="live-description">This page shows actual full-client attempts as their evidence arrives.</p>
@@ -49,23 +51,23 @@
       <div id="featured-recording"></div>
       <div id="adaptive-evidence"></div>
     </section>
-    <section id="release-reliability" hidden aria-labelledby="reliability-title">
-      <div class="section-heading"><div><h2 id="reliability-title">Did every attempt yield evidence?</h2><p>Every planned group remains visible. A failed attempt can reflect a model program or the runtime; this summary does not assign the cause.</p></div></div>
+    <section id="release-reliability" hidden aria-labelledby="reliability-title" data-card="1">
+      <div class="section-heading"><div><span class="section-emblem emblem-blue-snail" aria-hidden="true"></span><h2 id="reliability-title">Did every attempt yield evidence?</h2><p>Every planned group remains visible. A failed attempt can reflect a model program or the runtime; this summary does not assign the cause.</p></div></div>
       <div id="reliability-groups"></div>
       <p class="note">Three consecutive clean groups are an operational release check, not an SLA or a model ranking. Zero and negative scores count as valid outcomes.</p>
     </section>
-    <section aria-labelledby="comparison-title">
-      <div class="section-heading"><div><h2 id="comparison-title">Results by frozen inputs</h2><p>Every group is shown. Matching inputs do not prove identical live monster scenes.</p></div><span class="pill">Unranked</span></div>
+    <section aria-labelledby="comparison-title" data-card="1">
+      <div class="section-heading"><div><span class="section-emblem emblem-potions" aria-hidden="true"></span><h2 id="comparison-title">Results by frozen inputs</h2><p>Every group is shown. Matching inputs do not prove identical live monster scenes.</p></div><span class="pill">Unranked</span></div>
       <p id="comparison-empty" class="empty">Verified persisted results appear here after normal logout.</p>
       <div id="comparison-groups"></div>
       <p class="note">Persisted XP includes penalties and is measured after normal logout. Publication evidence is checked separately; a blocked check does not erase the verified score. All displayed runs remain unranked.</p>
     </section>
-    <section aria-labelledby="history-title">
-      <div class="section-heading"><div><h2 id="history-title">Every visible attempt</h2><p>Failures, recoveries, and unscored integration runs stay in the history.</p></div><span id="count">0 attempts</span></div>
+    <section aria-labelledby="history-title" data-card="1">
+      <div class="section-heading"><div><span class="section-emblem emblem-little-stump" aria-hidden="true"></span><h2 id="history-title">Every visible attempt</h2><p>Failures, recoveries, and unscored integration runs stay in the history.</p></div><span id="count">0 attempts</span></div>
       <div class="table-wrap"><table><caption class="visually-hidden">Full-client attempt history</caption><thead><tr><th>Attempt / exact model</th><th>Status</th><th>Persisted XP</th><th>Diagnostic XP</th><th>Input actions</th><th>Publication evidence</th><th>Recording</th></tr></thead><tbody id="history"></tbody></table></div>
       <p id="history-empty" class="empty">No attempts have been exported yet.</p>
     </section>
-    <section id="methodology" aria-labelledby="methodology-title">
+    <section id="methodology" aria-labelledby="methodology-title" data-card="1">
       <div class="section-heading method-heading"><img src="./skill-book.png" width="1254" height="1254" alt="" loading="lazy"><h2 id="methodology-title">Methodology</h2></div>
       <div id="native-qualification" hidden></div>
       <div class="method-grid"><div><h3>What the agent sees</h3><p>Structured game state and a frozen knowledge pack. It writes programs that observe the world and press ordinary game keys. Recordings show the run for human inspection.</p></div><div><h3>What the score means</h3><p>XP saved after ordinary logout minus starting XP, including penalties and the bounded logout tail. The five-minute controller budget includes model wait. Missing evidence stays unscored.</p></div><div><h3>What this pilot can tell us</h3><p>Results describe these declared fixtures and model settings. Live monster scenes vary. Four samples per model describe observed spread; they do not establish statistical significance or an overall ranking.</p></div></div>
@@ -80,7 +82,7 @@
       <button id="replay-close" type="button" autofocus>Close replay</button>
     </div>
     <video id="replay-video" controls playsinline preload="metadata" aria-label="Recorded full-client gameplay"></video>
-    <section id="replay-events" hidden aria-label="Verified replay timeline">
+    <section id="replay-events" hidden aria-label="Verified replay timeline" data-card="1">
       <div class="replay-event-heading"><strong id="replay-call-state">Between model calls</strong><span id="replay-position"></span></div>
       <canvas id="replay-event-chart" width="1000" height="66" aria-label="Model calls in violet and input delivery in orange; use the slider to seek"></canvas>
       <label for="replay-seek">Seek recorded timeline<input id="replay-seek" type="range" min="0" max="1" step="0.05" value="0"></label>
