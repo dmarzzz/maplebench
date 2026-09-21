@@ -28,9 +28,7 @@ CORE_ASSETS = ('index.html', 'dashboard.js', 'style.css')
 THEME_ASSETS = ('henesys-world.png', 'maple-leaf.png', 'maple-companions.png',
                 'skill-book.png', 'manrope.ttf', 'OFL-Manrope.txt', 'ARTWORK.md',
                 # Section emblems and the font stylesheet the polished dashboard needs.
-                'blue-snail.png', 'little-stump.png', 'meso-pouch.png', 'potions.png',
-                'return-scroll.png', 'ribbon-pig.png', 'fonts.css',
-                'SECTION-ART.md', 'WORLD-BACKGROUND.md')
+                'fonts.css')
 ASSETS = CORE_ASSETS + THEME_ASSETS
 MAX_VIDEO = 32 * 1024**2
 MAX_ADAPTIVE_VIDEO = 96 * 1024**2
