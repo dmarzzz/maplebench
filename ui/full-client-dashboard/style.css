@@ -187,3 +187,53 @@ details[open] > summary.section-title .section-chevron { transform: rotate(180de
 #approach summary.lab-toggle { justify-content: flex-start !important; text-align: left !important; }
 #approach h2#approach-title { justify-content: flex-start !important; margin-right: auto; }
 #approach h2#approach-title > span { align-items: flex-start; text-align: left; }
+
+/* ---- Design tokens -------------------------------------------------------
+   The illustrated layer was copied in without the :root block its rules were
+   written against, so eleven custom properties were referenced and never
+   declared. A declaration containing an undefined var() is dropped at
+   computed-value time, which is why the section headings lost their padding,
+   emblem size and heading scale all at once. Declared here, stepping at the
+   same two breakpoints the sheet already uses. */
+:root {
+  --pad-y: 28px; --pad-x: 30px;
+  --emblem: 44px; --emblem-gap: 14px;
+  --card-rule: #e3e8d8;
+  --t-2xs: 11px; --t-xs: 12px; --t-sm: 13px;
+  --t-base: 15px; --t-xl: 26px; --t-code: 11px;
+}
+/* The heading band bleeds out of its card by exactly the card's padding, so
+   the two must come from the same tokens or the band sits inset or overhangs. */
+main > section[data-card] { padding: var(--pad-y) var(--pad-x); border-radius: var(--radius); }
+@media(max-width:860px) {
+  :root { --pad-y: 24px; --pad-x: 22px; --emblem: 40px; --emblem-gap: 12px; --t-xl: 24px; }
+}
+@media(max-width:560px) {
+  :root { --pad-y: 20px; --pad-x: 16px; --emblem: 34px; --emblem-gap: 10px;
+          --t-2xs: 12px; --t-xs: 12px; --t-sm: 13px; --t-base: 14px;
+          --t-xl: 22px; --t-code: 12px; }
+}
+
+/* ---- Section headings ----------------------------------------------------
+   Two heading shapes exist in the markup: the emblem and h2 are sometimes
+   direct flex children of .section-heading, and sometimes nested in a plain
+   div beside a description. Both were breaking differently.
+
+   1. The token rule above resets the emblem's margin, which removed the only
+      gap in the nested shape, so the sprite art collided with the first letter.
+   2. A 16rem flex-basis on the nested div, plus flex-wrap, pushed a long
+      heading onto its own line below the emblem instead of shrinking beside it.
+
+   The emblem and its heading are one unit: they shrink together, never wrap
+   apart, and always keep a real gap. */
+.section-emblem { margin-right: var(--emblem-gap); }
+.section-heading > div { flex: 1 1 auto; min-width: 0; }
+.section-heading > .section-emblem { margin-right: 0; }
+/* A flex item wraps on its basis, not its shrunk size, so an auto basis
+   still pushed a long heading below its emblem. A zero basis lets it take
+   the remaining width and wrap its text instead of itself. */
+.section-heading > .section-emblem + h2 { flex: 1 1 0; min-width: 0; }
+/* The lab and the collapsible summaries lay their emblem out with flex gap
+   already, so they must not also carry the inline margin. */
+.lab-toggle h2 .section-emblem, .section-heading-copy .section-emblem,
+.card-heading > .section-emblem { margin-right: 0; }
