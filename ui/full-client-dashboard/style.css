@@ -237,3 +237,61 @@ main > section[data-card] { padding: var(--pad-y) var(--pad-x); border-radius: v
    already, so they must not also carry the inline margin. */
 .lab-toggle h2 .section-emblem, .section-heading-copy .section-emblem,
 .card-heading > .section-emblem { margin-right: 0; }
+
+/* ---- Simulation lab diagram ----------------------------------------------
+   Restored from 1df503b, which drew the worker pool as stacked VMs with the
+   agent runtime and game environment grouped and every route labelled. It is
+   portrait, so unlike the landscape version it fits a phone without a
+   horizontal scroller. */
+.lab-figure { margin: 0; }
+.lab-context { display: flex; justify-content: flex-end; padding: 14px 0 0; }
+.lab-context>span { font-size: 11px; color: #65745b; }
+.lab-scroll { overflow-x: auto; scrollbar-color: #b7c6a8 transparent; margin: 20px 0 12px; }
+.lab-diagram { display: block; width: 100%; min-width: 760px; height: auto; font-family: 'Manrope',sans-serif; }
+.lab-diagram .runtime-group rect { stroke-width: 1; }
+.lab-diagram .agent-group rect { fill: #f5f3fa; stroke: #d6cee3; }
+.lab-diagram .game-group rect { fill: #edf5e7; stroke: #bdcfac; }
+.lab-diagram .group-title { font-size: 16px; font-weight: 650; fill: #465b4c; }
+.lab-diagram .map-node rect { fill: #fff; stroke: #c8d8cc; stroke-width: 1.1; }
+.lab-diagram .worker-runner rect { fill: #edf4e4; stroke: #a8be94; }
+.lab-diagram .plan rect { fill: #fff9ed; stroke: #ddcaa2; }
+.lab-diagram .worker-stack .worker-back { fill: #e6efda; stroke: #a8be94; }
+.lab-diagram .worker-stack .worker-back.far { fill: #d5e4c5; }
+.lab-diagram .worker-stack .worker-front { fill: #f3f8f5; stroke: #8aa471; stroke-width: 1.5; }
+.lab-diagram .worker-title { font-size: 22px; font-weight: 650; fill: #364b3e; }
+.lab-diagram .map-node.publisher rect { fill: #faf7ee; stroke: #d3c4a3; }
+.lab-diagram .map-node.public-results rect { fill: #f2f7ed; stroke: #b7cba9; }
+.lab-diagram .map-node.provider rect { fill: #f5f2f9; stroke: #d7cee3; }
+.lab-diagram .map-node.controller rect { fill: #fff9ed; stroke: #ddcaa2; }
+.lab-diagram .map-node.client rect { fill: #f2faf6; stroke: #b7d3c5; }
+.lab-diagram .map-node.server rect { fill: #f1f7e9; stroke: #c3d6ad; }
+.lab-diagram .map-node.sandbox rect { fill: #fffaf2; stroke: #b18a59; stroke-dasharray: 4 3; }
+.lab-diagram .map-node.is-highlighted rect { stroke: #54836b; stroke-width: 2.4; }
+.lab-diagram .map-kicker { font-size: 11px; fill: #627669; }
+.lab-diagram .map-name { font-size: 16px; fill: #364b3e; font-weight: 650; }
+.lab-diagram .map-detail { font-size: 11px; fill: #617568; }
+.lab-diagram .map-code { font: 10px ui-monospace,monospace; fill: #766137; }
+.lab-diagram .map-region { font-size: 12px; fill: #62766a; }
+.lab-diagram .route-label { font-size: 10px; fill: #597062; }
+.lab-diagram .map-foot { font-size: 11px; fill: #597260; }
+.lab-diagram .map-route { fill: none; stroke: #809e8b; stroke-width: 1.6; marker-end: url(#map-arrow); }
+.lab-diagram .map-route.both { marker-start: url(#map-arrow); }
+.lab-diagram .map-route.inference { stroke: #9982a9; }
+.lab-diagram .map-route.verification { stroke: #ae9462; stroke-dasharray: 5 4; }
+.lab-diagram a:hover { text-decoration: underline; }
+.lab-diagram a:focus-visible { outline: 2px solid #54836b; outline-offset: 3px; }
+.lab-figure>figcaption { font-size: 11px; line-height: 1.7; color: #6d785f; margin-top: 8px; }
+.lab-scroll-hint { display: none; }
+.lab-context { flex-wrap: wrap; gap: 5px 16px; }
+.lab-scroll-hint { display: block; margin: 15px 0 0; font-size: 10px; color: #6d785f; }
+.lab-context>span,.lab-figure>figcaption { font-size: 10px; }
+.lab-scroll { margin-top: 8px; }/* Portrait artwork: let it fit the column instead of forcing a scroll. */
+.lab-diagram { min-width: 0; max-width: 960px; margin-inline: auto; }
+.lab-scroll { overflow-x: auto; }
+
+/* The sprite PNGs carry white backgrounds, which is why they were showing as
+   white tiles. The <img> sprites already blend; the background-image emblems
+   were never given the same treatment. */
+.section-emblem { mix-blend-mode: multiply; }
+/* The portrait diagram fits the column, so there is nothing to swipe. */
+.lab-scroll-hint { display: none; }

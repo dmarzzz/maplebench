@@ -33,35 +33,64 @@
             <div class="lab-context"><p>One game world per worker.</p><span>4 vCPU / 16 GB each</span></div>
             <p class="lab-scroll-hint">Swipe to follow the connections</p>
             <div class="lab-scroll" tabindex="0" role="region" aria-label="Distributed simulation lab diagram; scroll horizontally on smaller screens">
-              <svg class="lab-diagram" viewBox="0 0 900 630" role="img" aria-labelledby="lab-diagram-title lab-diagram-description">
-                <title id="lab-diagram-title">Distributed simulation lab, with one worker expanded</title>
-                <desc id="lab-diagram-description">OpenTofu and Ansible provision three independent game environments. All workers use the OpenAI inference provider. Inside worker one, the MapleBench controller sends initial state to the model and receives a program for a bounded, networkless Node.js and Docker sandbox. The program observes and presses keys through the controller and Journey WASM. Journey connects through a WebSocket-to-TCP proxy to Cosmic, which persists progress in MySQL. A read-only asset service feeds the client. MapleBench verifies saved XP before publishing results to Vercel. The other two workers have the same isolated stack. This illustrates the historical single-request protocol.</desc>
-                <defs><marker id="lab-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="m2 1 5 4-5 4" fill="none" stroke="context-stroke" stroke-width="1.5"/></marker></defs>
-                <g class="lab-provision"><text x="30" y="47" class="lab-small">Provisioned with</text><a href="https://github.com/opentofu/opentofu"><text x="30" y="71" class="lab-link">OpenTofu</text></a><text x="108" y="71" class="lab-small">+</text><a href="https://github.com/ansible/ansible"><text x="124" y="71" class="lab-link">Ansible</text></a><text x="30" y="95" class="lab-small">DigitalOcean / Ubuntu</text></g>
-                <g class="lab-inference" text-anchor="middle"><text x="450" y="27" class="lab-small">Shared inference provider</text><text x="450" y="58" class="lab-name">OpenAI API</text></g>
-                <path class="lab-wire inference" d="M450 80V126H150V162"/><path class="lab-wire inference" d="M450 126H780V162"/><path class="lab-wire inference" d="M620 126V162"/>
-                <text x="473" y="102" class="lab-small">Task + state ↔ program</text>
-                <g class="lab-worker active" text-anchor="middle"><circle cx="150" cy="187" r="22"/><text x="150" y="193" class="lab-worker-number">01</text><text x="150" y="232" class="lab-worker-name">Worker 01</text></g>
-                <g class="lab-worker" text-anchor="middle"><circle cx="620" cy="187" r="22"/><text x="620" y="193" class="lab-worker-number">02</text><text x="620" y="232" class="lab-worker-name">Worker 02</text></g>
-                <g class="lab-worker" text-anchor="middle"><circle cx="780" cy="187" r="22"/><text x="780" y="193" class="lab-worker-number">03</text><text x="780" y="232" class="lab-worker-name">Worker 03</text></g>
-                <text x="700" y="257" text-anchor="middle" class="lab-small">Each has the same isolated stack</text>
-                <path class="lab-wire" d="M150 246V296"/>
-                <g text-anchor="middle"><text x="150" y="325" class="lab-name">MapleBench controller</text><text x="150" y="348" class="lab-small">SDK, budgets &amp; receipts</text></g>
-                <path class="lab-wire both" d="M263 327H351"/><text x="307" y="311" text-anchor="middle" class="lab-small">State / keys</text>
-                <g text-anchor="middle"><a href="https://github.com/nmnsnv/maplestory-wasm"><text x="450" y="325" class="lab-name lab-link">Journey WASM</text></a><text x="450" y="348" class="lab-small">Browser client &amp; recording</text></g>
-                <path class="lab-wire both" d="M554 327H703"/><text x="628" y="303" text-anchor="middle" class="lab-small">WebSocket ↔ TCP</text><text x="628" y="348" text-anchor="middle" class="lab-small">proxy</text>
-                <g text-anchor="middle"><a href="https://github.com/P0nk/Cosmic"><text x="780" y="325" class="lab-name lab-link">Cosmic</text></a><text x="780" y="348" class="lab-small">v83 game server</text></g>
-                <path class="lab-wire both" d="M150 370V433"/><text x="168" y="403" class="lab-small">Run program</text>
-                <g text-anchor="middle"><text x="150" y="465" class="lab-name">Node.js + Docker</text><text x="150" y="489" class="lab-small">Bounded, networkless sandbox</text></g>
-                <path class="lab-wire" d="M450 433V369"/><text x="467" y="403" class="lab-small">Asset stream</text>
-                <g text-anchor="middle"><text x="450" y="465" class="lab-name">Game assets</text><text x="450" y="489" class="lab-small">Separate read-only service</text></g>
-                <path class="lab-wire" d="M780 370V433"/><text x="797" y="403" class="lab-small">Logout</text>
-                <g text-anchor="middle"><text x="780" y="465" class="lab-name">MySQL</text><text x="780" y="489" class="lab-small">Saved character state</text></g>
-                <path class="lab-wire verification" d="M780 507V531H450V560"/>
-                <g text-anchor="middle"><text x="450" y="588" class="lab-name">Verify saved XP</text><text x="450" y="611" class="lab-small">MapleBench verifier</text></g>
-                <path class="lab-wire verification" d="M551 585H703"/>
-                <g text-anchor="middle"><text x="780" y="588" class="lab-name">Public results</text><text x="780" y="611" class="lab-small">Vercel</text></g>
-              </svg>
+              <svg class="lab-diagram" viewBox="0 0 960 1130" role="img" aria-labelledby="lab-diagram-title lab-diagram-description">
+<title id="lab-diagram-title">Agent runtime and game environment on each simulation worker</title>
+<desc id="lab-diagram-description">The illustrated worker pool contains separate virtual machines; the labels A, B and C do not report a live worker count. Each VM owns one Cosmic game world, its MySQL database, Journey WASM browser and local asset service, WebSocket-to-TCP proxy, host controller, program sandbox and verifier. Operator-managed dispatch assigns frozen comparison plans to qualified workers. The fan-out shows those assignments, not an automated fleet scheduler. Inside each worker, the worker runner executes the assigned plan in order, restores the baseline, drives each trial and collects verified evidence. This node groups local plan execution and the durable trial runner; it does not assign work to other workers. It enforces group limits and stops on failure. Exclusive world, queue and runner locks permit one active trial per configured worker world, including verification and cleanup. Separate qualified worker VMs can execute independently. The model inference provider is remote and shared; the current implementation uses the OpenAI API. Within each VM, Agent runtime groups the trusted MapleBench controller and the isolated model-written program. Game environment groups the Journey WASM frontend, the WebSocket-to-TCP proxy, the Cosmic Java backend and MySQL persistence. These group boxes describe software responsibilities, not additional machines or security boundaries. The worker runner and outcome collection belong to the evaluation harness, outside the agent runtime group. The trusted controller has network access and holds API credentials outside the Docker sandbox. Only model-written JavaScript runs in that networkless sandbox; validated SDK requests use stdin/stdout pipes. Cosmic saves character state in the worker-local MySQL database. This database is reused across trials with the frozen baseline restored before each trial. The controller writes run metrics, model-call evidence, SDK receipts and captured video to private files keyed by attempt ID. The trial runner collects these with initial and final database exports and native save receipts into a separate evidence bundle for every attempt. Verification checks the saved outcome and artifact bindings. A separate serialized publication process rechecks the evidence and exports allowlisted results.json summaries, recording manifests and videos to the static site on Vercel. Raw prompts, generated programs and private logs remain private. Each model in a comparison group uses the same declared worker and restored character baseline; this does not make live combat deterministic.</desc>
+<defs>
+<pattern id="map-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#dbe7e4" stroke-width=".7"/></pattern>
+<marker id="map-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="m1 1 7 4-7 4" fill="none" stroke="context-stroke" stroke-width="1.6"/></marker>
+<clipPath id="worker-clip"><rect x="28" y="190" width="896" height="760" rx="18"/></clipPath>
+<symbol id="tiny-tree" viewBox="0 0 42 62"><path d="M19 36h6v24h-6" fill="#a67a4a"/><path d="m21 0 17 25H29l13 21H0l13-21H4Z" fill="#99bca1"/><path d="m21 0 0 46H0l13-21H4Z" fill="#bad1b2"/></symbol>
+</defs>
+<g class="worker-stack" aria-hidden="true">
+<rect class="worker-back far" x="52" y="142" width="896" height="760" rx="18"/>
+<rect class="worker-back" x="40" y="166" width="896" height="760" rx="18"/>
+<rect class="worker-front" x="28" y="190" width="896" height="760" rx="18"/>
+</g>
+<g clip-path="url(#worker-clip)" aria-hidden="true"><rect x="28" y="190" width="896" height="760" fill="url(#map-grid)"/><g transform="translate(0 190)"><path d="M28 738Q102 704 185 733T355 739T540 730T735 740T924 727V760H28Z" fill="#e1eddb"/><use href="#tiny-tree" x="846" y="703" width="31" height="46"/><use href="#tiny-tree" x="817" y="718" width="22" height="33"/>
+<g transform="translate(445 716)"><path d="M0 22Q-3 0 17 0T34 22Z" fill="#f2bb6e" stroke="#c09151"/><path d="M12 22v13q5 6 11 0V22" fill="#fff4d8" stroke="#c09151"/><circle cx="9" cy="13" r="4" fill="#fff6dc"/><circle cx="26" cy="11" r="4" fill="#fff6dc"/><path d="M16 27v2m4-2v2" stroke="#886a47" stroke-width="2"/></g></g></g>
+<text x="72" y="160" class="map-region">Worker C · separate VM</text>
+<text x="60" y="184" class="map-region">Worker B · separate VM</text>
+<text x="60" y="224" class="worker-title">Worker A · one VM</text>
+<text x="60" y="245" class="map-region">1 active trial per worker</text>
+<text x="874" y="224" text-anchor="end" class="map-region">Independent world, database &amp; run state</text>
+<g class="runtime-group agent-group"><rect x="44" y="380" width="332" height="330" rx="14"/><text x="76" y="406" class="group-title">Agent runtime</text></g>
+<g class="runtime-group game-group"><rect x="574" y="380" width="332" height="520" rx="14"/><text x="606" y="406" class="group-title">Game environment</text></g>
+<g class="map-node plan"><rect x="60" y="20" width="300" height="88" rx="10"/><text x="78" y="44" class="map-kicker">Operator-managed dispatch</text><text x="78" y="68" class="map-name">Experiment coordination</text><text x="78" y="90" class="map-detail">Frozen plans → assigned workers</text></g>
+<g class="map-node provider"><rect x="590" y="20" width="300" height="88" rx="10"/><text x="608" y="44" class="map-kicker">External service</text><text x="608" y="68" class="map-name">Model inference provider</text><text x="608" y="90" class="map-detail">OpenAI API</text></g>
+<path class="map-route dispatch" d="M330 114V269"/>
+<path class="map-route dispatch" d="M330 126H355V160"/>
+<path class="map-route dispatch" d="M355 126H380V136"/>
+<g class="map-node worker-runner"><rect x="60" y="275" width="300" height="88" rx="10"/><text x="78" y="299" class="map-kicker">Local plan execution</text><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/docs/FULL_CLIENT_RUNNER.md"><text x="78" y="323" class="map-name">Worker runner</text></a><text x="78" y="345" class="map-detail">Reset · run · verify · collect evidence</text></g>
+<path class="map-route " d="M210 369V420"/>
+<path class="map-route both inference" d="M740 114V150H440V450H366"/>
+<text x="458" y="312" class="route-label">Task + state / code</text>
+<g class="map-node controller is-highlighted"><rect x="60" y="426" width="300" height="108" rx="10"/><text x="78" y="450" class="map-kicker">Trusted host process · Python</text><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/scripts/full_client_bridge.py"><text x="78" y="474" class="map-name">MapleBench controller</text></a><text x="78" y="496" class="map-detail">SDK relay, budgets &amp; receipts</text><text x="78" y="514" class="map-detail">Network access · host-held credentials</text></g>
+<g class="map-node client is-highlighted"><rect x="590" y="426" width="300" height="108" rx="10"/><text x="608" y="450" class="map-kicker">Frontend · browser client</text><a href="https://github.com/nmnsnv/maplestory-wasm"><text x="608" y="474" class="map-name">Journey WASM</text></a><text x="608" y="496" class="map-detail">Client physics, controls &amp; rendering</text><text x="608" y="514" class="map-detail">Read-only assets · gameplay recording</text></g>
+<path class="map-route both" d="M366 484H584"/>
+<text x="475" y="472" class="route-label" text-anchor="middle">Game state / key inputs</text>
+<path class="map-route both" d="M210 540V598"/>
+<text x="228" y="562" class="route-label">Validated SDK calls</text>
+<text x="228" y="580" class="route-label">stdin / stdout</text>
+<g class="map-node sandbox"><rect x="60" y="604" width="300" height="88" rx="10"/><text x="78" y="628" class="map-kicker">Model-written JavaScript only</text><text x="78" y="652" class="map-name"><a href="https://github.com/nodejs/node">Node.js</a><tspan> + </tspan><a href="https://github.com/moby/moby">Docker</a></text><text x="78" y="674" class="map-detail">No network · no credentials</text></g>
+<path class="map-route both" d="M612 540V598"/>
+<text x="630" y="573" class="route-label">WebSocket ↔ TCP proxy</text>
+<g class="map-node server"><rect x="590" y="604" width="300" height="88" rx="10"/><text x="608" y="628" class="map-kicker">Backend · Java game server</text><a href="https://github.com/P0nk/Cosmic"><text x="608" y="652" class="map-name">Cosmic · MapleStory v83</text></a><text x="608" y="674" class="map-detail">Combat, monsters &amp; character state</text></g>
+<path class="map-route " d="M740 698V782"/>
+<text x="758" y="745" class="route-label">Save on logout</text>
+<g class="map-node database"><rect x="590" y="788" width="300" height="88" rx="10"/><text x="608" y="812" class="map-kicker">Persistence · local to worker</text><a href="https://github.com/mysql/mysql-server"><text x="608" y="836" class="map-name">MySQL</text></a><text x="608" y="858" class="map-detail">Baseline restored before each trial</text></g>
+<path class="map-route verification" d="M584 833H366"/>
+<text x="475" y="821" class="route-label" text-anchor="middle">Initial / final snapshots</text>
+<path class="map-route verification" d="M366 518H424V801H366"/>
+<text x="438" y="745" class="route-label">Metrics / video</text>
+<g class="map-node verifier"><rect x="60" y="788" width="300" height="88" rx="10"/><text x="78" y="812" class="map-kicker">Collected &amp; verified by the runner</text><text x="78" y="836" class="map-name">Per-attempt evidence files</text><text x="78" y="858" class="map-detail">Metrics, receipts &amp; recording</text></g>
+<path class="map-route verification" d="M210 882V1004"/>
+<text x="228" y="985" class="route-label">Export checked artifacts</text>
+<g class="map-node publisher"><rect x="60" y="1010" width="300" height="88" rx="10"/><text x="78" y="1034" class="map-kicker">Separate publication process</text><a href="https://github.com/dmarzzz/maplebench/blob/codex/benchmark-v2/docs/FULL_CLIENT_PUBLICATION.md"><text x="78" y="1058" class="map-name">Verify &amp; publish</text></a><text x="78" y="1080" class="map-detail">Allowlisted export · SHA-256 manifest</text></g>
+<path class="map-route verification" d="M366 1054H584"/>
+<text x="475" y="1042" class="route-label" text-anchor="middle">Public evidence package</text>
+<g class="map-node public-results"><rect x="590" y="1010" width="300" height="88" rx="10"/><text x="608" y="1034" class="map-kicker">Static site · Vercel</text><text x="608" y="1058" class="map-name">Results &amp; recordings</text><text x="608" y="1080" class="map-detail">results.json + manifests + WebM</text></g>
+</svg>
             </div>
             <figcaption>Historical single-request protocol. Three workers provisioned; all retired. <a href="https://maplebench.vercel.app/">12 newer cloud pilots</a>.</figcaption>
           </figure>
