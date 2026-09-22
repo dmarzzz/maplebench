@@ -25,9 +25,63 @@
       <p id="hero-summary" class="hero-summary"></p>
       <p id="connection" role="status">Waiting for results</p>
     </section>
+    <section id="approach" class="section section-card simulation-lab" data-card="1" aria-labelledby="approach-title">
+      <details id="lab-details">
+        <summary class="lab-toggle"><h2 id="approach-title"><span class="section-emblem emblem-blue-snail" aria-hidden="true"></span><span>Simulation lab<small>Inside the distributed setup</small></span><svg class="lab-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></h2></summary>
+        <div class="lab-content">
+          <figure class="lab-figure">
+            <div class="lab-context"><p>One game world per worker.</p><span>4 vCPU / 16 GB each</span></div>
+            <p class="lab-scroll-hint">Swipe to follow the connections</p>
+            <div class="lab-scroll" tabindex="0" role="region" aria-label="Distributed simulation lab diagram; scroll horizontally on smaller screens">
+              <svg class="lab-diagram" viewBox="0 0 900 630" role="img" aria-labelledby="lab-diagram-title lab-diagram-description">
+                <title id="lab-diagram-title">Distributed simulation lab, with one worker expanded</title>
+                <desc id="lab-diagram-description">OpenTofu and Ansible provision three independent game environments. All workers use the OpenAI inference provider. Inside worker one, the MapleBench controller sends initial state to the model and receives a program for a bounded, networkless Node.js and Docker sandbox. The program observes and presses keys through the controller and Journey WASM. Journey connects through a WebSocket-to-TCP proxy to Cosmic, which persists progress in MySQL. A read-only asset service feeds the client. MapleBench verifies saved XP before publishing results to Vercel. The other two workers have the same isolated stack. This illustrates the historical single-request protocol.</desc>
+                <defs><marker id="lab-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="m2 1 5 4-5 4" fill="none" stroke="context-stroke" stroke-width="1.5"/></marker></defs>
+                <g class="lab-provision"><text x="30" y="47" class="lab-small">Provisioned with</text><a href="https://github.com/opentofu/opentofu"><text x="30" y="71" class="lab-link">OpenTofu</text></a><text x="108" y="71" class="lab-small">+</text><a href="https://github.com/ansible/ansible"><text x="124" y="71" class="lab-link">Ansible</text></a><text x="30" y="95" class="lab-small">DigitalOcean / Ubuntu</text></g>
+                <g class="lab-inference" text-anchor="middle"><text x="450" y="27" class="lab-small">Shared inference provider</text><text x="450" y="58" class="lab-name">OpenAI API</text></g>
+                <path class="lab-wire inference" d="M450 80V126H150V162"/><path class="lab-wire inference" d="M450 126H780V162"/><path class="lab-wire inference" d="M620 126V162"/>
+                <text x="473" y="102" class="lab-small">Task + state ↔ program</text>
+                <g class="lab-worker active" text-anchor="middle"><circle cx="150" cy="187" r="22"/><text x="150" y="193" class="lab-worker-number">01</text><text x="150" y="232" class="lab-worker-name">Worker 01</text></g>
+                <g class="lab-worker" text-anchor="middle"><circle cx="620" cy="187" r="22"/><text x="620" y="193" class="lab-worker-number">02</text><text x="620" y="232" class="lab-worker-name">Worker 02</text></g>
+                <g class="lab-worker" text-anchor="middle"><circle cx="780" cy="187" r="22"/><text x="780" y="193" class="lab-worker-number">03</text><text x="780" y="232" class="lab-worker-name">Worker 03</text></g>
+                <text x="700" y="257" text-anchor="middle" class="lab-small">Each has the same isolated stack</text>
+                <path class="lab-wire" d="M150 246V296"/>
+                <g text-anchor="middle"><text x="150" y="325" class="lab-name">MapleBench controller</text><text x="150" y="348" class="lab-small">SDK, budgets &amp; receipts</text></g>
+                <path class="lab-wire both" d="M263 327H351"/><text x="307" y="311" text-anchor="middle" class="lab-small">State / keys</text>
+                <g text-anchor="middle"><a href="https://github.com/nmnsnv/maplestory-wasm"><text x="450" y="325" class="lab-name lab-link">Journey WASM</text></a><text x="450" y="348" class="lab-small">Browser client &amp; recording</text></g>
+                <path class="lab-wire both" d="M554 327H703"/><text x="628" y="303" text-anchor="middle" class="lab-small">WebSocket ↔ TCP</text><text x="628" y="348" text-anchor="middle" class="lab-small">proxy</text>
+                <g text-anchor="middle"><a href="https://github.com/P0nk/Cosmic"><text x="780" y="325" class="lab-name lab-link">Cosmic</text></a><text x="780" y="348" class="lab-small">v83 game server</text></g>
+                <path class="lab-wire both" d="M150 370V433"/><text x="168" y="403" class="lab-small">Run program</text>
+                <g text-anchor="middle"><text x="150" y="465" class="lab-name">Node.js + Docker</text><text x="150" y="489" class="lab-small">Bounded, networkless sandbox</text></g>
+                <path class="lab-wire" d="M450 433V369"/><text x="467" y="403" class="lab-small">Asset stream</text>
+                <g text-anchor="middle"><text x="450" y="465" class="lab-name">Game assets</text><text x="450" y="489" class="lab-small">Separate read-only service</text></g>
+                <path class="lab-wire" d="M780 370V433"/><text x="797" y="403" class="lab-small">Logout</text>
+                <g text-anchor="middle"><text x="780" y="465" class="lab-name">MySQL</text><text x="780" y="489" class="lab-small">Saved character state</text></g>
+                <path class="lab-wire verification" d="M780 507V531H450V560"/>
+                <g text-anchor="middle"><text x="450" y="588" class="lab-name">Verify saved XP</text><text x="450" y="611" class="lab-small">MapleBench verifier</text></g>
+                <path class="lab-wire verification" d="M551 585H703"/>
+                <g text-anchor="middle"><text x="780" y="588" class="lab-name">Public results</text><text x="780" y="611" class="lab-small">Vercel</text></g>
+              </svg>
+            </div>
+            <figcaption>Historical single-request protocol. Three workers provisioned; all retired. <a href="https://maplebench.vercel.app/">12 newer cloud pilots</a>.</figcaption>
+          </figure>
+          <div class="lab-notes">
+            <div><h3>What the agent sees</h3><p>Position, HP/MP, XP, level, map, alive status, and nearby monsters. The model receives structured state; the recording is for us.</p><h3>What it controls</h3><p>A program calls <code>observe()</code>, <code>pressKeys()</code>, and <code>wait()</code> in <a href="https://github.com/nodejs/node">Node.js</a> / <a href="https://github.com/moby/moby">Docker</a>. Normal game inputs only; no stat edits.</p></div>
+            <div class="lab-code"><h3><img class="inventory-sprite" src="./potions.png" width="1254" height="1254" alt="" loading="lazy" decoding="async">An agent’s program <small>Illustrative</small></h3><pre><code><span class="syntax-keyword">const</span> state = <span class="syntax-keyword">await</span> sdk.observe();
+<span class="syntax-keyword">if</span> (state.character.hp &lt; state.character.maxHp / 2) {
+  <span class="syntax-keyword">await</span> sdk.pressKeys([<span class="syntax-string">'HP_POTION'</span>], 100);
+}
+<span class="syntax-keyword">await</span> sdk.pressKeys([<span class="syntax-string">'LEFT'</span>], 300);
+<span class="syntax-keyword">await</span> sdk.pressKeys([<span class="syntax-string">'BRANDISH'</span>], 650);</code></pre></div>
+          </div>
+          <p class="lab-footnote">Each worker owns its world, database, baseline, credentials, and locks. Trials run serially per worker; cohorts stay on one host. Provisioning alone does not establish qualification. An external controller verifies worker deletion at lease expiry.</p>
+        </div>
+      </details>
+    </section>
+
     <section class="research-intro" id="results" aria-labelledby="research-title" data-card="1">
-      <div class="section-heading"><div><span class="section-emblem emblem-meso-pouch" aria-hidden="true"></span><h2 id="research-title">Results</h2>
-        <p>Same character, knowledge, controls and time budget. Every planned attempt stays visible.</p></div><span class="pill">Pilot · unranked</span></div>
+      <details class="section-collapse" open><summary class="section-title"><div class="section-heading"><div><span class="section-emblem emblem-meso-pouch" aria-hidden="true"></span><h2 id="research-title">Results</h2>
+        <p>Same character, knowledge, controls and time budget. Every planned attempt stays visible.</p></div><span class="pill">Pilot · unranked</span></div><svg class="section-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><div class="section-body">
       <p class="note">Five-minute adaptive runs count model wait inside the controller budget. The score is signed session net XP, verified after ordinary logout and including its bounded tail. Watch the recording to inspect model calls and inputs. Earlier protocols remain separate.</p>
       <div class="section-heading matrix-heading"><h3>Model × declared class / task</h3><label>Evidence protocol<select id="research-protocol" aria-label="Evidence protocol"></select></label></div>
       <nav id="catalog-cohorts" aria-label="Class cohort progress" hidden></nav>
@@ -35,9 +89,9 @@
       <div class="leaderboard-panel"><div class="chart-heading"><h3>Leaderboard</h3><span>Mean saved XP per model</span></div><div class="table-scroll"><table class="leaderboard"><caption class="sr-only">Saved XP by model</caption><thead><tr><th scope="col">#</th><th scope="col">Model</th><th scope="col">Verified</th><th scope="col">Mean</th><th scope="col">Median</th><th scope="col">Best</th></tr></thead><tbody id="leaderboard-rows"></tbody></table></div><p id="leaderboard-note" class="muted small"></p></div><div id="research-matrix" class="table-wrap"></div>
       <p id="research-empty" class="empty">A protocol-declared cohort is required for the research matrix. Existing run evidence remains below.</p>
       <p class="note">Every planned attempt remains in the denominator. Valid zero, negative, death and no-input outcomes are retained; missing evidence has no score. Sample spread is descriptive. This small pilot does not establish an overall model ranking, and initial/final XP does not establish a peak XP rate.</p>
-    </section>
+    </div></details></section>
     <section class="live" id="recordings" aria-labelledby="recordings-title" data-card="1">
-      <div class="section-heading"><span class="section-emblem emblem-ribbon-pig" aria-hidden="true"></span><h2 id="recordings-title">Recordings &amp; run evidence</h2></div>
+      <details class="section-collapse" open><summary class="section-title"><div class="section-heading"><span class="section-emblem emblem-ribbon-pig" aria-hidden="true"></span><h2 id="recordings-title">Recordings &amp; run evidence</h2></div><svg class="section-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><div class="section-body">
       <div class="live-heading"><span id="live-badge" class="pill">No active attempt</span><span id="live-id"></span></div>
       <h3 id="live-title">The next run starts here.</h3>
       <p id="live-description">This page shows actual full-client attempts as their evidence arrives.</p>
@@ -50,30 +104,30 @@
       </dl>
       <div id="featured-recording"></div>
       <div id="adaptive-evidence"></div>
-    </section>
+    </div></details></section>
     <section id="release-reliability" hidden aria-labelledby="reliability-title" data-card="1">
-      <div class="section-heading"><div><span class="section-emblem emblem-blue-snail" aria-hidden="true"></span><h2 id="reliability-title">Did every attempt yield evidence?</h2><p>Every planned group remains visible. A failed attempt can reflect a model program or the runtime; this summary does not assign the cause.</p></div></div>
+      <details class="section-collapse" open><summary class="section-title"><div class="section-heading"><div><span class="section-emblem emblem-blue-snail" aria-hidden="true"></span><h2 id="reliability-title">Did every attempt yield evidence?</h2><p>Every planned group remains visible. A failed attempt can reflect a model program or the runtime; this summary does not assign the cause.</p></div></div><svg class="section-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><div class="section-body">
       <div id="reliability-groups"></div>
       <p class="note">Three consecutive clean groups are an operational release check, not an SLA or a model ranking. Zero and negative scores count as valid outcomes.</p>
-    </section>
+    </div></details></section>
     <section aria-labelledby="comparison-title" data-card="1">
-      <div class="section-heading"><div><span class="section-emblem emblem-potions" aria-hidden="true"></span><h2 id="comparison-title">Results by frozen inputs</h2><p>Every group is shown. Matching inputs do not prove identical live monster scenes.</p></div><span class="pill">Unranked</span></div>
+      <details class="section-collapse" open><summary class="section-title"><div class="section-heading"><div><span class="section-emblem emblem-potions" aria-hidden="true"></span><h2 id="comparison-title">Results by frozen inputs</h2><p>Every group is shown. Matching inputs do not prove identical live monster scenes.</p></div><span class="pill">Unranked</span></div><svg class="section-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><div class="section-body">
       <p id="comparison-empty" class="empty">Verified persisted results appear here after normal logout.</p>
       <div id="comparison-groups"></div>
       <p class="note">Persisted XP includes penalties and is measured after normal logout. Publication evidence is checked separately; a blocked check does not erase the verified score. All displayed runs remain unranked.</p>
-    </section>
+    </div></details></section>
     <section aria-labelledby="history-title" data-card="1">
-      <div class="section-heading"><div><span class="section-emblem emblem-little-stump" aria-hidden="true"></span><h2 id="history-title">Every visible attempt</h2><p>Failures, recoveries, and unscored integration runs stay in the history.</p></div><span id="count">0 attempts</span></div>
+      <details class="section-collapse" open><summary class="section-title"><div class="section-heading"><div><span class="section-emblem emblem-little-stump" aria-hidden="true"></span><h2 id="history-title">Every visible attempt</h2><p>Failures, recoveries, and unscored integration runs stay in the history.</p></div><span id="count">0 attempts</span></div><svg class="section-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><div class="section-body">
       <div class="table-wrap"><table><caption class="visually-hidden">Full-client attempt history</caption><thead><tr><th>Attempt / exact model</th><th>Status</th><th>Persisted XP</th><th>Diagnostic XP</th><th>Input actions</th><th>Publication evidence</th><th>Recording</th></tr></thead><tbody id="history"></tbody></table></div>
       <p id="history-empty" class="empty">No attempts have been exported yet.</p>
-    </section>
+    </div></details></section>
     <section id="methodology" aria-labelledby="methodology-title" data-card="1">
-      <div class="section-heading method-heading"><img src="./skill-book.png" width="1254" height="1254" alt="" loading="lazy"><h2 id="methodology-title">Methodology</h2></div>
+      <details class="section-collapse" open><summary class="section-title"><div class="section-heading method-heading"><img src="./skill-book.png" width="1254" height="1254" alt="" loading="lazy"><h2 id="methodology-title">Methodology</h2></div><svg class="section-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><div class="section-body">
       <div id="native-qualification" hidden></div>
       <div class="method-grid"><div><h3>What the agent sees</h3><p>Structured game state and a frozen knowledge pack. It writes programs that observe the world and press ordinary game keys. Recordings show the run for human inspection.</p></div><div><h3>What the score means</h3><p>XP saved after ordinary logout minus starting XP, including penalties and the bounded logout tail. The five-minute controller budget includes model wait. Missing evidence stays unscored.</p></div><div><h3>What this pilot can tell us</h3><p>Results describe these declared fixtures and model settings. Live monster scenes vary. Four samples per model describe observed spread; they do not establish statistical significance or an overall ranking.</p></div></div>
       <p class="note">Earlier protocols stay separate. Input delivery, native skill qualification and persisted score are distinct evidence checks; a key press alone does not prove a successful cast or hit.</p>
       <p><a href="https://github.com/dmarzzz/maplebench/blob/v0.1.0/docs/V1_COHORT.md">Read the full protocol and limitations</a></p>
-    </section>
+    </div></details></section>
     <footer><p id="scope">Read-only results. No runs are started from this page.</p><p><a href="https://github.com/dmarzzz/maplebench">Source code</a> · <a href="https://github.com/dmarzzz/maplebench/releases/tag/v0.1.0">Release files</a> · Full-client gameplay / Cosmic persistence</p><p>MapleBench is independent and is not affiliated with, endorsed by, or sponsored by Nexon or MapleStory. Decorative fan artwork is separate from recorded gameplay. MapleStory names and game assets belong to their respective owners.</p></footer>
   </main>
   <dialog id="replay" aria-labelledby="replay-title" aria-describedby="replay-verification">

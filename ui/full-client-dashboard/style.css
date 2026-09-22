@@ -62,3 +62,128 @@ main > section[data-card][hidden] { display: none; }
 /* Keep the emblem on the same line as its heading in v1's nested heading markup. */
 .section-heading .section-emblem { vertical-align: middle; }
 .section-heading .section-emblem + h2 { display: inline-block; vertical-align: middle; margin: 0; }
+.syntax-keyword { color: #806296; }
+.syntax-string { color: #9b6527; }
+.inventory-sprite { display: block; object-fit: contain; mix-blend-mode: multiply; flex: none; }
+.card-heading, .section-card > .section-title, .section-collapse > summary { display: flex; align-items: center; justify-content: start; gap: var(--emblem-gap); text-align: left; margin: calc(var(--pad-y) * -1) calc(var(--pad-x) * -1) 26px; padding: 22px var(--pad-x); border-bottom: 1px solid var(--card-rule); border-radius: var(--radius) var(--radius) 0 0; background: #f4f7ec; }
+.section-card > .section-title, .section-collapse > summary.section-title { justify-content: space-between; }
+.section-collapse { border-radius: inherit; }
+.section-collapse > summary { margin: 0; list-style: none; cursor: pointer; }
+.section-collapse > summary::-webkit-details-marker { display: none; }
+.section-collapse:not([open]) > summary { border-bottom-color: transparent; border-radius: var(--radius); }
+.section-collapse > summary:hover { background: #eef3e2; }
+.section-body { padding: var(--pad-y) var(--pad-x); }
+.section-chevron { margin-left: auto; width: 23px; height: 23px; flex: none; fill: none; stroke: #648052; stroke-width: 1.7; transition: transform .18s ease-out; }
+.section-collapse[open] > summary .section-chevron { transform: rotate(180deg); }
+.card-heading > div, .section-heading-copy > div { min-width: 0; }
+.section-heading-copy { display: flex; align-items: center; gap: var(--emblem-gap); min-width: 0; }
+.section-emblem { width: var(--emblem); height: var(--emblem); margin: 0; pointer-events: none; }
+.card-heading h2, .section-heading-copy h2 { font-size: var(--t-xl); line-height: 1.25; margin: 0; text-align: left; }
+.card-heading p, .section-heading-copy p { font-size: var(--t-xs); line-height: 1.6; margin: 0; color: #64715c; }
+#results .section-title { background: #faf7ed; }
+#trajectories .section-title { background: #fcf4ee; }
+.section-title > .status-label, .section-title > #recording-count { flex: none; font-size: var(--t-2xs); align-self: center; margin: 0; }
+.status-label { color: #796130; white-space: nowrap; padding: 4px 9px; background: #f1e8ce; border-radius: 4px; }
+.section-card > .footnote, .section-body > .footnote { margin-bottom: 0; }
+/* 5. Simulation lab -------------------------------------------------------- */
+.simulation-lab.section-card { padding: 0; }
+#lab-details { border-radius: inherit; }
+.lab-toggle { list-style: none; cursor: pointer; padding: 24px var(--pad-x); border-radius: inherit; }
+.lab-toggle::-webkit-details-marker { display: none; }
+.lab-toggle:hover { background: #f4f7ec; }
+.lab-toggle h2 { display: flex; align-items: center; gap: var(--emblem-gap); margin: 0; font-size: var(--t-xl); line-height: 1.25; }
+.lab-toggle h2 > span { min-width: 0; }
+.lab-toggle small { display: block; margin-top: 6px; font-size: var(--t-xs); color: #65745b; font-weight: 400; }
+.lab-chevron { margin-left: auto; width: 23px; height: 23px; flex: none; fill: none; stroke: #648052; stroke-width: 1.7; transition: transform .18s ease-out; }
+#lab-details[open] .lab-chevron { transform: rotate(180deg); }
+.lab-content { padding: 0 var(--pad-x) 30px; }
+.lab-figure { margin: 0; }
+.lab-context { display: flex; justify-content: space-between; gap: 20px; padding: 10px 0 0; align-items: baseline; }
+.lab-context p { font-size: var(--t-base); margin: 0; color: #3f593b; }
+.lab-context > span { font-size: var(--t-2xs); color: #65745b; }
+.lab-scroll { overflow-x: auto; scrollbar-color: #b7c6a8 transparent; }
+.lab-scroll-hint { display: none; }
+.lab-diagram { display: block; width: 100%; min-width: 760px; height: auto; margin: 24px 0 12px; font-family: 'Manrope', sans-serif; }
+.lab-name { font-size: 17px; font-weight: 650; fill: #354d37; }
+.lab-small { font-size: 12px; fill: #63725c; }
+.lab-link { fill: #376a4b; font-size: 13px; }
+.lab-name.lab-link { font-size: 17px; }
+.lab-diagram a:hover text { text-decoration: underline; }
+.lab-inference .lab-name { fill: #77558a; font-size: 23px; }
+.lab-inference .lab-small { fill: #7d6b89; }
+.lab-wire { stroke: #8b9f7b; fill: none; stroke-width: 1.5; marker-end: url(#lab-arrow); }
+.lab-wire.both { marker-start: url(#lab-arrow); }
+.lab-wire.inference { stroke: #b1a1bc; }
+.lab-wire.verification { stroke: #b2a176; stroke-dasharray: 4 5; }
+.lab-worker circle { fill: #eff2e8; }
+.lab-worker-number { fill: #829176; font-size: 15px; font-weight: 600; }
+.lab-worker-name { fill: #728269; font-size: 13px; }
+.lab-worker.active circle { fill: #dcebc8; }
+.lab-worker.active text { fill: #476c37; }
+.lab-figure > figcaption { font-size: var(--t-2xs); line-height: 1.7; color: #6d785f; margin-top: 8px; }
+.lab-notes { display: grid; grid-template-columns: 1fr 1.15fr; gap: 38px; align-items: start; margin-top: 32px; }
+.lab-notes > div { min-width: 0; }
+.lab-notes h3 { font-size: var(--t-sm); margin: 0 0 8px; }
+.lab-notes p { font-size: var(--t-xs); line-height: 1.8; margin: 0 0 22px; }
+.lab-notes code { font-size: var(--t-code); }
+.lab-code h3 { display: flex; align-items: center; gap: 8px; }
+.lab-code h3 img { width: 30px; height: 30px; }
+.lab-code h3 small { font-size: var(--t-2xs); font-weight: 400; color: var(--muted); margin-left: auto; }
+.lab-code pre { max-width: 100%; margin: 10px 0 0; overflow-x: auto; font: var(--t-code)/1.9 ui-monospace, SFMono-Regular, monospace; color: #42553b; }
+.lab-footnote { margin: 8px 0 0; font-size: var(--t-2xs); line-height: 1.8; color: #6d785f; max-width: 760px; }
+.chart-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.chart-heading h3 { font-size: var(--t-sm); margin: 0; }
+.chart-heading > span { font-size: var(--t-2xs); color: var(--muted); }
+.history-companion > .inventory-sprite { width: 34px; height: 34px; }
+.section-title { align-items: start; }
+.status-label { white-space: normal; text-align: center; max-width: 95px; flex: none; }
+.lab-toggle { padding: 22px 24px; }
+.lab-content { padding: 0 24px 24px; }
+.lab-context { flex-wrap: wrap; gap: 5px 16px; }
+.lab-scroll-hint { display: block; margin: 15px 0 0; font-size: var(--t-2xs); color: #6d785f; }
+.lab-notes { grid-template-columns: 1fr; gap: 3px; }
+.lab-footnote { margin-top: 24px; }
+.card-heading, .section-card > .section-title, .section-collapse > summary { margin: calc(var(--pad-y) * -1) calc(var(--pad-x) * -1) 18px; padding: 14px var(--pad-x); border-radius: var(--radius) var(--radius) 0 0; }
+.section-collapse > summary { margin: 0; }
+/* Keep every collapsed bar the same height: the badge stays on one line
+     rather than wrapping and making Results taller than its neighbours. */
+  .section-card > .section-title { flex-wrap: wrap; gap: 6px; }
+.section-collapse > summary.section-title { flex-wrap: nowrap; justify-content: start; gap: var(--emblem-gap); }
+.section-chevron { width: 19px; height: 19px; margin-left: 10px; }
+summary.section-title > .status-label, summary.section-title > #recording-count { margin: 0 0 0 auto; padding: 3px 8px; white-space: nowrap; max-width: none; text-align: left; }
+.section-card > .section-title > .status-label, .section-card > .section-title > #recording-count { margin-left: calc(var(--emblem) + var(--emblem-gap)); padding: 2px 6px; }
+.lab-toggle { padding: 16px var(--pad-x); }
+.lab-toggle h2 { gap: 11px; }
+.lab-chevron { width: 19px; height: 19px; }
+.lab-content { padding: 0 var(--pad-x) 20px; }
+.lab-notes { margin-top: 22px; }
+.lab-notes p { margin-bottom: 16px; }
+.lab-diagram { margin-top: 8px; }
+/* Short code lines wrap instead of adding another horizontal scroller. */
+  .lab-code pre { overflow-x: visible; white-space: pre-wrap; }
+.history-companion > .inventory-sprite { width: 28px; height: 28px; }
+.tile-play, .lab-chevron, .section-chevron { transition: none; }
+/* Dropdown chrome for the published sections. */
+summary.section-title { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; list-style: none; }
+summary.section-title::-webkit-details-marker { display: none; }
+summary.section-title > .section-heading { flex: 1 1 auto; margin: 0; }
+.section-chevron { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; opacity: 0.55; transition: transform 0.18s ease; }
+details[open] > summary.section-title .section-chevron { transform: rotate(180deg); }
+.section-body { padding-top: 0.75rem; }
+/* Simulation lab toggle: emblem, spacing and chevron inside the collapsed card. */
+.simulation-lab > #lab-details > summary.lab-toggle { display: flex; align-items: center; cursor: pointer; list-style: none; }
+.simulation-lab > #lab-details > summary.lab-toggle::-webkit-details-marker { display: none; }
+.simulation-lab h2#approach-title { display: flex; align-items: center; gap: 0.6rem; margin: 0; width: 100%; }
+.simulation-lab h2#approach-title > span { display: flex; flex-direction: column; flex: 1 1 auto; line-height: 1.2; }
+.simulation-lab h2#approach-title small { font-size: 0.72em; font-weight: 500; opacity: 0.7; }
+.simulation-lab .section-emblem { width: 42px; height: 42px; }
+.lab-chevron { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; opacity: 0.55; transition: transform 0.18s ease; }
+#lab-details[open] .lab-chevron { transform: rotate(180deg); }
+#lab-details > .lab-content { padding-top: 1rem; }
+.simulation-lab { text-align: left; }
+.simulation-lab > #lab-details > summary.lab-toggle { justify-content: flex-start; width: 100%; }
+.simulation-lab h2#approach-title { justify-content: flex-start; text-align: left; }
+#approach { text-align: left !important; }
+#approach summary.lab-toggle { justify-content: flex-start !important; text-align: left !important; }
+#approach h2#approach-title { justify-content: flex-start !important; margin-right: auto; }
+#approach h2#approach-title > span { align-items: flex-start; text-align: left; }
