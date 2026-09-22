@@ -295,3 +295,15 @@ main > section[data-card] { padding: var(--pad-y) var(--pad-x); border-radius: v
 .section-emblem { mix-blend-mode: multiply; }
 /* The portrait diagram fits the column, so there is nothing to swipe. */
 .lab-scroll-hint { display: none; }
+
+/* ---- Simulation lab heading ----------------------------------------------
+   The emblem is a <span>, and so is the text wrapper, so the rules meant for
+   the wrapper -- display:flex, flex:1 1 auto -- matched the emblem too and let
+   it grow to 353px. The snail then drew at 42px inside a third of the heading,
+   which read as the title drifting to the middle. Exclude the emblem, and size
+   it from the same token every other section emblem uses. */
+.simulation-lab h2#approach-title > span.section-emblem,
+#approach h2#approach-title > span.section-emblem {
+  display: inline-block; flex: none;
+  width: var(--emblem); height: var(--emblem);
+}
