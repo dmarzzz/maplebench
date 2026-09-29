@@ -20,6 +20,7 @@ import tempfile
 from urllib.parse import urlsplit
 
 PROTOCOL = 'full-client-skill-progress-v1'
+PROJECTION_PROTOCOL = 'skill-suite-dollar-projection-v1'
 DESIGN = 'skill-suite-v1-draft-2026-09-14'
 PLAN_FILES = {
     'skill-suite-v1.json': 'fecaef9dab0ccef593783c6d37eb1c851c54ac306862faa5d749b4e0129541d5',
@@ -266,7 +267,8 @@ def phase_counts(plan, entries):
 
 def validate_progress(progress, plan, *, public_origins=('https://maplebench.vercel.app', 'https://github.com')):
     require(isinstance(progress, dict) and set(progress) == {'schema_version', 'design_id', 'status',
-        'last_updated_at_utc', 'reporting_note', 'execution_manifests', 'phase_counts', 'entries', 'blockers', 'next_action'},
+        'last_updated_at_utc', 'reporting_note', 'execution_manifests', 'phase_counts', 'entries', 'blockers',
+        'next_action', 'admission_projection'},
         'unexpected_progress_fields')
     require(type(progress['schema_version']) is int and progress['schema_version'] == 1
             and progress['design_id'] == DESIGN, 'progress_design_mismatch')
@@ -286,7 +288,48 @@ def validate_progress(progress, plan, *, public_origins=('https://maplebench.ver
     # These human notes stay in the repository report, never the public projection.
     for key in ('reporting_note', 'next_action'):
         require(isinstance(progress[key], str) and len(progress[key]) <= 1000, 'report_note_limit')
+    validate_admission_projection(progress['admission_projection'], plan)
     return progress
+
+
+def validate_admission_projection(value, plan):
+    """A dry-run reservation study, never an outcome or a dispatch record.
+
+    The projection reports how far the standing authorization reaches over a
+    phase of the frozen schedule. It admits nothing, so it may never carry a
+    trial count, a score, or a spent amount.
+    """
+    if value is None:
+        return None
+    require(isinstance(value, dict) and set(value) == {'artifact', 'projection', 'phase',
+        'is_dry_run', 'planned_entries', 'admitted_at_full_envelope',
+        'fits_within_authorization', 'balanced_alternatives'}, 'unexpected_projection_fields')
+    require(value['projection'] == PROJECTION_PROTOCOL, 'unapproved_projection_protocol')
+    require(value['is_dry_run'] is True, 'projection_must_be_a_dry_run')
+    require(isinstance(value['artifact'], str) and re.fullmatch(r'[a-z0-9][a-z0-9.-]{0,95}\.json',
+            value['artifact']), 'projection_artifact_invalid')
+    require(value['phase'] in PHASES, 'unknown_projection_phase')
+    planned = sum(row['phase'] == value['phase'] for row in plan['rows'])
+    require(value['planned_entries'] == planned, 'projection_planned_entries_mismatch')
+    admitted = value['admitted_at_full_envelope']
+    require(type(admitted) is int and 0 <= admitted <= planned, 'projection_admitted_out_of_range')
+    require(value['fits_within_authorization'] is (admitted == planned), 'projection_fit_mismatch')
+
+    alternatives = value['balanced_alternatives']
+    require(isinstance(alternatives, dict) and set(alternatives) == {
+        'reduced_input_tokens_per_cycle', 'balanced_rounds_at_full_envelope'},
+        'unexpected_projection_alternative_fields')
+    reduced = alternatives['reduced_input_tokens_per_cycle']
+    require(reduced is None or (type(reduced) is int and 0 < reduced <= 240000),
+            'projection_reduced_envelope_invalid')
+    rounds = alternatives['balanced_rounds_at_full_envelope']
+    require(isinstance(rounds, dict) and set(rounds) == {'rounds', 'of', 'entries',
+            'reserved_microdollars'}, 'unexpected_projection_round_fields')
+    require(all(type(rounds[key]) is int and rounds[key] >= 0 for key in rounds),
+            'projection_round_value_invalid')
+    require(rounds['rounds'] <= rounds['of'] and rounds['entries'] <= planned,
+            'projection_round_out_of_range')
+    return value
 
 
 def upsert_progress(progress, plan, plan_entry_id, entry, *, public_origins=('https://maplebench.vercel.app', 'https://github.com')):
@@ -362,12 +405,38 @@ def project(progress, plan=None, *, public_origins=('https://maplebench.vercel.a
         'status': progress['status'], 'last_updated_at_utc': progress['last_updated_at_utc'],
         'reporting_note': PUBLIC_NOTE, 'source_sha256': dict(PLAN_FILES),
         'progress_sha256': digest(encoded(progress)), 'execution_manifests': list(progress['execution_manifests']),
-        'blockers': list(progress['blockers']), 'planned_entries': 852,
+        'blockers': list(progress['blockers']),
+        'admission_projection': copy.deepcopy(progress['admission_projection']), 'planned_entries': 852,
         'reported_entries': len(progress['entries']), 'models': list(plan['design']['models']),
         'phases': [{'id': phase, 'label': PHASE_LABELS[phase],
                     'summary': summarize([r for r in rows if r['phase'] == phase])} for phase in PHASES],
         'experiments': experiments, 'overall_score': None}
     return {'manifest': manifests, 'shards': shards}
+
+
+def render_projection(value):
+    """Report affordability as a dry run, never as spend or as an outcome."""
+    if value is None:
+        return []
+    alternatives = value['balanced_alternatives']
+    rounds = alternatives['balanced_rounds_at_full_envelope']
+    dollars = f'${rounds["reserved_microdollars"] / 1e6:,.4f}'
+    lines = ['', '## Dollar admission projection', '',
+        'A dry run against the standing authorization. It dispatches nothing, reserves '
+        'nothing and reports no outcome; it states only how far the authorization reaches '
+        f'over the `{value["phase"]}` phase. Full detail is in `{value["artifact"]}`.', '',
+        f'- At the full request envelope, **{value["admitted_at_full_envelope"]} of '
+        f'{value["planned_entries"]}** planned entries are affordable.']
+    if not value['fits_within_authorization']:
+        lines.append('- Greedy admission in schedule order leaves per-model coverage unequal, '
+                     'so it is not a usable reduced cohort for a paired analysis.')
+        if alternatives['reduced_input_tokens_per_cycle'] is not None:
+            lines.append(f'- All {value["planned_entries"]} entries fit if the per-cycle input '
+                         f'bound is capped at **{alternatives["reduced_input_tokens_per_cycle"]:,} '
+                         'tokens**.')
+        lines.append(f'- Alternatively **{rounds["rounds"]} of {rounds["of"]}** balanced rounds '
+                     f'fit at the full envelope: {rounds["entries"]} entries, {dollars}.')
+    return lines
 
 
 def render_markdown(projection):
@@ -380,6 +449,7 @@ def render_markdown(projection):
     for e in manifest['experiments']:
         c = e['summary']
         lines.append(f'| E{e["experiment_number"]:03d} | {e["phase"]} / {e["label"]} | {c["terminal"]}/{c["planned"]} | {c["success"]} | {c["gameplay_failure"]} | {c["invalid"]} | {c["in_progress"]} |')
+    lines += render_projection(manifest['admission_projection'])
     lines += ['', 'A planned lane is an assignment, not a claim that a worker exists. '
               'A recorded execution-manifest hash is not admission authorization.', '',
               '| Experiment / trial | Plan entry | Variant / repeat | Model or control | Slot / planned lane | Wall / API / tokens | Status | Execution manifest | Outcome |',
@@ -424,6 +494,7 @@ def verify_publication(files):
     require({'status', 'last_updated_at_utc', 'execution_manifests', 'blockers'} <= set(manifest), 'skill_manifest_required')
     progress = {'schema_version': 1, 'design_id': DESIGN, 'reporting_note': '', 'next_action': '',
         **{key: manifest[key] for key in ('status', 'last_updated_at_utc', 'execution_manifests', 'blockers')},
+        'admission_projection': copy.deepcopy(manifest.get('admission_projection')),
         'entries': entries}
     # Unknown plan IDs must fail before deriving phase counts.
     require(set(entries) <= {r['plan_entry_id'] for r in plan['rows']}, 'unknown_plan_entry')

@@ -82,11 +82,41 @@ are admission ceilings, not billed-cost claims.
 
 At the full short-task token ceiling, 24 trials per model permit 84,000 input
 tokens and 12,000 output tokens per trial. Charging input at the cache-write
-ceiling gives a conservative whole-pilot maximum of $64.7856 before prior spend,
+ceiling gives a conservative whole-pilot maximum of $64.8864 before prior spend,
 worker costs or storage. This is an upper bound, not an expected cost: a smaller
 actual request envelope can reserve substantially less. The controller must
 stop admission at the available cap and retain incomplete coverage honestly.
 The larger comparison is separately budget-gated.
+
+This figure was previously recorded as $64.7856, which charged Luna input at the
+unrounded 0.25 microdollars per token. The shipped rate table rounds that rate
+up to 0.3, as its own policy requires, so the admission ceiling the authority
+will actually enforce is $64.8864. The corrected figure is the conservative one;
+neither fits the standing $50 authorization.
+
+## Development pilot admission projection
+
+`scripts/full_client_skill_pilot_simulation.py` walks the frozen schedule in its
+preserved file order against the real admission authority. It dispatches nothing
+and produces no outcome; the result below is a reservation study, recorded in
+`skill-suite-v1-development-projection.json`.
+
+At the full envelope, the standing $50 authorization covers **76 of the 96**
+planned development entries. Admission stops at dispatch index 74,
+`skill-development-potion-use-v1-v01-r03-gpt-6-astra`, with $0.0077 left.
+
+That greedy walk is not a usable reduced cohort. Because it skips entries it
+cannot fund and continues, per-model coverage ends unequal — Astra 18, Sol 18,
+Terra 19, Luna 21 — while the declared analysis pairs models within a variant.
+Two admissible alternatives preserve the balance the analysis requires:
+
+- Keep all 96 entries and cap the per-cycle input bound at **13,361 tokens**
+  rather than the contract's 21,000. Every entry then fits.
+- Keep the full envelope and admit **6 of the 8 balanced rounds**, 72 entries at
+  $48.6648. One round of all four models across the three tasks is $8.1108.
+
+Both remain upper bounds before prior spend, worker cost and storage. Prior
+spend reconciliation moves these numbers down and must precede any dispatch.
 
 ## Burn-down and execution order
 
@@ -94,6 +124,7 @@ The larger comparison is separately budget-gated.
 - [x] Audit native movement, Teleport and potion semantics against task criteria.
 - [x] Implement first-three-task immutable contracts and restricted SDK routing.
 - [x] Implement the new controller kernel and deterministic deadline/failure tests.
+- [x] Cover the durable dollar admission authority and project phase affordability.
 - [ ] Complete and test native transaction ledger, clock binding and closeout.
 - [ ] Bind real safe-map fixtures and verify ordinary login, potion use and restore.
 - [ ] Implement and qualify fresh grounded movement and Teleport causal linkage.

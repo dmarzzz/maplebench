@@ -18,7 +18,8 @@ class SkillProgressUITests(unittest.TestCase):
         plan = progress.load_plan()
         report = {'schema_version': 1, 'design_id': progress.DESIGN, 'status': 'qualification_pending',
             'last_updated_at_utc': None, 'reporting_note': '', 'execution_manifests': [],
-            'phase_counts': progress.phase_counts(plan, {}), 'entries': {}, 'blockers': [], 'next_action': ''}
+            'phase_counts': progress.phase_counts(plan, {}), 'entries': {}, 'blockers': [], 'next_action': '',
+            'admission_projection': None}
         return progress.project(report, plan)
 
     def run_js(self, checks):

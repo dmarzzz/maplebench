@@ -2,8 +2,8 @@
   "schema_version": 1,
   "design_id": "skill-suite-v1-draft-2026-09-14",
   "status": "qualification_pending",
-  "last_updated_at_utc": "2026-09-14T23:19:38Z",
-  "reporting_note": "Implementation review complete; no native or model entries have been dispatched for this suite. Historical recordings remain separate. Initial native evidence and execution bindings are being implemented.",
+  "last_updated_at_utc": "2026-09-16T18:40:00Z",
+  "reporting_note": "Implementation review complete; no native or model entries have been dispatched for this suite. Historical recordings remain separate. The dollar admission authority is now covered by tests, and a dry-run projection records how far the standing authorization reaches. A projection reserves nothing and is not a trial outcome; all phase counts below remain zero.",
   "execution_manifests": [],
   "phase_counts": {
     "native-initial": {
@@ -61,9 +61,27 @@
     "native_position_geometry_physics_coverage",
     "native_teleport_causal_link",
     "native_item_ledger_clock_and_closeout",
-    "qualified_execution_adapter",
     "prior_spend_reconciliation_and_phase_budget",
+    "qualified_execution_adapter",
     "recording_storage_and_publication"
   ],
-  "next_action": "Finish and test the native item transaction ledger, bind a safe potion fixture, then qualify the first actual potion controls; platforming and Teleport remain gated on missing native proof."
+  "next_action": "Finish and test the native item transaction ledger, bind a safe potion fixture, then qualify the first actual potion controls; platforming and Teleport remain gated on missing native proof. Separately, the 96-entry development pilot does not fit the $50 authorization at the full request envelope: choose the reduced 13,361-token envelope or the 72-entry balanced cohort before freezing bindings.",
+  "admission_projection": {
+    "artifact": "skill-suite-v1-development-projection.json",
+    "projection": "skill-suite-dollar-projection-v1",
+    "phase": "skill-development",
+    "is_dry_run": true,
+    "planned_entries": 96,
+    "admitted_at_full_envelope": 76,
+    "fits_within_authorization": false,
+    "balanced_alternatives": {
+      "reduced_input_tokens_per_cycle": 13361,
+      "balanced_rounds_at_full_envelope": {
+        "rounds": 6,
+        "of": 8,
+        "entries": 72,
+        "reserved_microdollars": 48664800
+      }
+    }
+  }
 }
