@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MapleBench — Skillbook study</title><link rel="stylesheet" href="../fonts/fonts.css"><link rel="stylesheet" href="./style.css?v=3"><script src="./skillbook.js?v=3" defer></script></head>
+<body>
+  <nav class="study-nav"><a href="../">← MapleBench</a><span>Skillbook design study</span><a href="./research.md">Research notes</a></nav>
+  <main>
+    <header><img src="../illustrations/skill-book.png" width="1254" height="1254" alt=""><div><h1>Skillbook</h1></div></header>
+    <div class="view-controls" role="group" aria-label="Matrix view"><button id="class-view" type="button" aria-pressed="true">Class trials</button><button id="skill-view" type="button" aria-pressed="false">Proposed skill tasks</button></div>
+    <div class="matrix-heading"><p id="matrix-context">Saved XP · 5-minute pilots · 1 run per cell</p><span id="snapshot-date"></span></div>
+    <div class="study-layout">
+      <section class="matrix-region" aria-label="Model comparison"><div class="matrix-scroll" tabindex="0" role="region" aria-label="Model matrix; scroll horizontally on small screens"><table id="matrix"><caption class="sr-only">Saved XP by model and class fixture</caption><thead></thead><tbody></tbody></table></div><div class="matrix-legend" id="matrix-legend"><span><i class="legend-square zero"></i>Zero XP</span><span><i class="legend-square mid"></i>Lower</span><span><i class="legend-square high"></i>Higher in this column</span></div><p class="matrix-caveat" id="matrix-caveat">Pilot observations, not a ranking. Select a square for the evidence.</p></section>
+      <aside class="cell-inspector" id="cell-inspector" aria-live="polite" aria-atomic="true"><p>Loading public pilot data…</p></aside>
+    </div>
+    <footer><p>Frozen public snapshot. Color compares scores within a column only.</p><a href="https://maplebench.vercel.app/results.json">Source data</a><a href="./research.md">Design &amp; scoring rationale</a><a href="https://maxbittker.github.io/runebench/">Inspired by RuneBench</a></footer>
+  </main>
+  <p class="study-note">Local design prototype. Proposed skill tasks have no published scores.</p>
+</body></html>

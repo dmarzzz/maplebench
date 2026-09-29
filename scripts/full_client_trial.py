@@ -222,14 +222,18 @@ def private_directory(path, *, create=False):
     return path
 
 
-def read_private_json(path):
+def read_private_json(path, *, expected_sha256=None):
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     with os.fdopen(fd, "rb") as source:
         info = os.fstat(source.fileno())
         require(stat.S_ISREG(info.st_mode) and info.st_uid in (0, os.geteuid())
                 and not info.st_mode & 0o077, "private_file_required")
-        return decode(source.read(MAX_JSON + 1))
+        raw = source.read(MAX_JSON + 1)
+        require(expected_sha256 is None or isinstance(expected_sha256, str)
+                and SHA.fullmatch(expected_sha256) and hashlib.sha256(raw).hexdigest() == expected_sha256,
+                "recovery_journal_changed")
+        return decode(raw)
 
 
 def validate_spec(spec):
@@ -449,10 +453,10 @@ class TrialRunner:
         self.state["events"].append(event)
         atomic_json(self.root / self.state["attempt_id"] / "journal.json", self.state)
 
-    def _load(self, attempt_id):
+    def _load(self, attempt_id, *, expected_sha256=None):
         require(isinstance(attempt_id, str) and ID.fullmatch(attempt_id), "invalid_attempt_id")
         private_directory(self.root / attempt_id)
-        state = read_private_json(self.root / attempt_id / "journal.json")
+        state = read_private_json(self.root / attempt_id / "journal.json", expected_sha256=expected_sha256)
         require(isinstance(state, dict) and type(state.get("schema_version")) is int
                 and state.get("schema_version") == 1
                 and state.get("attempt_id") == attempt_id
@@ -593,10 +597,10 @@ class TrialRunner:
                 self._quarantine(error)
                 raise
 
-    def recover(self, attempt_id, timeout_seconds=120):
+    def recover(self, attempt_id, timeout_seconds=120, *, expected_journal_sha256=None):
         require(type(timeout_seconds) is int and 1 <= timeout_seconds <= 300, "invalid_recovery_timeout")
         with self._locks():
-            self.state = self._load(attempt_id)
+            self.state = self._load(attempt_id, expected_sha256=expected_journal_sha256)
             require(self.state.get("status") not in ("completed", "recovered"), "attempt_already_terminal")
             require(self.state.get("adapter_fingerprint") == getattr(self.adapter, "fingerprint", None),
                     "recovery_adapter_mismatch")

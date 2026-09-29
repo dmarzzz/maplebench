@@ -1,0 +1,595 @@
+{
+  "source_url": "https://maplebench.vercel.app/results.json",
+  "retrieved_on": "2026-09-12",
+  "generated_at_ms": 1788883837167,
+  "source_sha256": "bd3d37402284bc136ce873e71aa47603a883832aa49cecdddb19edb3e9a64974",
+  "matrix": {
+    "columns": [
+      {
+        "class_id": "hero",
+        "class_label": "Hero",
+        "fixture_fingerprint": "f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+        "id": "full-client-adaptive-pilot-v1:hero:basic_combat:f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+        "metric": "Persisted net XP across all cycles",
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat",
+        "task_label": "Basic combat"
+      },
+      {
+        "class_id": "bowmaster",
+        "class_label": "Bowmaster",
+        "fixture_fingerprint": "1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+        "id": "full-client-adaptive-pilot-v1:bowmaster:basic_combat:1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+        "metric": "Persisted net XP across all cycles",
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat",
+        "task_label": "Basic combat"
+      },
+      {
+        "class_id": "ice_lightning_arch_mage",
+        "class_label": "Ice/Lightning Arch Mage",
+        "fixture_fingerprint": "2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+        "id": "full-client-adaptive-pilot-v1:ice_lightning_arch_mage:basic_combat:2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+        "metric": "Persisted net XP across all cycles",
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat",
+        "task_label": "Basic combat"
+      }
+    ],
+    "models": [
+      {
+        "cells": [
+          {
+            "attempt_ids": [
+              "f9ec318368754faba2b54583ea57abb7"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:hero:basic_combat:f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 18250,
+            "mean": 18250.0,
+            "minimum": 18250,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          },
+          {
+            "attempt_ids": [
+              "2fa9f2a094dc425c96ef00770f1cf6c1"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:bowmaster:basic_combat:1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 0,
+            "mean": 0.0,
+            "minimum": 0,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          },
+          {
+            "attempt_ids": [
+              "60ed70b710fc47429f6f2f57024e0e56"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:ice_lightning_arch_mage:basic_combat:2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 0,
+            "mean": 0.0,
+            "minimum": 0,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          }
+        ],
+        "model": "gpt-6-astra"
+      },
+      {
+        "cells": [
+          {
+            "attempt_ids": [
+              "b639b751edba4940a139ac9aafd66620"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:hero:basic_combat:f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 18250,
+            "mean": 18250.0,
+            "minimum": 18250,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          },
+          {
+            "attempt_ids": [
+              "5108ed9d4737408281602fa620259bc4"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:bowmaster:basic_combat:1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 0,
+            "mean": 0.0,
+            "minimum": 0,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          },
+          {
+            "attempt_ids": [
+              "7b0c02a65b6a48c297b9d87f91f17974"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:ice_lightning_arch_mage:basic_combat:2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 0,
+            "mean": 0.0,
+            "minimum": 0,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          }
+        ],
+        "model": "gpt-5.6-sol"
+      },
+      {
+        "cells": [
+          {
+            "attempt_ids": [
+              "3da334c1b3994ea2a7621b220d82b41f"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:hero:basic_combat:f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 18250,
+            "mean": 18250.0,
+            "minimum": 18250,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          },
+          {
+            "attempt_ids": [
+              "e01d8c5da90949e8bc1c41e86209c0a9"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:bowmaster:basic_combat:1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 0,
+            "mean": 0.0,
+            "minimum": 0,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          },
+          {
+            "attempt_ids": [
+              "9dc85a6d5d7d41d9b3ad7b95186053a3"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:ice_lightning_arch_mage:basic_combat:2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 0,
+            "mean": 0.0,
+            "minimum": 0,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          }
+        ],
+        "model": "gpt-5.6-terra"
+      },
+      {
+        "cells": [
+          {
+            "attempt_ids": [
+              "51ea5b0ff58b4348aafdb5604e709722"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:hero:basic_combat:f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 23000,
+            "mean": 23000.0,
+            "minimum": 23000,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          },
+          {
+            "attempt_ids": [
+              "888baefdd9b345abbfc0f1341b94be69"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:bowmaster:basic_combat:1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 0,
+            "mean": 0.0,
+            "minimum": 0,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          },
+          {
+            "attempt_ids": [
+              "9afc7e17ce8041b2a0d525f2c16cd665"
+            ],
+            "attempted": 1,
+            "column_id": "full-client-adaptive-pilot-v1:ice_lightning_arch_mage:basic_combat:2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+            "failed": 0,
+            "in_progress": 0,
+            "maximum": 0,
+            "mean": 0.0,
+            "minimum": 0,
+            "no_ops": 0,
+            "not_started": 0,
+            "planned": 1,
+            "ranked": false,
+            "uncertainty": "not_estimated",
+            "unknown": 0,
+            "valid": 1
+          }
+        ],
+        "model": "gpt-5.6-luna"
+      }
+    ],
+    "protocols": [
+      {
+        "clock": "300 seconds of wall time, including inference",
+        "id": "full-client-adaptive-pilot-v1",
+        "label": "Five-minute adaptive pilot",
+        "metric": "Persisted net XP across all cycles",
+        "score_key": "persisted_xp",
+        "status": "Adaptive pilot; peak-rate score unavailable",
+        "verifier": "adaptive_runner_verified_receipts_rechecked"
+      }
+    ],
+    "ranked": false,
+    "research_target": {
+      "horizon_ms": 1800000,
+      "metric": "Highest normalized XP/min in a complete authoritative window",
+      "status": "Intended protocol; no peak score inferred from initial/final XP",
+      "window_ms": 15000
+    },
+    "schema_version": 1
+  },
+  "annotations": [
+    {
+      "class_id": "bowmaster",
+      "plan_sha256": "7f57831f59bf5f35d11b04cb5a3b2f69ea066ebbaeeaeacf26ccbfc4fd5f9b71",
+      "text": "Bowmaster uses this port\u2019s discrete Hurricane attacks; continuous channeling is not implemented, so these results do not establish canonical Bowmaster performance.",
+      "url": "./cohorts/7f57831f59bf5f35/"
+    }
+  ],
+  "attempts": [
+    {
+      "id": "f9ec318368754faba2b54583ea57abb7",
+      "returned_model": "gpt-6-astra",
+      "persisted_xp": 18250,
+      "acknowledged_actions": 96,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "hero",
+        "fixture_fingerprint": "f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/189edbdd723728a7/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/189edbdd723728a7/recordings/f9ec318368754faba2b54583ea57abb7.webm",
+      "api_ms": 69990,
+      "wall_ms": 300000
+    },
+    {
+      "id": "b639b751edba4940a139ac9aafd66620",
+      "returned_model": "gpt-5.6-sol",
+      "persisted_xp": 18250,
+      "acknowledged_actions": 81,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "hero",
+        "fixture_fingerprint": "f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/189edbdd723728a7/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/189edbdd723728a7/recordings/b639b751edba4940a139ac9aafd66620.webm",
+      "api_ms": 86787,
+      "wall_ms": 300000
+    },
+    {
+      "id": "3da334c1b3994ea2a7621b220d82b41f",
+      "returned_model": "gpt-5.6-terra",
+      "persisted_xp": 18250,
+      "acknowledged_actions": 73,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "hero",
+        "fixture_fingerprint": "f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/189edbdd723728a7/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/189edbdd723728a7/recordings/3da334c1b3994ea2a7621b220d82b41f.webm",
+      "api_ms": 77341,
+      "wall_ms": 300000
+    },
+    {
+      "id": "51ea5b0ff58b4348aafdb5604e709722",
+      "returned_model": "gpt-5.6-luna",
+      "persisted_xp": 23000,
+      "acknowledged_actions": 100,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "hero",
+        "fixture_fingerprint": "f1ae489287e09ba854a288b71b119b1475bd3c93aef054c16ff0a0204f64c673",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/189edbdd723728a7/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/189edbdd723728a7/recordings/51ea5b0ff58b4348aafdb5604e709722.webm",
+      "api_ms": 73476,
+      "wall_ms": 300000
+    },
+    {
+      "id": "2fa9f2a094dc425c96ef00770f1cf6c1",
+      "returned_model": "gpt-6-astra",
+      "persisted_xp": 0,
+      "acknowledged_actions": 107,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "bowmaster",
+        "fixture_fingerprint": "1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/7f57831f59bf5f35/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/7f57831f59bf5f35/recordings/2fa9f2a094dc425c96ef00770f1cf6c1.webm",
+      "api_ms": 57935,
+      "wall_ms": 300000
+    },
+    {
+      "id": "5108ed9d4737408281602fa620259bc4",
+      "returned_model": "gpt-5.6-sol",
+      "persisted_xp": 0,
+      "acknowledged_actions": 97,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "bowmaster",
+        "fixture_fingerprint": "1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/7f57831f59bf5f35/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/7f57831f59bf5f35/recordings/5108ed9d4737408281602fa620259bc4.webm",
+      "api_ms": 76147,
+      "wall_ms": 300000
+    },
+    {
+      "id": "e01d8c5da90949e8bc1c41e86209c0a9",
+      "returned_model": "gpt-5.6-terra",
+      "persisted_xp": 0,
+      "acknowledged_actions": 80,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "bowmaster",
+        "fixture_fingerprint": "1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/7f57831f59bf5f35/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/7f57831f59bf5f35/recordings/e01d8c5da90949e8bc1c41e86209c0a9.webm",
+      "api_ms": 76986,
+      "wall_ms": 300000
+    },
+    {
+      "id": "888baefdd9b345abbfc0f1341b94be69",
+      "returned_model": "gpt-5.6-luna",
+      "persisted_xp": 0,
+      "acknowledged_actions": 94,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "bowmaster",
+        "fixture_fingerprint": "1c0b54c082cf2f9bfdb76a99f1d2246d442c8f984d492643f2d7991e3fe7f9cd",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/7f57831f59bf5f35/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/7f57831f59bf5f35/recordings/888baefdd9b345abbfc0f1341b94be69.webm",
+      "api_ms": 54773,
+      "wall_ms": 300000
+    },
+    {
+      "id": "60ed70b710fc47429f6f2f57024e0e56",
+      "returned_model": "gpt-6-astra",
+      "persisted_xp": 0,
+      "acknowledged_actions": 107,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "ice_lightning_arch_mage",
+        "fixture_fingerprint": "2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/0040d7cec0f101e1/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/0040d7cec0f101e1/recordings/60ed70b710fc47429f6f2f57024e0e56.webm",
+      "api_ms": 74493,
+      "wall_ms": 300000
+    },
+    {
+      "id": "7b0c02a65b6a48c297b9d87f91f17974",
+      "returned_model": "gpt-5.6-sol",
+      "persisted_xp": 0,
+      "acknowledged_actions": 122,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "ice_lightning_arch_mage",
+        "fixture_fingerprint": "2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/0040d7cec0f101e1/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/0040d7cec0f101e1/recordings/7b0c02a65b6a48c297b9d87f91f17974.webm",
+      "api_ms": 96535,
+      "wall_ms": 300000
+    },
+    {
+      "id": "9dc85a6d5d7d41d9b3ad7b95186053a3",
+      "returned_model": "gpt-5.6-terra",
+      "persisted_xp": 0,
+      "acknowledged_actions": 81,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "ice_lightning_arch_mage",
+        "fixture_fingerprint": "2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/0040d7cec0f101e1/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/0040d7cec0f101e1/recordings/9dc85a6d5d7d41d9b3ad7b95186053a3.webm",
+      "api_ms": 92814,
+      "wall_ms": 300000
+    },
+    {
+      "id": "9afc7e17ce8041b2a0d525f2c16cd665",
+      "returned_model": "gpt-5.6-luna",
+      "persisted_xp": 0,
+      "acknowledged_actions": 81,
+      "alive_at_logout": true,
+      "score_verification": "adaptive_runner_verified_receipts_rechecked",
+      "publication_evidence": {
+        "reason_code": null,
+        "status": "adaptive_checked"
+      },
+      "research": {
+        "class_id": "ice_lightning_arch_mage",
+        "fixture_fingerprint": "2b289b29e1b0e0622421ebc0aa88e5a640cb149bc001821eec927f0e5d50566a",
+        "planned": true,
+        "protocol_id": "full-client-adaptive-pilot-v1",
+        "task_id": "basic_combat"
+      },
+      "cohort_url": "https://maplebench.vercel.app/cohorts/0040d7cec0f101e1/",
+      "recording_url": "https://maplebench.vercel.app/cohorts/0040d7cec0f101e1/recordings/9afc7e17ce8041b2a0d525f2c16cd665.webm",
+      "api_ms": 79222,
+      "wall_ms": 300000
+    }
+  ]
+}

@@ -407,6 +407,20 @@ def inspect_attempt(plan, entry):
 
 
 def launch_trial(plan, entry, request_path, timeout_seconds, *, operation_join=None):
+    return _launch_runner(plan, entry, ["run", "--request", str(request_path), "--attempt-id", entry["attempt_id"]],
+                          timeout_seconds, operation_join=operation_join)
+
+
+def launch_recovery(plan, entry, timeout_seconds, *, operation_join, recovery_ref, recovery_seconds):
+    """Explicit cleanup only; neither a request file nor run command is accepted."""
+    reference(recovery_ref)
+    require(integer(recovery_seconds, 1, 300), "invalid_recovery_timeout")
+    return _launch_runner(plan, entry, ["recover", "--attempt-id", entry["attempt_id"],
+        "--timeout-seconds", str(recovery_seconds)], timeout_seconds, operation_join=operation_join,
+        extra_args=["--operation-recovery", recovery_ref["path"], "--operation-recovery-sha256", recovery_ref["sha256"]])
+
+
+def _launch_runner(plan, entry, action_args, timeout_seconds, *, operation_join=None, extra_args=()):
     """Production launcher: leave the runner's independent lock-retaining guard alone."""
     require(sys.platform.startswith("linux") and os.geteuid() == 0, "linux_root_required")
     runner, fixture = plan["runner"], fixture_for(plan, entry)
@@ -432,7 +446,7 @@ def launch_trial(plan, entry, request_path, timeout_seconds, *, operation_join=N
         argv += ["--operation-envelope", operation_join["envelope"]["path"],
                  "--operation-envelope-sha256", operation_join["envelope"]["sha256"],
                  "--operation-fd", str(pass_fds[0])]
-    argv += ["run", "--request", str(request_path), "--attempt-id", entry["attempt_id"]]
+    argv += [*extra_args, *action_args]
     process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True, cwd="/", preexec_fn=parent_death_signal,
         pass_fds=pass_fds,
